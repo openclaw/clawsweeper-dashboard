@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T15:24:38.190Z",
+  "generated_at": "2026-07-11T15:26:04.888Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T12:24:36.123Z",
+  "since": "2026-07-11T12:26:04.306Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4947097514
   ],
-  "status_comment_id": 4947097610,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4947097514:2026-07-11T15:23:18Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/102974#issuecomment-4947097514",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 102974,
       "author": "hugenshen",
       "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-11T15:23:18Z",
       "comment_updated_at": "2026-07-11T15:23:18Z",
-      "status_comment_id": 4947097610,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,134 +70,27 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 102974,
-          "dispatch_key": "router-745f1d33064422d7",
-          "dispatched_at": "2026-07-11T15:24:38.889Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T15:24:40.730Z",
-          "response_comment_id": "4947088162",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(google): stream Gemini batch JSONL output instead of res.text()",
-        "body": "<details>\r\n<summary>Additional instructions</summary>\r\n\r\n**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers\r\ncan help update the branch when needed.\r\n\r\n</details>\r\n\r\n## What Problem This Solves\r\n\r\nFixes a memory spike in the Gemini embedding batch download step where large batch output files are fully buffered in memory before any embedding is written to the result map.\r\n\r\n`fetchGeminiFileContent` called `res.text()` to download the JSONL output file as a single string, then `parseGeminiBatchOutput` called `text.split(\"\\n\")` to produce a full `GeminiBatchOutputLine[]` array. Both the raw text buffer and the parsed object array exist simultaneously at peak — for a large embedding batch this roughly doubles peak heap on top of the result map.\r\n\r\n## Why This Change Was Made\r\n\r\nReplace the two-step buffer-then-parse approach with a streaming readline reader that consumes one JSONL line at a time and writes each embedding directly into `byCustomId`, matching the pattern already established in `extensions/voyage/embedding-batch.ts`.\r\n\r\nStructural changes:\r\n\r\n- **Deleted** `fetchGeminiFileContent` — returned the full JSONL body as a `string`.\r\n- **Deleted** `parseGeminiBatchOutput` — split the string and mapped it to `GeminiBatchOutputLine[]`.\r\n- **Added** `readGeminiBatchOutputContent` — wraps `Response.body` with `Readable.fromWeb` + `readline.Interface`, applies each line inline, and always closes/destroys reader resources in `finally`.\r\n- **Added** `fetchGeminiBatchOutput` — thin wrapper that builds the `:download` URL and delegates body reading to the streamed reader.\r\n\r\nIdentifier precedence (`key` / `custom_id` / `request_id`) and both error paths are preserved.\r\n\r\n## User Impact\r\n\r\nPeak memory for large Gemini embedding batch jobs drops from roughly `2× output file size` (raw text + parsed lines + result map) toward approximately the embedding result map size. Successful batches, partial-error batches, and empty-output error paths keep the same user-visible behavior.\r\n\r\n## Evidence\r\n\r\n- Pattern parity with `extensions/voyage/embedding-batch.ts` streamed JSONL reader\r\n- Focused regression: delayed mid-line chunked `ReadableStream` body through production `runGeminiEmbeddingBatches`\r\n- Real `node:http` Transfer-Encoding chunked download against production caller with peak-heap before/after\r\n\r\n## Real behavior proof\r\n\r\n- **Behavior or issue addressed:** Gemini embedding batch download no longer holds the full JSONL text and a full parsed-line array in memory at the same time while populating `byCustomId`.\r\n- **Canonical reachability path:** `runGeminiEmbeddingBatches` → `fetchGeminiBatchOutput` → `withRemoteHttpResponse` → `readGeminiBatchOutputContent` (`Readable.fromWeb` + `readline`) → per-line `byCustomId.set`.\r\n- **Boundary crossed:** local-runtime; real Node `http.createServer` on `127.0.0.1` serving a ~22 MiB JSONL body with 22,823 on-wire chunks (no `Content-Length`), fetched through production SSRF-guarded `withRemoteHttpResponse` with `allowPrivateNetwork`.\r\n- **Shared helper / provider constraint check:** Mirrors Voyage's provider-local streamed JSONL reader; no new config/env. Google Batch API output remains JSONL with per-line `key`/`response`/`error`.\r\n- **Real environment tested:** macOS (darwin 24.3.0), Node 22 (`--expose-gc --import tsx`), branch `fix/gemini-batch-streaming-jsonl-reader`.\r\n- **Exact steps or command run after this patch:**\r\n\r\n```text\r\n$ node --expose-gc --import tsx /tmp/gemini-batch-stream-proof.mjs\r\n$ node scripts/run-vitest.mjs extensions/google/embedding-batch.test.ts --reporter=verbose\r\n```\r\n\r\n- **Evidence after fix:**\r\n\r\n```text\r\npayload_lines= 12000\r\npayload_bytes= 23370184\r\npayload_mib= 22.29 MiB\r\nchunk_bytes= 1024\r\ngc_available= true\r\nBEFORE_mode=res.text()+split+parse_all\r\nBEFORE_buffered_count= 12000\r\nBEFORE_buffered_text_bytes= 23370184\r\nBEFORE_buffered_parsed_lines= 12000\r\nBEFORE_peak_heap_delta= 61.84 MiB\r\nBEFORE_peak_heap= 166.04 MiB\r\nBEFORE_download_chunks= 22823\r\nAFTER_mode=production_runGeminiEmbeddingBatches_readline_stream\r\nAFTER_streamed_count= 12000\r\nAFTER_streamed_sample_dims= 96\r\nAFTER_peak_heap_delta= 24.32 MiB\r\nAFTER_peak_heap= 132.46 MiB\r\nAFTER_download_chunks= 22823\r\nAFTER_download_bytes= 23370184\r\npeak_delta_ratio_streamed_over_buffered= 0.393\r\npeak_delta_saved= 37.52 MiB\r\nproof_ok= true\r\n\r\n$ node scripts/run-vitest.mjs extensions/google/embedding-batch.test.ts --reporter=verbose\r\n ✓ bounds oversized file-upload JSON response and cancels the stream\r\n ✓ bounds oversized batch-create JSON response and cancels the stream\r\n ✓ bounds oversized batch-status poll JSON response and cancels the stream\r\n ✓ parses small responses on all three JSON paths correctly\r\n ✓ streams multi-line JSONL batch output across delayed chunks\r\n\r\n Test Files  1 passed (1)\r\n      Tests  5 passed (5)\r\n```\r\n\r\n- **Observed result after fix:** Same ~22.29 MiB JSONL payload was served in 22,823 delayed HTTP chunks. The old `res.text()` + split + parse-all path peaked at +61.84 MiB heap delta while retaining text + parsed lines + result map. Production `runGeminiEmbeddingBatches` on this branch resolved all 12,000 embeddings with +24.32 MiB peak delta (~39% of the buffered delta; ~37.5 MiB saved on this workload). Supplemental Vitest proves mid-line chunk boundaries across an async `ReadableStream`.\r\n- **What was not tested:** Live Google Gemini Batch API credentials / real Files API download against Google infrastructure; process RSS via `/usr/bin/time` outside V8 heapUsed sampling.\r\n- **Fix classification:** Root cause fix.\r\n\r\n- [x] AI-assisted (Cursor)\r\n- [x] I understand what the code does\r\n- [x] Change is focused and does not mix unrelated concerns\r\n- Single commit on `upstream/main`; no bundled `scripts/` or release-script changes\r\n",
-        "branch": "fix/gemini-batch-streaming-jsonl-reader",
-        "head_sha": "d692a8f60c69288a1e01eef3a5770199f0f9a647",
-        "author": "hugenshen",
-        "labels": [
-          "size: S",
-          "extensions: google",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/google/embedding-batch.test.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google/embedding-batch.ts",
-            "additions": 71,
-            "deletions": 42,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 149,
-        "deletions": 42,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102974",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102974.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 88,
-          "gatingTotal": 83,
-          "counts": {
-            "SUCCESS": 47,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 11,
-            "FAILURE": 2
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T15:24:38.400Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5093,
+    "total_ms": 2416,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 516
+        "ms": 569
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1536
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -209,15 +102,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 3014
+        "ms": 1834
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
