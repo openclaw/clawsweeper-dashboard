@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T08:42:06.859Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-11T08:43:05.064Z",
+  "repo": "openclaw/acpx",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T05:41:33.681Z",
+  "since": "2026-07-11T05:43:03.283Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -12,9 +12,9 @@
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 602,
-  "commands_seen": 302,
-  "actionable": 2,
+  "scanned_comments": 8,
+  "commands_seen": 4,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -176,73 +176,7 @@
       "finding_id": "review-feedback",
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): adopt orphaned managed worktrees left by a crash between git worktree add and registry insert",
-        "body": "## What Problem This Solves\n\nA gateway crash (OOM kill, forced restart) landing between `git worktree add` and the registry insert inside `ManagedWorktreeService.create()` leaves an on-disk worktree and an `openclaw/<name>` branch that no managed API can ever see, repair, or remove: `list()`/`get()` never show it, every `gc()` pass skips it forever, and any later `create()` with the same name fails hard with `branch already exists`. The only way out today is manual operator surgery (`git worktree remove` + `git branch -D`) outside the managed API. Reported with source-level analysis in #103239; this PR makes the orphan self-heal (gc adopts it; a retried create adopts it and preserves the caller's owner) while leaving foreign/detached worktrees untouched.\n\n## Summary\n\n- Problem: A crash between `git worktree add` and `insertRegistryWorktree()` inside `ManagedWorktreeService.create()` leaves a live git worktree + `openclaw/<name>` branch with no registry row. `reconcileOrphans()` explicitly skips it forever (invisible to `list()`/`gc()`), and a retried `create()` with the same name dead-ends on `branch already exists`.\n- Why it matters: In real deployments (OOM kill, forced restart) the orphan is permanently unrecoverable through the managed API — only manual `git worktree remove` + `git branch -D` unblocks the name.\n- What changed: `reconcileOrphans()` now adopts live-but-unregistered worktrees back into the registry when — and only when — the directory is git-listed at that exact path on exactly the managed branch (`refs/heads/openclaw/<dirname>`); gc-side adoption is registration-only (background gc must not execute repo setup scripts), making the orphan visible/removable rather than silently trusted. `create()`'s branch-exists guard self-heals the same exact orphan signature instead of throwing: it re-runs `copyIncludedFiles()` + `runSetupScript()` with the normal create() failure semantics (on failure: `cleanupFailedCreate()` + rethrow; the registry row is inserted only after provisioning succeeds), preserves the caller's `ownerKind`/`ownerId`, and records the real resolved base (`resolveBase(repoRoot, params.baseRef)`) rather than a placeholder — because the crash window between `git worktree add` and the registry insert also spans `copyIncludedFiles()`/`runSetupScript()`, so an adopted worktree may be half-provisioned and a retried `create()` must re-establish create()'s post-conditions. `git.ts` additively parses the porcelain `branch` field.\n- What did NOT change (scope boundary): foreign/detached-HEAD worktrees keep today's preserve-but-don't-touch behavior (locked in by the existing test); no changes to `remove()`, snapshots, registry schema, CLI output, or `ManagedWorktreeGcResult` shape.\n\nThis is AI-assisted work (Claude conductor + Claude worker/verifier agents, human-operated); every change was gated on tests written first and independently reviewed by a fresh-context model before submission.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #103239\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Root Cause (if applicable)\n\n- Root cause: `create()` performs the irreversible git-side effects (`git worktree add`, branch creation) before the registry insert, with no crash-window reconciliation: `reconcileOrphans()` treated \"git still lists this directory as a live worktree\" purely as a preserve signal and never checked whether the worktree matches the managed naming scheme but lacks a registry row.\n- Missing detection / guardrail: no adopt-or-repair path for the crashed-create signature; `create()`'s branch-exists guard had no way to distinguish \"user's foreign branch\" from \"our own crashed create()\".\n- Contributing context (if known): the registry has no `name` column (name derives from the path's last segment), so adoption needs no extra bookkeeping — the orphan is fully re-derivable from path + branch.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [ ] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/agents/worktrees/service.test.ts`\n- Scenario the test should lock in: a live worktree + managed branch with no registry row (the exact end-state of a crash between `git worktree add` and the registry insert) is (a) adopted by `gc()` into `list()` with matching path/branch and not deleted from disk, and (b) adopted by a retried `create()` with the same name — preserving the caller's `ownerKind`/`ownerId` so `findLiveByOwner()` and idle-gc semantics keep working — instead of throwing `branch already exists`; (c) a retried `create()` after a crash BEFORE setup completed re-runs provisioning (restores `.worktreeinclude`-copied files and the setup-script marker, records the real `baseRef`); and (d) a setup script that fails during adoption-retry makes `create()` throw and leaves no worktree, branch, or registry row behind.\n- Why this is the smallest reliable guardrail: the tests use the real `git` binary and real SQLite registry (the file's established pattern — no mocks), produce the crash end-state via production code (`create()` then deleting only the registry row), and assert through the public service API only.\n- Existing test that already covers this (if any): \"deletes unregistered orphan debris but preserves git-listed worktrees\" covers the foreign/detached case and stays green, locking in that non-managed worktrees are never claimed.\n- If no new test is added, why not: N/A — two new tests added.\n\n## User-visible / Behavior Changes\n\n- `openclaw worktrees gc` (and the hourly automatic gc) now re-registers managed worktrees orphaned by a crashed `create()` instead of leaving them invisible forever.\n- A retried `create()` with the same name after such a crash now succeeds (returns the adopted record) instead of failing with `branch already exists`.\n- Foreign or detached-HEAD worktrees are unaffected.\n\n## Diagram (if applicable)\n\n```text\nBefore:\ncreate() crash after `git worktree add` -> live worktree + branch, no registry row\n  -> gc()/reconcileOrphans(): \"git lists it\" -> skip forever (invisible)\n  -> create(same name): \"branch already exists\" (dead end)\n\nAfter:\ncreate() crash after `git worktree add` -> live worktree + branch, no registry row\n  -> gc()/reconcileOrphans(): exact path+branch match on openclaw/<name> -> adopt into registry\n  -> create(same name): exact orphan signature -> adopt (owner preserved) -> returns record\n  -> foreign/detached worktree -> preserved untouched (unchanged)\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`No`)\n- Secrets/tokens handling changed? (`No`)\n- New/changed network calls? (`No`)\n- Command/tool execution surface changed? (`No`)\n- Data access scope changed? (`No`)\n- If any `Yes`, explain risk + mitigation: N/A. Adoption is gated on an exact `git worktree list --porcelain` path + `refs/heads/openclaw/<name>` branch match; fabricating that state requires local filesystem/git access equivalent to what `create()` already requires. `insertRegistryWorktree` is the same call path `create()` already uses.\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS 26 (arm64); fix is platform-independent (pure git + SQLite service logic)\n- Runtime/container: Node 22 / bun, source checkout\n- Model/provider: N/A\n- Integration/channel (if any): N/A\n- Relevant config (redacted): default `OPENCLAW_STATE_DIR`-backed state\n\n### Steps\n\n1. `ManagedWorktreeService.create({ repoRoot, name: \"task-1\" })` and kill the process after `git worktree add` completes but before the registry insert (repro: create normally, then delete only the registry row — identical end state).\n2. Run `service.gc()`.\n3. Run `service.create({ repoRoot, name: \"task-1\" })` again.\n\n### Expected\n\n- gc adopts the orphan (visible in `list()`, not deleted); retried create succeeds.\n\n### Actual\n\n- Before this PR: gc skips it forever; retried create throws `branch already exists: openclaw/task-1`. After this PR: expected behavior (see tests).\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nBefore (tests added, fix stashed):\n\n```\n❯ |agents| src/agents/worktrees/service.test.ts (24 tests | 2 failed)\nFAIL … adopts a worktree orphaned when create() crashed …, during gc()\n  AssertionError: expected undefined to match object {…}\nFAIL … adopts an orphaned worktree instead of throwing on a retried create() …\n  Error: branch already exists: openclaw/orphan-retry\n```\n\nAfter:\n\n```\npnpm test src/agents/worktrees/service.test.ts src/agents/worktrees/registry.test.ts\n Test Files  2 passed (2)\n      Tests  27 passed (27)\n```\n\nReal-behavior proof (after-fix run through the actual service recovery path, genuine `kill -9` inside the crash window — exit 137 — against a real git repo + real SQLite registry, covering both the retried-create adoption with re-provisioning and the gc registration-only adoption): https://github.com/openclaw/openclaw/pull/103390#issuecomment-4937129438\n\nAlso green on the touched surface: `pnpm tsgo:core` (exit 0), `oxlint` (0 findings), `oxfmt --check` (formatted). Note: repo-wide `pnpm check` currently fails in its preflight `npm shrinkwrap guard` on an unmodified `origin/main` checkout in this environment (`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` for the `defu` override) — pre-existing and unrelated; no lockfile/override files are touched by this PR.\n\nKnown narrow edges deliberately left out of scope (documented for reviewers): (1) `worktrees.path` has no UNIQUE constraint, so a gc racing an in-flight `create()` in the pre-insert window could double-insert — same pre-existing assumption that gc/create aren't concurrent for one path; (2) a lingering *removed* registry row at the same path still blocks create()-side adoption for a fresh orphan (name-reuse-after-remove + crash sequence).\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: full scoped test suite (25/25) against real git + real SQLite locally, including both new adoption tests and the pre-existing foreign-worktree preservation test; typecheck/lint/format on the touched files.\n- Edge cases checked: detached-HEAD foreign worktree (preserved), bare branch collision without a live worktree (still throws), owner preservation (`workboard`/`ownerId`) on retried-create adoption including `findLiveByOwner()` lookup, crash-before-setup retry re-provisioning (include file + setup marker restored, real base recorded), and full cleanup on a failing setup script during adoption-retry.\n- What you did **not** verify: a literal `kill -9` mid-`create()` on a production gateway (the crash end-state is reproduced through the service's own code paths instead); the two out-of-scope narrow edges above.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes`)\n- Config/env changes? (`No`)\n- Migration needed? (`No`)\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: adopting a worktree that a user intentionally created outside the managed API at the exact managed path on an `openclaw/<name>` branch.\n  - Mitigation: that state is indistinguishable from (and equivalent to) a crashed managed create; adoption only registers it — it never deletes or modifies the worktree.\n- Risk: gc racing an in-flight create() could double-insert a row for one path (no UNIQUE constraint on path).\n  - Mitigation: window is the sub-second pre-insert gap and requires concurrent gc + create on the same repo; behavior before this PR already assumed these don't interleave; `list()` self-heals rows whose paths disappear.\n\n",
-        "branch": "fix/103239-worktree-orphan-reconcile",
-        "head_sha": "f6c4df05c0871b25998f8b5cd4f16e05a8531885",
-        "author": "ss251",
-        "labels": [
-          "agents",
-          "size: M",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/worktrees/git.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/worktrees/service.test.ts",
-            "additions": 100,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/worktrees/service.ts",
-            "additions": 97,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 202,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103390",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103390.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:104246:4943541294:2026-07-11T08:38:49Z:clawsweeper_needs_human",
@@ -509,184 +443,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): detect full C1 range in image-generate inline directive check",
-        "body": "## What Problem This Solves\n\n`sanitizeInlineDirectiveText()` in `src/agents/tools/image-generate-tool.ts` escapes control characters in provider/model/override text before generated-media directives are appended to the image-tool summary (so untrusted values can't inject `MEDIA:` directives or terminal escapes). Its `isInlineDirectiveControlCharacter()` predicate covered C0 (0x00-0x1f), DEL (0x7f), LS (0x2028) and PS (0x2029), but not the C1 control range (0x80-0x9f) — which includes the CSI introducer U+009B, an alternative ANSI escape prefix equivalent to `ESC [`.\n\n## Change\n\nAdd `(code >= 0x80 && code <= 0x9f)` to `isInlineDirectiveControlCharacter`, so C1 bytes are escaped to a visible backslash-u sequence alongside the existing ranges.\n\n## Testing / Proof\n\nExtended the existing summary-escaping regression in `src/agents/tools/image-generate-tool.test.ts` (\"escapes image-generation summary text before appending tool MEDIA output\") so an `ignoredOverrides` value now carries a U+009B control byte (followed by `[2J`). The test asserts the emitted summary contains the escaped backslash-u form of U+009B rather than the raw byte, while the structured `details` object still round-trips the original raw value unchanged.\n\n```\n$ node scripts/run-vitest.mjs run src/agents/tools/image-generate-tool.test.ts\n\n RUN  v4.1.8 D:/IdeaWork/openclaw-repo\n\n Test Files  1 passed (1)\n      Tests  57 passed (57)\n   Duration  62.17s\n```\n\nThe test drives the real image-tool `execute` path through `sanitizeInlineDirectiveText`, so the passing run is the before/after proof: on current `main` the U+009B passes through the escaping boundary raw; with this change it is escaped to its visible backslash-u form before the media directive is appended.\n",
-        "branch": "fix/image-generate-tool-c1",
-        "head_sha": "19cf27b309aa78f26bde21a024e2eb467477b861",
-        "author": "lsr911",
-        "labels": [
-          "agents",
-          "size: XS",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tools/image-generate-tool.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/image-generate-tool.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 10,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103405",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103405.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 65,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:104319:4943969926:2026-07-11T08:38:30Z:clawsweeper_needs_human",
-      "comment_id": "4943969926",
-      "comment_version_key": "4943969926:2026-07-11T08:38:30Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/104319#issuecomment-4943969926",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 104319,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T08:38:30Z",
-      "comment_updated_at": "2026-07-11T08:38:30Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] This active protected-label PR needs contributor real behavior proof and ordinary exact-head maintainer review; there is no concrete code defect for an automated repair lane.; Cleared: The diff changes internal TypeScript classification and tests only; it adds no dependency, workflow, secret, permission, download, package, or supply-chain surface. (sha=513c4651bc83b2f4c93e267986c0ba0e8b1b9470)",
-      "review_summary": "The PR adds a shared signal-authoritative CLI tool terminal-reason resolver, uses it in one-shot and live runners, threads the live run abort signal into the turn, and adds table-driven precedence coverage.\n\nPR surface: Source +26, Tests +96. Total +122 across 4 files.\n\nReproducibility: yes. at source level: current main has two concrete classifiers that disagree for timeout-shaped errors, AbortError-shaped errors, and signal-versus-error races. The PR's table covers those divergent inputs, although no real emitted diagnostic event is attached.",
-      "review_followup": "- [P1] This active protected-label PR needs contributor real behavior proof and ordinary exact-head maintainer review; there is no concrete code defect for an automated repair lane.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "513c4651bc83b2f4c93e267986c0ba0e8b1b9470",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-11T08:37:07.741Z",
-      "review_lease_owner": "github-run-29146284134-1",
-      "review_lease_comment_id": "4943925080",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "cba00823427d20de27f335ee47af805bbbb1ad5b774ea4dd3c3f0a1780aecbe8",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "refactor(agents): converge CLI tool terminal reason onto run-termination",
-        "body": "## What Problem This Solves\n\nThe one-shot and live CLI runners each derived the same terminal decision — `timed_out` / `cancelled` / `failed` for tools when a run ends — with different logic:\n\n- `src/agents/cli-runner/execute.ts` (one-shot) read the abort signal's lifecycle fields, then only recognized `FailoverError` timeouts; a `TimeoutError`-shaped or `AbortError`-shaped run error without an aborted signal classified as `failed`.\n- `src/agents/cli-runner/claude-live-session.ts` (live) only sniffed error shape (`isTimeoutError`, `FailoverError` timeout, `AbortError` name) and never consulted the abort signal.\n\nBecause the live path trusted the delivered error's name alone, a run timeout whose abort reason reached the turn as a generic `AbortError` (or a non-`Error` timeout reason, which `createAbortError` cannot preserve) was reported as `cancelled` instead of `timed_out`; conversely a user cancel racing a timeout-shaped provider error reported `timed_out` where the one-shot path reports `cancelled`. Same decision, two encodings, observable drift — seam 3 of #104219.\n\n## Why This Change Was Made\n\nConverge the derivation onto one owner, per the #104219 change shape. `resolveCliToolTerminalReason` lives in `src/agents/run-termination.ts` — the module that already owns abort→stop-reason semantics (`resolveAgentRunAbortLifecycleFields`) — and encodes one rule: abort-signal lifecycle fields are authoritative when the signal has aborted; error shape (`isTimeoutError`, `FailoverError` timeout, `AbortError` name) classifies otherwise. Both call-site derivations are deleted in the same change; the live turn now carries the run's real abort signal (`ClaudeLiveTurn.abortSignal`, threaded in `createTurn`).\n\n`terminalReason` feeds diagnostic events only (`tool.execution.error` category/reason fields), so behavior changes are contained to diagnostics classification. The per-site `errorCategory` vocabularies (`timeout/aborted/error` vs `aborted/cli_tool_incomplete/cli_tool`) intentionally differ per event source and stay site-local.\n\n## User Impact\n\nTool-failure diagnostics now classify consistently across CLI runner modes:\n\n- Live runs that hit the run timeout report `timed_out` (previously `cancelled` when the abort reason arrived as a generic `AbortError` or a non-`Error` reason).\n- A user cancel racing a timeout-shaped error consistently reports `cancelled` on both paths (signal wins).\n- One-shot runs with a `TimeoutError`/`AbortError`-shaped run error and no aborted signal now report `timed_out`/`cancelled` instead of `failed`.\n\nNo control-flow, retry, or delivery behavior changes.\n\n## Evidence\n\n- Drift sites and trace: old derivations at `execute.ts` (`resolveToolTerminalReason`) and `claude-live-session.ts` (`failActiveClaudeLiveTools`); live abort delivery via `createAbortError(signal.reason)` loses timeout identity for generic/non-`Error` reasons.\n- Tests: table-driven matrix for `resolveCliToolTerminalReason` in `src/agents/run-termination.test.ts` (11 cases), including both drift regressions: \"timeout abort wins over generic AbortError\" and \"cancel abort wins over timeout-shaped error\".\n- Local: `pnpm tsgo:core`, `pnpm tsgo:test:src`, `pnpm check:import-cycles` all exit 0; focused vitest green (`run-termination`, cli-runner suites — 270+ tests).\n- Remote (Blacksmith Testbox, leases `tbx_01kx80mneqrn7dyntk6cjptc4t`, `tbx_01kx837g6z39m9kjrfkr8mvsm8`), branch rebased on latest `main`: `pnpm check:changed` exit 0. `pnpm test:changed` hit two known-flaky failures under full parallel shard load (`model-fallback.probe.test.ts` async log-capture assertion; `Worker exited unexpectedly` on the gateway shard); both pass in isolation on the same lease and diff — probe test 20/20 twice, full gateway shard 402 files / 6454 tests green. Neither touches this diff's surface.\n- `git diff --numstat`: +43/−17 prod, +96 tests. Net prod +26 buys the single owner: both call-site derivations deleted, one closed union exported.\n\nPart of #104219 (seam 3: CLI-runner terminal reason derivation).\n",
-        "branch": "core/cli-terminal-reason",
-        "head_sha": "513c4651bc83b2f4c93e267986c0ba0e8b1b9470",
-        "author": "obviyus",
-        "labels": [
-          "agents",
-          "maintainer",
-          "size: S",
-          "P3",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/cli-runner/claude-live-session.ts",
-            "additions": 14,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/execute.ts",
-            "additions": 5,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/run-termination.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/run-termination.ts",
-            "additions": 24,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 139,
-        "deletions": 17,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104319",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104319.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 102,
-          "gatingTotal": 97,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:104195:4942836789:2026-07-11T08:38:29Z:clawsweeper_needs_human",
@@ -17178,22 +16935,22 @@
       "reason": "PR is paused for human review"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 84167,
+    "total_ms": 1958,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 7369
+        "ms": 953
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 9731
+        "ms": 809
       },
       {
         "name": "classify_comment_commands",
-        "ms": 11368
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -17213,15 +16970,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 50979
+        "ms": 177
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
