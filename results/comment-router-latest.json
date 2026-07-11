@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T03:14:18.346Z",
+  "generated_at": "2026-07-11T03:14:20.719Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T00:14:16.287Z",
+  "since": "2026-07-11T00:14:19.038Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103046
+    103803
   ],
   "comment_ids": [
-    4941994825
+    4941995612
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:103046:4941994825:2026-07-11T03:11:15Z:re_review",
-      "comment_id": "4941994825",
-      "comment_version_key": "4941994825:2026-07-11T03:11:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103046#issuecomment-4941994825",
+      "idempotency_key": "comment-router:openclaw/openclaw:103803:4941995612:2026-07-11T03:11:31Z:re_review",
+      "comment_id": "4941995612",
+      "comment_version_key": "4941995612:2026-07-11T03:11:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103803#issuecomment-4941995612",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 103046,
-      "author": "LeonidasLux",
-      "author_id": 294038793,
+      "issue_number": 103803,
+      "author": "llagy007",
+      "author_id": 17695126,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T03:11:15Z",
-      "comment_updated_at": "2026-07-11T03:11:15Z",
+      "comment_created_at": "2026-07-11T03:11:31Z",
+      "comment_updated_at": "2026-07-11T03:11:31Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -75,96 +75,201 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): add size limit to LSP message parser",
-        "body": "## Summary\n\n**Problem**: The LSP message parser accepted unbounded `Content-Length`\nvalues. A malicious or misbehaving LSP server could send an arbitrarily\nlarge `Content-Length` header, causing unbounded buffer allocation and\nmemory exhaustion. Additionally, a very long decimal `Content-Length`\n(e.g., 400+ digits) causes `Number.parseInt` to return `Infinity`, which\nwas stored as an infinite drain counter — permanently suppressing all\nfuture LSP output and leaving pending requests to time out.\n\n**Root cause**: When `Content-Length` exceeded the 10 MB limit, the parser\nonly skipped the header + separator bytes but kept the declared body in\n`session.buffer`. If the oversized body arrived across multiple stream\nchunks, the buffer would grow unboundedly. For non-safe integer lengths\n(`Infinity` from `parseInt`), the arithmetic computed `bodyStart + Infinity\n= Infinity`, storing an infinite `oversizeDrainRemaining` that never\ndecrements. Additionally, when the final drain chunk exactly matched the\nremaining byte count, the handler returned early without failing the\nsession, leaving the pending request to time out.\n\n**Solution**: Add a 10 MB `Content-Length` limit that fully drains the\ndeclared oversized body when the frame is completely buffered, or tracks\nremaining bytes to skip via `session.oversizeDrainRemaining` when the body\narrives across chunks. Non-safe integer Content-Length values (Infinity)\nare detected before drain arithmetic and signal a fatal protocol error.\nFinite oversized frames (>10 MB but still a safe integer) trigger session\nfailure after dispatching any valid responses parsed before the oversized\nframe — the associated pending request is rejected immediately instead of\nwaiting for the normal request timeout. The exact-match drain completion\nboundary (`raw.length === oversizeDrainRemaining`) now falls through to\nthe session failure check instead of returning early.\n\n**What changed**: `src/agents/agent-bundle-lsp-runtime.ts`\n- `parseLspMessages`: accepts optional `oversizeDrainRemaining` out-param\n  with `fatal` flag; on oversized frames drains the full frame or signals\n  remaining bytes and sets the fatal flag. On non-safe integer\n  Content-Length signals a fatal condition via NaN.\n- `handleIncomingData`: drains `session.oversizeDrainRemaining` from raw\n  stream data before appending to the parse buffer. Detects non-finite\n  drain remaining or drained finite oversized frames and calls\n  `failLspSession` after dispatching any completed responses parsed\n  before the bad header. Fixed the exact-match drain boundary: changed\n  `<=` to `<` so the exact-match case continues into session failure.\n- `LspSession` type: added `oversizeDrainRemaining: number`,\n  `oversizeDrainSeen: boolean`\n\n**What did NOT change**: Valid message parsing, session lifecycle, tool\nmaterialization — all unchanged for frames within the 10 MB limit.\n\n## Real behavior proof\n\n**Behavior addressed**: LSP message parser now closes three gaps:\n1) fully drains finite oversized Content-Length frames (>10 MB) to\nprevent memory exhaustion, 2) fails the session for non-safe integer\nContent-Length (Infinity from parseInt) instead of permanently suppressing\nall future LSP output, and 3) fails the session for finite oversized\nframes after dispatching any valid responses parsed before the oversized\nframe so the associated pending request is rejected immediately instead\nof timing out.\n\n**Real environment tested**: Linux 4.19.112, Node 22.19.0, pnpm 11.2.2\n\n**Exact steps or command run after this patch**:\n```bash\npnpm test src/agents/agent-bundle-lsp-runtime.test.ts\n```\n\n**Observed result after the fix**: All 18 tests pass, including 4 new\nhandler-level tests for finite oversized Content-Length session failure.\n\n**Before-fix behavior (if applicable)**: Finite oversized frames (>10 MB)\nwere silently drained without failing the session, leaving the associated\npending request to time out after 10 seconds instead of failing\nimmediately. When the final drain chunk exactly matched the remaining\noversized body bytes, the handler returned early with a zero counter\nwithout failing the session.\n\n**After-fix evidence**:\n\nAll 18 tests pass:\n```text\n ✓ bundle LSP runtime > oversized Content-Length handling (2)\n ✓ bundle LSP runtime > unsafe Content-Length handling (4)\n ✓ bundle LSP runtime > finite oversized Content-Length handling (4)\n   ✓ sets fatal flag on parseLspMessages oversizeDrain\n   ✓ fails LSP session on finite oversized frame through runtime handler path\n   ✓ dispatches valid response before failing session on finite oversized frame\n   ✓ fails the session when the final drain chunk exactly completes\n```\n\n**Real LSP server evidence**:\n\nTested against `vscode-json-languageserver` via stdio:\n\n**Terminal output**:\n```text\n============================================================\nL2 EVIDENCE: Real LSP server session via Content-Length framing\nServer: vscode-json-languageserver\n============================================================\nFrame #1: {\n  \"jsonrpc\": \"2.0\", \"id\": 1,\n  \"result\": {\n    \"capabilities\": {\n      \"textDocumentSync\": 2, \"hoverProvider\": true,\n      \"documentSymbolProvider\": true, \"foldingRangeProvider\": true,\n      \"selectionRangeProvider\": true\n    }\n  }\n}\nFrame #2: { \"jsonrpc\": \"2.0\", \"id\": 2, \"result\": null }\n----------------------------------------\nInitialize returned capabilities: ✅\nCompletion responded: ✅\nCONCLUSION: Real LSP server session works end-to-end ✅\n```\n\nThis proves the LSP message parser correctly handles real server I/O\nwith proper Content-Length framing.\n\n**What was not tested**: A real LSP server sending non-safe Content-Length\nor oversized (>10 MB) values — these are protocol violations that no\nwell-behaved LSP server would produce. The code paths are exercised\nthrough handler-level tests that use the identical `handleIncomingData`\npath the production LSP session uses.\n\n**Risk level**: Low — non-safe and finite oversized Content-Length values\nboth trigger session failure after dispatching valid responses. All\nexisting message sizes within the 10 MB limit use the unchanged happy\npath. merge-risk: low\n\n## Risk checklist\n\n- [x] This change is backwards compatible — 10 MB is well above realistic LSP message sizes\n- [x] This change has been tested with existing configurations — all 18 tests pass\n- [x] I have updated relevant documentation — no docs changes needed\n- [x] Breaking changes (if any) are documented in Summary — none",
-        "branch": "fix/security-lsp-message-size-limit",
-        "head_sha": "6e59635df3ed7c170269320db50992314f593f59",
-        "author": "leonidaslux",
+        "title": "fix(parallel): resolve env search key refs",
+        "body": "## What Problem This Solves\n\nFixes Parallel web search credential resolution when the configured API key is an env-backed SecretRef. The provider previously used the older strict config string reader, so SecretRef objects did not behave like direct `apiKey` strings or the documented `PARALLEL_API_KEY` fallback.\n\n## Why This Change Was Made\n\nParallel now uses the shared web-search credential resolver, matching the credential contract used by provider-local web search runtimes: direct configured values win, env SecretRefs resolve from their referenced env var, and the provider env fallback is used only when no credential is configured.\n\n## User Impact\n\nUsers can configure `plugins.entries.parallel.config.webSearch.apiKey` as an env SecretRef without needing a live key in config. Missing or unsupported SecretRefs fail closed instead of silently falling back to an unrelated ambient `PARALLEL_API_KEY` value.\n\n## Evidence\n\n- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs extensions/parallel/src/parallel-web-search-provider.test.ts -- --reporter=verbose`\n- `pnpm format:check extensions/parallel/src/parallel-web-search-provider.runtime.ts extensions/parallel/src/parallel-web-search-provider.test.ts`\n- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-oxlint.mjs extensions/parallel/src/parallel-web-search-provider.runtime.ts extensions/parallel/src/parallel-web-search-provider.test.ts`\n- `git diff --check upstream/main..HEAD`\n\n## Proof\n\n- Added local regression coverage for direct configured keys, documented env fallback, default/custom env SecretRefs, and unavailable SecretRefs.\n- Tests use `vi.stubEnv` and `vi.unstubAllEnvs`, so the proof does not depend on live Parallel credentials.\n- Rebased on latest `upstream/main`; open PR changed-file scan found no live conflicts for the two touched files.\n- Claude structured autoreview on the final branch reported no accepted/actionable findings.\n\n\n## Runtime SecretRef Proof\n\nThis command imports the Parallel plugin runtime testing surface and exercises the actual credential resolver used by `executeParallelWebSearchProviderTool`. It does not require a live Parallel API key or network call because the changed behavior is credential resolution before request dispatch.\n\n```bash\nPARALLEL_API_KEY=parallel-env-fallback CUSTOM_PARALLEL_API_KEY_REF=parallel-custom-ref-key MISSING_PARALLEL_API_KEY_REF= node --import tsx --input-type=module <<'NODE'\nimport assert from 'node:assert/strict';\nimport { testing } from './extensions/parallel/test-api.ts';\n\nconst defaultEnvSecretRef = {\n  source: 'env',\n  provider: 'default',\n  id: 'PARALLEL_API_KEY',\n};\nconst customEnvSecretRef = {\n  source: 'env',\n  provider: 'default',\n  id: 'CUSTOM_PARALLEL_API_KEY_REF',\n};\nconst missingEnvSecretRef = {\n  source: 'env',\n  provider: 'default',\n  id: 'MISSING_PARALLEL_API_KEY_REF',\n};\nconst unsupportedSecretRef = {\n  source: 'file',\n  provider: 'vault',\n  id: '/parallel/api-key',\n};\n\nconst result = {\n  directConfiguredKey: testing.resolveParallelApiKey({ apiKey: 'parallel-configured-key' }),\n  envFallback: testing.resolveParallelApiKey({}),\n  defaultEnvSecretRef: testing.resolveParallelApiKey({ apiKey: defaultEnvSecretRef }),\n  customEnvSecretRef: testing.resolveParallelApiKey({ apiKey: customEnvSecretRef }),\n  missingEnvSecretRef: testing.resolveParallelApiKey({ apiKey: missingEnvSecretRef }) ?? null,\n  unsupportedSecretRef: testing.resolveParallelApiKey({ apiKey: unsupportedSecretRef }) ?? null,\n};\n\nassert.equal(result.directConfiguredKey, 'parallel-configured-key');\nassert.equal(result.envFallback, 'parallel-env-fallback');\nassert.equal(result.defaultEnvSecretRef, 'parallel-env-fallback');\nassert.equal(result.customEnvSecretRef, 'parallel-custom-ref-key');\nassert.equal(result.missingEnvSecretRef, null);\nassert.equal(result.unsupportedSecretRef, null);\n\nconsole.log(JSON.stringify(result, null, 2));\nNODE\n```\n\nOutput:\n\n```json\n{\n  \"directConfiguredKey\": \"parallel-configured-key\",\n  \"envFallback\": \"parallel-env-fallback\",\n  \"defaultEnvSecretRef\": \"parallel-env-fallback\",\n  \"customEnvSecretRef\": \"parallel-custom-ref-key\",\n  \"missingEnvSecretRef\": null,\n  \"unsupportedSecretRef\": null\n}\n```\n",
+        "branch": "llagy007/parallel-env-secretref-fallback-20260710",
+        "head_sha": "73eb031195656d13e7d3910839e445d4cebeea1d",
+        "author": "llagy007",
         "labels": [
-          "agents",
-          "size: M",
+          "size: S",
           "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 auth-provider",
+          "status: 📣 needs proof",
+          "extensions: parallel"
         ],
         "files": [
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.test.ts",
-            "additions": 267,
+            "path": "extensions/parallel/src/parallel-web-search-provider.runtime.ts",
+            "additions": 8,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/parallel/src/parallel-web-search-provider.test.ts",
+            "additions": 65,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Sources/PeekabooAgentRuntime/Agent/QueueMode.swift",
+            "additions": 18,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-bundle-lsp-runtime.ts",
-            "additions": 111,
-            "deletions": 6,
+            "path": "Core/PeekabooCore/Sources/PeekabooAgentRuntime/MCP/Tools/MCPAgentTool.swift",
+            "additions": 7,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Sources/PeekabooAgentRuntime/Protocols/AgentServiceProtocol.swift",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Sources/PeekabooAutomation/Services/AI/PeekabooAIService.swift",
+            "additions": 29,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooAgentRuntimeTests/AgentSessionManagerStorageTests.swift",
+            "additions": 130,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooAgentRuntimeTests/AgentTurnBoundaryTests.swift",
+            "additions": 16,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/AgentTurnBoundaryTranscriptTests.swift",
+            "additions": 169,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAIServiceProviderTests.swift",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentEventLifecycleTests.swift",
+            "additions": 162,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentOllamaStreamingReasoningTests.swift",
+            "additions": 124,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentResumeModelContinuityTests.swift",
+            "additions": 350,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentServiceModelTests.swift",
+            "additions": 142,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentStepLimitTests.swift",
+            "additions": 1613,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentStreamingContentFilterTests.swift",
+            "additions": 11,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Core/PeekabooCore/Tests/PeekabooTests/PeekabooAgentStreamingReasoningBoundaryTests.swift",
+            "additions": 15,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "README.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "Tachikoma",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/MCP.md",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/agent.md",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/configuration.md",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers.md",
+            "additions": 18,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/README.md",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/ollama-models.md",
+            "additions": 39,
+            "deletions": 118,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/ollama.md",
+            "additions": 92,
+            "deletions": 687,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 378,
-        "deletions": 6,
+        "additions": 73,
+        "deletions": 8,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103046",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103046.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103803",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103803.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 94,
-          "gatingTotal": 89,
+          "total": 87,
+          "gatingTotal": 82,
           "counts": {
-            "SUCCESS": 51,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 13,
-            "FAILURE": 3,
-            "NEUTRAL": 1
+            "SUCCESS": 59,
+            "SKIPPED": 28
           },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):FAILURE",
-            "QA Smoke CI (profile 2/2):FAILURE",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:FAILURE",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "QA Smoke CI (profile 1/2):FAILURE",
-            "QA Smoke CI (profile 2/2):FAILURE",
-            "check-lint:FAILURE"
-          ],
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -176,7 +281,7 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2371,
+    "total_ms": 1880,
     "phases": [
       {
         "name": "list_candidate_comments",
@@ -184,11 +289,11 @@
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1534
+        "ms": 1143
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1305
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -204,7 +309,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 313
+        "ms": 199
       },
       {
         "name": "append_ledger",
