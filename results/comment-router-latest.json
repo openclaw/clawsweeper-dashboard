@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T10:39:58.714Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-11T10:40:04.984Z",
+  "repo": "steipete/oracle",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T07:39:54.317Z",
+  "since": "2026-07-11T07:40:03.337Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    104149
+    304
   ],
   "comment_ids": [
-    4945029474
+    4945029779
   ],
-  "status_comment_id": 4945029584,
+  "status_comment_id": 4945029872,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:104149:4945029474:2026-07-11T10:38:31Z:re_review",
-      "comment_id": "4945029474",
-      "comment_version_key": "4945029474:2026-07-11T10:38:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/104149#issuecomment-4945029474",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "comment-router:steipete/oracle:304:4945029779:2026-07-11T10:38:38Z:re_review",
+      "comment_id": "4945029779",
+      "comment_version_key": "4945029779:2026-07-11T10:38:38Z",
+      "comment_url": "https://github.com/steipete/oracle/pull/304#issuecomment-4945029779",
+      "repo": "steipete/oracle",
       "target_branch": "main",
-      "issue_number": 104149,
-      "author": "LZY3538",
-      "author_id": 293718838,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T10:38:31Z",
-      "comment_updated_at": "2026-07-11T10:38:31Z",
-      "status_comment_id": 4945029584,
+      "issue_number": 304,
+      "author": "DragonFSKY",
+      "author_id": 38503900,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-11T10:38:38Z",
+      "comment_updated_at": "2026-07-11T10:38:38Z",
+      "status_comment_id": 4945029872,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -78,166 +78,71 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 104149,
-          "dispatch_key": "router-7b96c0a7d055fb79",
-          "dispatched_at": "2026-07-11T10:39:59.716Z"
+          "item_number": 304,
+          "dispatch_key": "router-7b618f6a1fcd71eb",
+          "dispatched_at": "2026-07-11T10:40:06.014Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-11T10:40:00.840Z",
-          "response_comment_id": "4945029584",
+          "commented_at": "2026-07-11T10:40:07.145Z",
+          "response_comment_id": "4945029872",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): honor Anthropic Retry-After in auto-retry backoff (#103849)",
-        "body": "## What Problem This Solves\n\nOn the default Anthropic Messages transport, a 429 response with a server `Retry-After` header was turned into a plain `Error` with no status or cooldown attached, so no component in the retry path could honor the server's window. Auto-retry fell back to fixed exponential backoff and, with `maxRetries: 3`, all retries could land inside a still-active rate-limit window and fail the turn.\n\nCloses #103849\n\n## Why This Change Was Made\n\nThe bespoke Anthropic fetch client is not a Stainless-style SDK, so the parsed `Retry-After` was discarded before reaching any retry owner. Fixing this correctly requires the server cooldown to reach **every** retry owner — the in-turn `AgentSession.prepareRetry`, the embedded-runner failover, and the auth-profile cooldown — as **one consistent value**.\n\n## The closed `ServerRetryAfter` representation\n\nA server cooldown has three meaningful states, so it is modelled as a closed discriminated union (in `packages/llm-core/src/types.ts`) rather than a `number` that overloads `Infinity` as an over-limit sentinel:\n\n```ts\nexport type ServerRetryAfter =\n  | { kind: \"seconds\"; seconds: number } // finite server cooldown\n  | { kind: \"unbounded\" };               // overflowed / unparseably-large header\n// undefined = no usable Retry-After\n```\n\nAn earlier `number`-with-`Infinity` shape let finite-only downstreams silently drop the over-limit case (this is exactly the defect the prior review cycles kept surfacing in different layers). The closed union makes every consumer handle `unbounded` explicitly — TypeScript exhaustiveness enforces it — so the over-limit signal can never be lost.\n\n## Changes (threaded end to end)\n\n- **Transport** (`anthropic-transport-stream.ts`): non-OK responses throw with `httpStatus` and a `ServerRetryAfter` built from the canonical `parseRetryAfterSeconds` (an overflowed header → `{ kind: \"unbounded\" }`).\n- **Extraction** (`transport-stream-shared.ts`): the `ServerRetryAfter` union is carried onto the `AssistantMessage` as a validated closed object (no `Infinity` in a number field).\n- **In-turn retry** (`llm/utils/retry.ts` `resolveAutoRetryDelayMs`): finite cooldown ≤ `retry.provider.maxRetryDelayMs` is honored as a lower bound; a finite cooldown above it, or `unbounded`, returns `null` (stop in-turn retry → fallback). `maxRetryDelayMs` is now the **only** in-turn sleep ceiling.\n- **Embedded failover** (`assistant-failover.ts`): `unbounded` (and finite > 60s) never triggers a same-model short-window retry; it routes to profile rotation and passes the union to the profile-failure mark.\n- **Auth-profile cooldown** (`auth-profiles/usage.ts`): a finite cooldown extends the profile window; `unbounded` holds the profile for the maximum timer-safe window (`MAX_TIMER_TIMEOUT_MS`) instead of collapsing to the ordinary first-failure backoff — closing the \"profile eligible during an unknown provider cooldown\" gap.\n\n## User Impact\n\nAnthropic 429s with a `Retry-After` within the configured tolerance now delay retries by at least the server window (rate-limited turns wait it out and can succeed). Cooldowns beyond the tolerance — including malformed/overflowed headers — fail fast for fallback and hold the auth profile for the full unknown window, instead of retrying inside it.\n\n## Evidence\n\n**Real behavior proof (real managed transport + real resolver + real embedded routing).** A real Node HTTP server on `127.0.0.1` returns HTTP 429 with a `Retry-After` header, driven through the real `createAnthropicMessagesTransportStreamFn()` (real `buildGuardedModelFetch`); the propagated closed union is fed into the real `resolveAutoRetryDelayMs` (default `maxRetryDelayMs=60000`) and the real `isShortWindowRateLimitMessage` failover router:\n\n```\n== Path A: managed transport -> AssistantMessage.retryAfter -> resolveAutoRetryDelayMs (max=60000) ==\n  retry-after: 30           -> retryAfter={\"kind\":\"seconds\",\"seconds\":30}  delay=30000ms\n  retry-after: 120          -> retryAfter={\"kind\":\"seconds\",\"seconds\":120} delay=null (stop in-turn retry -> fallback)\n  retry-after-ms overflow   -> retryAfter={\"kind\":\"unbounded\"}             delay=null (stop in-turn retry -> fallback)\n== Path B: embedded failover routing (isShortWindowRateLimitMessage) ==\n  {seconds:30}  -> sameModelShortRetry=true\n  {seconds:120} -> sameModelShortRetry=false\n  {unbounded}   -> sameModelShortRetry=false  (routes to profile rotation)\n```\n\nBefore this fix (origin/main) the same 429 yields no status/cooldown and a fixed 2000ms backoff.\n\n**Focused tests (cross-layer, incl. overflow → profile).**\n- `retry.auto-retry-delay.test.ts` — finite lower-bound, boundary at max, reject > max, reject `unbounded`, honor > 60s when the operator raises the max.\n- `provider-transport-fetch.test.ts` — canonical parser incl. overflow → `Infinity`.\n- `transport-stream-shared.test.ts` — the `unbounded` union survives extraction; resolver rejects it.\n- `anthropic-transport-stream.test.ts` — a 429 with an overflowed `retry-after-ms` surfaces `retryAfter={kind:\"unbounded\"}` through the real transport.\n- `auth-profiles/usage.test.ts` — **an over-limit (unbounded) cooldown holds the profile for `MAX_TIMER_TIMEOUT_MS`** (the overflow-header-to-profile regression), and a finite cooldown extends the window.\n\n```\n$ npx vitest run <transport + retry + failover + auth-profile suites>\n Test Files  11 passed (11)\n      Tests  723 passed (723)\n```\n\nFull source typechecks clean (`tsc -p tsconfig.core.json --noEmit`); oxlint reports 0 warnings / 0 errors on all changed files.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---\n\n## Exact-head real behavior proof (finite recovery + persisted profile cooldown)\n\n**Finite Retry-After — turn recovers after the wait** (real managed transport; server 429+`Retry-After: 3` then 200 SSE; the real `resolveAutoRetryDelayMs` delay is slept between attempts):\n\n```\nattempt#1: stopReason=error retryAfter={\"kind\":\"seconds\",\"seconds\":3}\nresolved wait=3000ms; slept 3007ms\nattempt#2: stopReason=stop text=\"recovered\"\nserver_requests=2  => turn recovered after the server-specified wait\n```\n\n**Over-limit — persisted auth-profile cooldown** (real `markAuthProfileFailure` against a real in-memory `AuthProfileStore`; profile id redacted to a sha256 by the subsystem logger):\n\n```\n[agent/embedded] auth profile failure state updated: profile=sha256:154a23a3efe6 provider=anthropic reason=rate_limit window=cooldown\nretryAfter={\"kind\":\"seconds\",\"seconds\":120} -> persisted cooldown ≈ now + 120000ms\nretryAfter={\"kind\":\"unbounded\"}             -> persisted cooldown ≈ now + 2147000001ms (== MAX_TIMER_TIMEOUT_MS)\n```\n\n## Maintainer decisions requested\n\nTwo aspects are intentional and want maintainer sign-off (they are policy/contract choices, not defects):\n\n1. **Shared contract:** `AssistantMessage` gains optional `httpStatus?` and `retryAfter?: ServerRetryAfter`. Additive and type-compatible; consumed by the Anthropic transport, `AgentSession` retry, embedded failover, and auth-profile cooldown.\n2. **Unbounded cooldown policy:** an overflowed/unparseable provider `Retry-After` suppresses the affected auth profile for `MAX_TIMER_TIMEOUT_MS`. This is deliberately conservative (the real provider window is unknown, so the profile is not retried into it); happy to adjust the ceiling if a shorter bound is preferred.",
-        "branch": "fix/anthropic-retry-after-103849-v2",
-        "head_sha": "dbcce1951923449c8575af20a0ad9ddc53dadbab",
-        "author": "lzy3538",
+        "title": "fix(browser): support GPT-5.6 unified effort picker",
+        "body": "## Summary\n\n- recognize GPT-5.6's outer effort menu when it wraps `composer-intelligence-picker-content`\n- map the legacy Pro Extended request to the unified picker's checked `Pro` radio only when the legacy Pro effort trigger is absent, preserving the older nested path and fail-closed behavior\n- select the current Chinese Intelligence labels exactly: `light -> 极速5.5`, `standard -> 中`, `extended -> 高`, and `heavy -> 极高`, without matching `高` inside `极高`\n- preserve older Chinese layouts by accepting bare `高` for `heavy` only as a second-pass fallback when no primary heavy label is present\n- re-query a composer effort pill after React replaces the clicked node, so a successful switch is verified instead of reported as `selection-unverified`\n- treat GPT-5.6 as a versioned Intelligence target so a current `Pro` pill does not force ordinary effort requests into Pro semantics; unrelated composer pills such as Canvas remain excluded\n\nFixes #303.\n\n## Root cause\n\nThe GPT-5.6 UI moved effort radios into a wrapped unified Intelligence menu, renamed the top effort to `Pro`, and replaces the composer pill after a selection. The previous selector only recognized the inner menu, expected the legacy Pro submenu, used older Chinese aliases, and verified against the detached pre-click pill.\n\n## Tests\n\n- `pnpm vitest run tests/browser/thinkingTime.test.ts` (27 passed)\n- `pnpm check`\n- `env -u ANTHROPIC_BASE_URL pnpm vitest run --exclude tests/browser/profileCopy.test.ts` (142 files / 1,415 tests passed; the excluded test requires system `rsync`, which is not installed in this environment)\n- live browser smoke on both configured signed-in ChatGPT Pro profiles through local AdsPower\n  - both profiles still confirm the unified `Pro` path and submit successfully\n  - Chinese UI: `light -> 极速5.5`, `standard -> 中`, `extended -> 高`, and `heavy -> 极高`\n  - all four runs submitted and returned their exact smoke markers; the post-selection runs no longer report `selection-unverified`\n  - combined with #306, `--model gpt-5.6 --browser-thinking-time extended` recorded `resolved=GPT-5.6 Sol`, confirmed `Thinking time: 高`, and returned `ORACLE_GPT56_ZH_EVIDENCE_FIXED_OK`\n\n## Inspectable live-browser evidence\n\nValidated against commit `19a57b158575599f8a4e2af4271a33f50bbf9e33`.\n\nNo run clicked or auto-clicked ChatGPT's \"Answer now\" control. Profile identifiers, local paths, debugging ports, browser target IDs, authentication data, and conversation URLs are redacted. The behavior lines below are verbatim terminal excerpts apart from those redacted fields.\n\n```text\n$ git rev-parse HEAD\n19a57b158575599f8a4e2af4271a33f50bbf9e33\n```\n\n### Unified Pro picker\n\n```sh\nORACLE_HOME_DIR=<redacted> node ./dist/scripts/run-cli.js -- \\\n  --engine browser --model gpt-5.5-pro \\\n  --remote-chrome <redacted-host:port> --browser-tab <redacted-target-id> \\\n  --browser-thinking-time extended --browser-archive never --verbose \\\n  --prompt 'Reply exactly ORACLE_PR304_PRO_OK.'\n```\n\n```text\nLogin check passed (sessionStatus=200, sessionAuthenticated=true, backendStatus=n/a, domLoginCta=false, appAuthenticated=true)\nPrompt textarea ready (initial focus, 34 chars queued)\nModel picker: Pro\nPrompt textarea ready (after model switch, 34 chars queued)\n[browser] Thinking time: Pro (already selected)\nClicked send button\n[browser] conversation url (post-submit) = <redacted>\nWaiting for ChatGPT response\nCompletion controls surfaced; confirming stable assistant response\nRemote session complete • 17.2s total\n[browser] Model selection evidence: requested=Pro; resolved=Pro; status=switched; strategy=select; verified=yes.\nAnswer:\nORACLE_PR304_PRO_OK\n\n$ grep -c 'selection-unverified' <redacted-output.log>\n0\n```\n\n### Chinese exact effort selection (`heavy -> 极高`)\n\n```sh\nORACLE_HOME_DIR=<redacted> node ./dist/scripts/run-cli.js -- \\\n  --engine browser --model gpt-5.5 \\\n  --remote-chrome <redacted-host:port> --browser-tab <redacted-target-id> \\\n  --browser-thinking-time heavy --browser-archive never --verbose \\\n  --prompt 'Reply exactly ORACLE_PR304_ZH_HEAVY_OK.'\n```\n\n```text\nLogin check passed (sessionStatus=200, sessionAuthenticated=true, backendStatus=n/a, domLoginCta=false, appAuthenticated=true)\nPrompt textarea ready (initial focus, 39 chars queued)\nModel picker: 极速\nPrompt textarea ready (after model switch, 39 chars queued)\n[browser] Thinking time: 极高\nClicked send button\n[browser] conversation url (post-submit) = <redacted>\nWaiting for ChatGPT response\nCompletion controls surfaced; confirming stable assistant response\nRemote session complete • 32.1s total\n[browser] Model selection evidence: requested=Thinking 5.5; resolved=极速; status=already-selected; strategy=select; verified=yes.\nAnswer:\nORACLE_PR304_ZH_HEAVY_OK\n\n$ grep -c 'selection-unverified' <redacted-output.log>\n0\n```\n\nThe current profiles expose the unified picker. The legacy nested picker path is covered by the focused regression tests because that older live layout is no longer available on these profiles.\n",
+        "branch": "codex/gpt-5-6-unified-picker",
+        "head_sha": "19a57b158575599f8a4e2af4271a33f50bbf9e33",
+        "author": "dragonfsky",
         "labels": [
-          "agents",
-          "size: L",
+          "status: 📣 needs proof",
           "P1",
-          "rating: 🦐 gold shrimp",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "rating: 🦪 silver shellfish"
         ],
         "files": [
           {
-            "path": "packages/llm-core/src/types.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/anthropic-transport-stream.test.ts",
-            "additions": 44,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/anthropic-transport-stream.ts",
-            "additions": 30,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/usage.test.ts",
-            "additions": 38,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/usage.ts",
-            "additions": 36,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.test.ts",
-            "additions": 18,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.ts",
+            "path": "CHANGELOG.md",
             "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-            "additions": 135,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 4,
-            "deletions": 1,
+            "path": "src/browser/actions/thinkingTime.ts",
+            "additions": 70,
+            "deletions": 11,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/assistant-failover.test.ts",
-            "additions": 99,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/assistant-failover.ts",
-            "additions": 39,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/provider-transport-fetch.test.ts",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/provider-transport-fetch.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/agent-session.ts",
-            "additions": 16,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/transport-stream-shared.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/transport-stream-shared.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/utils/retry.auto-retry-delay.test.ts",
-            "additions": 104,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/llm/utils/retry.ts",
-            "additions": 50,
-            "deletions": 1,
+            "path": "tests/browser/thinkingTime.test.ts",
+            "additions": 347,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 18,
-        "additions": 760,
-        "deletions": 22,
+        "changedFiles": 3,
+        "additions": 419,
+        "deletions": 15,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104149",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104149.md",
+        "automerge_cluster_id": "automerge-steipete-oracle-304",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-oracle-304.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 102,
-          "gatingTotal": 97,
+          "total": 1,
+          "gatingTotal": 1,
           "counts": {
-            "SUCCESS": 68,
-            "SKIPPED": 33,
-            "NEUTRAL": 1
+            "SUCCESS": 1
           },
           "blockers": [],
           "pending": [],
@@ -247,25 +152,25 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T10:39:58.995Z"
+      "processed_at": "2026-07-11T10:40:05.302Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 7195,
+    "total_ms": 4514,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2348
+        "ms": 614
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2033
+        "ms": 1017
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -281,7 +186,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2787
+        "ms": 2818
       },
       {
         "name": "append_ledger",
