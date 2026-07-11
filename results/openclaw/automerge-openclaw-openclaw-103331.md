@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-103331"
 mode: "autonomous"
-run_id: "29143071396"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29143071396"
+run_id: "29143250986"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29143250986"
 head_sha: "a0a3b241af5c11b040d601b6fd117d2d451f9fbe"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-11T06:42:47.330Z"
+published_at: "2026-07-11T07:23:19.535Z"
 canonical: "#103331"
 canonical_issue: null
 canonical_pr: "#103331"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
-fix_blocked: 1
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29143071396](https://github.com/openclaw/clawsweeper/actions/runs/29143071396)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29143250986](https://github.com/openclaw/clawsweeper/actions/runs/29143250986)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -43,10 +43,10 @@ Make PR #103331 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,19 +54,13 @@ Make PR #103331 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | remote: This request was rate-limited due to too many requests. Reduce the frequency of your requests or try again later.
-remote: For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service).
-fatal: unable to access 'https://github.com/openclaw/openclaw.git/': The requested URL returned error: 429 |
-| execute_fix | blocked |  |  | remote: This request was rate-limited due to too many requests. Reduce the frequency of your requests or try again later.
-remote: For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service).
-fatal: unable to access 'https://github.com/openclaw/openclaw.git/': The requested URL returned error: 429 |
-| automerge_repair_outcome_comment | updated | #103331 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/103331 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #103331 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
