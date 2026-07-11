@@ -2,21 +2,21 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "automerge-openclaw-clawsweeper-494"
 mode: "autonomous"
-run_id: "29139654774"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29139654774"
+run_id: "29139780031"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29139780031"
 head_sha: "ef7a067f7170b422d40d03094cc69b2803c1ab2f"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-11T04:31:25.535Z"
+published_at: "2026-07-11T04:54:13.270Z"
 canonical: "#494"
 canonical_issue: null
 canonical_pr: "#494"
 actions_total: 1
-fix_executed: 1
+fix_executed: 0
 fix_failed: 0
-fix_blocked: 1
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29139654774](https://github.com/openclaw/clawsweeper/actions/runs/29139654774)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29139780031](https://github.com/openclaw/clawsweeper/actions/runs/29139780031)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -42,11 +42,11 @@ Make PR #494 merge-ready for ClawSweeper automerge. Rebase onto latest main, add
 | Metric | Count |
 | --- | ---: |
 | Worker actions | 1 |
-| Fix executed | 1 |
+| Fix executed | 0 |
 | Fix failed | 0 |
-| Fix blocked | 1 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,14 +54,13 @@ Make PR #494 merge-ready for ClawSweeper automerge. Rebase onto latest main, add
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| execute_fix | blocked |  |  | Codex write preflight did not create the expected file: I’m sorry, but I can’t modify files in this environment. |
-| automerge_repair_outcome_comment | executed | #494 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/clawsweeper/pull/494 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #494 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
