@@ -2,12 +2,12 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "automerge-openclaw-clawsweeper-495"
 mode: "autonomous"
-run_id: "29146982443"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29146982443"
+run_id: "29148354173"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29148354173"
 head_sha: "a0a3b241af5c11b040d601b6fd117d2d451f9fbe"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-11T09:11:46.578Z"
+published_at: "2026-07-11T10:03:05.198Z"
 canonical: "#495"
 canonical_issue: null
 canonical_pr: "#495"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29146982443](https://github.com/openclaw/clawsweeper/actions/runs/29146982443)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29148354173](https://github.com/openclaw/clawsweeper/actions/runs/29148354173)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -54,7 +54,7 @@ Make PR #495 merge-ready for ClawSweeper automerge. Rebase onto latest main, add
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | blocked | https://github.com/openclaw/clawsweeper/pull/495 |  | source PR #495 changed during the repair settle window; requeue against the latest head |
+| repair_contributor_branch | blocked | https://github.com/openclaw/clawsweeper/pull/495 |  | source PR #495 is closed after the repair settle window; refusing to push |
 | automerge_repair_outcome_comment | updated | #495 |  |  |
 
 ## Apply Actions
