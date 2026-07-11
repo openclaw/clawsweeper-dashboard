@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T18:22:15.452Z",
+  "generated_at": "2026-07-11T18:22:17.307Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T15:22:12.685Z",
+  "since": "2026-07-11T15:22:15.247Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    99122
+    104585
   ],
   "comment_ids": [
-    4948264295
+    4948264816
   ],
-  "status_comment_id": 4948264464,
+  "status_comment_id": 4948265001,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99122:4948264295:2026-07-11T18:20:46Z:re_review",
-      "comment_id": "4948264295",
-      "comment_version_key": "4948264295:2026-07-11T18:20:46Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99122#issuecomment-4948264295",
+      "idempotency_key": "comment-router:openclaw/openclaw:104585:4948264816:2026-07-11T18:20:55Z:re_review",
+      "comment_id": "4948264816",
+      "comment_version_key": "4948264816:2026-07-11T18:20:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/104585#issuecomment-4948264816",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 99122,
-      "author": "gorkem2020",
-      "author_id": 29964484,
+      "issue_number": 104585,
+      "author": "hugenshen",
+      "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T18:20:46Z",
-      "comment_updated_at": "2026-07-11T18:20:46Z",
-      "status_comment_id": 4948264464,
+      "comment_created_at": "2026-07-11T18:20:55Z",
+      "comment_updated_at": "2026-07-11T18:20:55Z",
+      "status_comment_id": 4948265001,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -78,199 +78,131 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 99122,
-          "dispatch_key": "router-3223cf0000d6e6a8",
-          "dispatched_at": "2026-07-11T18:22:16.416Z"
+          "item_number": 104585,
+          "dispatch_key": "router-54aebbe4eade6242",
+          "dispatched_at": "2026-07-11T18:22:17.905Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-11T18:22:17.567Z",
-          "response_comment_id": "4948264464",
+          "commented_at": "2026-07-11T18:22:18.744Z",
+          "response_comment_id": "4948265001",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: deleting a session leaves its trajectory artifacts orphaned on disk",
-        "body": "Closes [#89200](https://github.com/openclaw/openclaw/issues/89200)\n\n> This PR is AI-assisted: the analysis, patch, and tests were written with an AI coding agent. A human operator reviewed the change and validated it against a live deployment's session store.\n\n## What Problem This Solves\n\nSession trajectory artifacts (`.trajectory.jsonl` + `.trajectory-path.json`) were handled inconsistently, and destructively, across the session lifecycle:\n\n1. **Delete** (dashboard / `sessions.delete` RPC) archived the transcript but left the trajectory pair orphaned on disk forever (the original [#89200](https://github.com/openclaw/openclaw/issues/89200) defect).\n2. **Reset paths** either deleted the trajectory outright (destroying the forensic tool-call record, flagged as a P1 by the automated review on this PR) or left it at its live name to be misclassified later.\n3. The **typed `/new` and `/reset`** commands (and the implicit daily/idle rollover) went through a code path with no trajectory handling at all, so fixes applied to the other reset doors never reached the path users actually type.\n\n## What This Change Does\n\nOne consistent model: **trajectory artifacts shadow their transcript**. Whenever a session's transcript is archived with a `.reset.<ts>` or `.deleted.<ts>` suffix, the trajectory runtime file and pointer are renamed with the byte-identical suffix in the same operation (shared `nowMs`), never unlinked:\n\n- A `TrajectoryArtifactDisposal` union threads the disposal mode through the cleanup helpers: `{ mode: \"tombstone\", reason, nowMs }` for user-visible lifecycle events, with rename-in-place semantics under the same `withTrajectoryPathLock` retire turn.\n- All three lifecycle doors are coupled: `deleteSessionEntryLifecycle` (delete), `resetSessionEntryLifecycle` (dashboard New Session button), and the typed-command rollover path `initSessionState` → `commitReplySessionInitialization`, plus the internal self-heal path `persistSessionResetLifecycle`.\n- The referenced-sessions guard snapshot is taken **inside the locked store mutator** (`referencedSessionIdsAtSwap`), closing a race where an unlocked re-read after two await points could see a concurrent writer's row and silently skip the tombstone.\n- **External trajectory directories** (`OPENCLAW_TRAJECTORY_DIR`): the pair is tombstoned in place only under proven ownership (registry-owned, or the session's own pointer file names the target); unproven files in an operator-configured directory are left untouched. The retention sweep follows tombstone directories, so aging works there too.\n- **No new retention code.** Tombstoned trajectories reuse the existing `.reset.<ts>` / `.deleted.<ts>` suffix conventions and age out with the existing archived-transcript sweep.\n\n## Why rename instead of delete on reset\n\nNo merged commit or confirmed-maintainer comment currently states reset-vs-trajectory policy explicitly, but the record strongly and repeatedly converges on one answer: reset must preserve trajectory records via rename/archive, never delete them outright. This is proposed directly in [#90707](https://github.com/openclaw/openclaw/issues/90707) (with a concrete forensics-loss incident as motivation), implemented the same way in the still-open [#94593](https://github.com/openclaw/openclaw/pull/94593) (after two prior closed-unmerged attempts at the identical shape, [#93319](https://github.com/openclaw/openclaw/pull/93319) and [#94895](https://github.com/openclaw/openclaw/pull/94895)), echoed by the broader \"never `rm` a session file, only move/rename\" position in [#56609](https://github.com/openclaw/openclaw/issues/56609), and most directly, flagged as a P1 blocker on this very branch by the automated reviewer, which asked explicitly to \"preserve or archive pre-reset trajectories instead of deleting them.\" This PR's tombstone-rename on the runner-driven `/reset` path is our attempt to satisfy that converging intent without waiting on #94593 to land, since the two changes touch adjacent but distinct code paths (delete-lifecycle cleanup vs. the shared reset-archive helper) and reconciling them is better done as a maintainer-guided follow-up than by blocking this fix on an unrelated open PR.\n\n## Evidence\n\nTest gates on the final head: `session-accessor.test.ts` 73/73, `session.test.ts` 143/143, adjacent lifecycle suites 24/24 (240 total), typecheck (`tsgo:core` + `tsgo:core:test`) clean, oxlint/oxfmt clean. Every fix commit is red-proven: the concurrent-writer race test and the entry-level typed-`/reset` test (entering through `initSessionState`, not the inner function) each fail against the pre-fix code exactly as observed live and pass after.\n\nLive validation on a v2026.6.10 production deployment (session ids redacted):\n\n```\ntyped /reset:\n  <sid-A>.jsonl.reset.2026-07-11T16-45-15.346Z\n  <sid-A>.trajectory.jsonl.reset.2026-07-11T16-45-15.346Z\n  <sid-A>.trajectory-path.json.reset.2026-07-11T16-45-15.346Z\n\ndashboard delete: same trio shape with .deleted.<ts>, session key removed, clean re-mint on next message\n\ntyped /new with OPENCLAW_TRAJECTORY_DIR set (trajectory lives outside the sessions dir):\n  sessions dir:  <sid-B>.jsonl.reset.<ts>  +  <sid-B>.trajectory-path.json.reset.<ts>\n  external dir:  <sid-B>.jsonl.reset.<ts>   (renamed in place, same timestamp)\n```\n\n## Scope notes\n\n- `applySessionEntryLifecycleMutation` (the batched background-maintenance mutation used by the session reaper, cleanup service, and heartbeat runner) is deliberately not touched: its removed-session cleanup already routes through the trajectory-coupled maintenance helpers, and unreferenced pairs are reclaimed by the age-based prune, which is the correct model for background reaping (no user action to timestamp-couple to).\n- [#94593](https://github.com/openclaw/openclaw/pull/94593) partially overlaps on intent (reset-time preservation) but implements it in the shared reset-archive helper; this PR covers the delete lifecycle and the typed-command rollover door. If #94593 lands first we are happy to rebase and drop any overlap, and vice versa.\n\n## User Impact\n\nDeleting or resetting a session, from any surface, now leaves a complete archived trio with one shared timestamp instead of orphaned or destroyed trajectory files. Post-incident forensics of tool calls survives resets. Existing retention behavior and bounds are unchanged.\n",
-        "branch": "fix/session-delete-trajectory-orphan",
-        "head_sha": "f067be4506297a9779c810c526e7930c8f537db1",
-        "author": "gorkem2020",
+        "title": "fix(tlon): clear SSE connect timeout after failed openStream",
+        "body": "## What Problem This Solves\r\n\r\nFixes an issue where Tlon Urbit SSE `openStream` armed a 60s connect `setTimeout` and only cleared it after a successful `urbitFetch`. When the connect fetch rejected (DNS/SSRF/network) or returned non-OK, the timer stayed armed until it fired, and reconnect storms could stack dangling timers in the Gateway process.\r\n\r\n## Why This Change Was Made\r\n\r\nWrap the connect fetch in `try/finally` and always `clearTimeout`, matching the zalouser probe timeout cleanup pattern, so failed connects release the timer immediately without changing the connect deadline or stream lifecycle.\r\n\r\n## User Impact\r\n\r\nFlaky Urbit hosts no longer leave dangling connect timers in long-running Tlon monitors during reconnect failures.\r\n\r\n## Evidence\r\n\r\n### Unit regression (mocked fetch + fake timers)\r\n\r\n```bash\r\nnode scripts/run-vitest.mjs extensions/tlon/src/urbit/sse-client.test.ts --reporter=verbose\r\n```\r\n\r\n```text\r\n ✓ ... > openStream > clears the connect timeout when urbitFetch rejects 12ms\r\n ✓ ... > openStream > clears the connect timeout when the stream response is not ok 10ms\r\n Test Files  1 passed (1)\r\n      Tests  18 passed (18)\r\n```\r\n\r\n### Production-path connect-timeout storm proof\r\n\r\n```bash\r\nnode scripts/run-vitest.mjs extensions/tlon/src/urbit/sse-client.open-stream-timeout.proof.test.ts --reporter=verbose\r\n```\r\n\r\n```text\r\n ✓ ... > clears connect timers after a real non-OK stream response storm 305ms\r\n ✓ ... > clears the connect timer when production urbitFetch rejects 10ms\r\n Test Files  1 passed (1)\r\n      Tests  2 passed (2)\r\n```\r\n\r\nThe storm case runs production `openStream` → `urbitFetch` → `fetchWithSsrFGuard` against a real loopback `node:http` server that returns `503` five times; real timers; each armed `setTimeout(..., 60000)` is cleared. The reject case uses a closed loopback port (`127.0.0.1:9`) so the production transport fails before headers.\r\n\r\n## Real behavior proof\r\n\r\n- **Behavior or issue addressed:** Failed SSE connect attempts no longer leave uncleared 60s AbortController timers, including under repeated failure.\r\n- **Canonical reachability path:** Tlon monitor reconnect → `UrbitSSEClient.openStream` → production `urbitFetch` / `fetchWithSsrFGuard` → reject or non-OK → `finally { clearTimeout(timeoutId) }`.\r\n- **Boundary crossed:** local-runtime HTTP; loopback `node:http` + closed-port TCP failure; production SSRF-guarded transport (no `urbitFetch` mock, no fake timers).\r\n- **Shared helper / provider constraint check:** Same `try/finally { clearTimeout }` pattern as `extensions/zalouser/src/probe.ts`; no new config/API.\r\n- **Real environment tested:** macOS, Node via `node scripts/run-vitest.mjs` with real HTTP listeners and real timers.\r\n- **Exact steps or command run after this patch:** `node scripts/run-vitest.mjs extensions/tlon/src/urbit/sse-client.open-stream-timeout.proof.test.ts extensions/tlon/src/urbit/sse-client.test.ts --reporter=verbose`\r\n- **Evidence after fix:**\r\n\r\n```text\r\n ✓ |extension-messaging| ... > clears the connect timeout when urbitFetch rejects 12ms\r\n ✓ |extension-messaging| ... > clears the connect timeout when the stream response is not ok 10ms\r\n ✓ |extension-messaging| ... > clears connect timers after a real non-OK stream response storm 305ms\r\n ✓ |extension-messaging| ... > clears the connect timer when production urbitFetch rejects 10ms\r\n Test Files  2 passed (2)\r\n      Tests  20 passed (20)\r\n[test] passed 1 Vitest shard in 7.90s\r\n```\r\n\r\n- **Observed result after fix:** Five sequential non-OK connects each arm then clear a 60s connect timer with matching `clearTimeout(handle)`; a real transport reject also clears its single connect timer.\r\n- **What was not tested:** Live Urbit ship reconnect storm against a real Tlon host; SSE stream body processing after a successful connect.\r\n- **Fix classification:** Root cause fix.\r\n\r\n## Risk / Compatibility\r\n\r\nLow. Successful connects still clear the timer after headers; only failed connects gain the missing cleanup.\r\n",
+        "branch": "fix/tlon-sse-connect-timeout-cleanup",
+        "head_sha": "a6f2fb75a85016f1955818e8792d888ffcc94efc",
+        "author": "hugenshen",
         "labels": [
-          "gateway",
-          "agents",
-          "size: XL",
+          "channel: tlon",
+          "size: M",
           "P2",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.test.ts",
-            "additions": 193,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.ts",
-            "additions": 123,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store-maintenance-operations.ts",
-            "additions": 27,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.pruning.test.ts",
-            "additions": 45,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.session-lifecycle-mutation.test.ts",
-            "additions": 254,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.ts",
-            "additions": 72,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.archive-cleanup.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 20,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/cleanup.test.ts",
-            "additions": 448,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/cleanup.ts",
-            "additions": 213,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/runtime.test.ts",
-            "additions": 343,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/runtime.ts",
-            "additions": 44,
-            "deletions": 27,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/writer-lifecycle.ts",
-            "additions": 261,
+            "path": "extensions/tlon/src/urbit/sse-client.open-stream-timeout.proof.test.ts",
+            "additions": 106,
             "deletions": 0,
             "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/tlon/src/urbit/sse-client.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/tlon/src/urbit/sse-client.ts",
+            "additions": 35,
+            "deletions": 32,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 17,
-        "additions": 2183,
-        "deletions": 107,
+        "changedFiles": 3,
+        "additions": 180,
+        "deletions": 32,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99122",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99122.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-104585",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104585.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
-        "review_decision": "CHANGES_REQUESTED",
+        "review_decision": "",
         "checks": {
-          "total": 102,
-          "gatingTotal": 97,
+          "total": 95,
+          "gatingTotal": 90,
           "counts": {
-            "SUCCESS": 53,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 17,
+            "SUCCESS": 35,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 26,
             "NEUTRAL": 1
           },
           "blockers": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
             "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
             "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -278,21 +210,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T18:22:15.742Z"
+      "processed_at": "2026-07-11T18:22:17.480Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5519,
+    "total_ms": 3926,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 790
+        "ms": 571
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1960
+        "ms": 1468
       },
       {
         "name": "classify_comment_commands",
@@ -312,11 +244,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2741
+        "ms": 1855
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
