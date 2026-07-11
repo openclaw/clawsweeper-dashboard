@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T22:02:51.447Z",
+  "generated_at": "2026-07-11T22:03:53.247Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T19:02:49.542Z",
+  "since": "2026-07-11T19:03:50.858Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99122:4948908298:2026-07-11T21:59:52Z:re_review",
-      "comment_id": "4948908298",
-      "comment_version_key": "4948908298:2026-07-11T21:59:52Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99122#issuecomment-4948908298",
+      "idempotency_key": "comment-router:openclaw/openclaw:103390:4948910987:2026-07-11T22:00:47Z:re_review",
+      "comment_id": "4948910987",
+      "comment_version_key": "4948910987:2026-07-11T22:00:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103390#issuecomment-4948910987",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99122,
-      "author": "gorkem2020",
-      "author_id": 29964484,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T21:59:52Z",
-      "comment_updated_at": "2026-07-11T21:59:52Z",
+      "issue_number": 103390,
+      "author": "ss251",
+      "author_id": 32437884,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-11T22:00:47Z",
+      "comment_updated_at": "2026-07-11T22:00:47Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -75,178 +75,201 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix: deleting a session leaves its trajectory artifacts orphaned on disk",
-        "body": "Closes [#89200](https://github.com/openclaw/openclaw/issues/89200)\n\n> This PR is AI-assisted: the analysis, patch, and tests were written with an AI coding agent. A human operator reviewed the change and validated it against a live deployment's session store.\n\n## What Problem This Solves\n\nSession trajectory artifacts (`.trajectory.jsonl` + `.trajectory-path.json`) were handled inconsistently, and destructively, across the session lifecycle:\n\n1. **Delete** (dashboard / `sessions.delete` RPC) archived the transcript but left the trajectory pair orphaned on disk forever (the original [#89200](https://github.com/openclaw/openclaw/issues/89200) defect).\n2. **Reset paths** either deleted the trajectory outright (destroying the forensic tool-call record, flagged as a P1 by the automated review on this PR) or left it at its live name to be misclassified later.\n3. The **typed `/new` and `/reset`** commands (and the implicit daily/idle rollover) went through a code path with no trajectory handling at all, so fixes applied to the other reset doors never reached the path users actually type.\n\n## What This Change Does\n\nOne consistent model: **trajectory artifacts shadow their transcript**. Whenever a session's transcript is archived with a `.reset.<ts>` or `.deleted.<ts>` suffix, the trajectory runtime file and pointer are renamed with the byte-identical suffix in the same operation (shared `nowMs`), never unlinked:\n\n- A `TrajectoryArtifactDisposal` union threads the disposal mode through the cleanup helpers: `{ mode: \"tombstone\", reason, nowMs }` for user-visible lifecycle events, with rename-in-place semantics under the same `withTrajectoryPathLock` retire turn.\n- All three lifecycle doors are coupled: `deleteSessionEntryLifecycle` (delete), `resetSessionEntryLifecycle` (dashboard New Session button), and the typed-command rollover path `initSessionState` → `commitReplySessionInitialization`, plus the internal self-heal path `persistSessionResetLifecycle`.\n- The referenced-sessions guard snapshot is taken **inside the locked store mutator** (`referencedSessionIdsAtSwap`), closing a race where an unlocked re-read after two await points could see a concurrent writer's row and silently skip the tombstone.\n- **External trajectory directories** (`OPENCLAW_TRAJECTORY_DIR`): the pair is tombstoned in place only under proven ownership (registry-owned, or the session's own pointer file names the target); unproven files in an operator-configured directory are left untouched. The retention sweep follows tombstone directories, so aging works there too.\n- **No new retention code.** Tombstoned trajectories reuse the existing `.reset.<ts>` / `.deleted.<ts>` suffix conventions and age out with the existing archived-transcript sweep.\n\n## Why rename instead of delete on reset\n\nNo merged commit or confirmed-maintainer comment currently states reset-vs-trajectory policy explicitly, but the record strongly and repeatedly converges on one answer: reset must preserve trajectory records via rename/archive, never delete them outright. This is proposed directly in [#90707](https://github.com/openclaw/openclaw/issues/90707) (with a concrete forensics-loss incident as motivation), implemented the same way in the still-open [#94593](https://github.com/openclaw/openclaw/pull/94593) (after two prior closed-unmerged attempts at the identical shape, [#93319](https://github.com/openclaw/openclaw/pull/93319) and [#94895](https://github.com/openclaw/openclaw/pull/94895)), echoed by the broader \"never `rm` a session file, only move/rename\" position in [#56609](https://github.com/openclaw/openclaw/issues/56609), and most directly, flagged as a P1 blocker on this very branch by the automated reviewer, which asked explicitly to \"preserve or archive pre-reset trajectories instead of deleting them.\" This PR's tombstone-rename on the runner-driven `/reset` path is our attempt to satisfy that converging intent without waiting on #94593 to land, since the two changes touch adjacent but distinct code paths (delete-lifecycle cleanup vs. the shared reset-archive helper) and reconciling them is better done as a maintainer-guided follow-up than by blocking this fix on an unrelated open PR.\n\n## Evidence\n\nTest gates on the final head: trajectory cleanup 13/13 (including the runtime-rename-failure regression and both retired-claim rejection regressions), gateway archive-cleanup 27/27 (external-dir ownership guard), session-accessor + store.pruning 108, session 143/143, typecheck (`tsgo:core` + `tsgo:core:test`), oxlint/oxfmt, all green. Every fix commit is red-proven against its pre-fix code.\n\n## Exact-head live behavior proof\n\n- **Head:** `cf2e5359e4026710ac36e83eb14ac0195af57213` (branch `fix/session-delete-trajectory-orphan`), confirmed both via `git rev-parse HEAD` and the built CLI's own `openclaw --version` output (`OpenClaw 2026.7.2 (cf2e535)`). This head adds two commits atop the previously-proven `992958805d336da12b6b1e5535fbc2192c148983`: `eeec4f5c55d` (\"fix(trajectory): reject same-owner claims on a retired path instead of disambiguating\") and `cf2e5359e40` (\"test(trajectory): cover retired-path late-claim rejection\") — writer-lifecycle/runtime tightening only; the reset/delete lifecycle behavior proven below is unchanged.\n- **Build:** `pnpm install --frozen-lockfile` (already current) + `pnpm build` (`scripts/build-all.mjs`, ~266s, all phases green).\n- **Environment:** isolated scratch state dir (`OPENCLAW_STATE_DIR=~/oc-proof-home/.openclaw`, `HOME=~/oc-proof-home`), gateway built from this head, running on loopback port `28789` (never the live fleet's `18789`). Re-onboarded non-interactively (the prior scratch home had aged out of `/tmp` between runs) with the model provider `baseUrl` pointed at a dead local port (`http://127.0.0.1:1/v1`) so every model call fails fast on connection refusal — irrelevant to the proof, since session lifecycle (rollover/delete tombstoning) happens at inbound dispatch before any model reply.\n\n**Inbound surface note (unchanged from prior runs):** the real inbound door for `chat.send` is the same RPC the webchat/dashboard client uses. The built-in `openclaw gateway call` CLI tool auto-resolves *least-privilege* scopes per method, which for `chat.send` does not include `operator.admin` — so a plain `gateway call chat.send \"/reset\"` gets silently accepted into history as **plain text**, never triggering the reset door. This is deliberate authorization behavior (`isResetAuthorizedForContext`), not a bug. To reproduce the trusted dashboard/operator path faithfully, `chat.send`/`sessions.delete` were called via `callGateway(...)` with an explicit `scopes: [\"operator.admin\"]`, matching what an authenticated control-ui session is granted.\n\n---\n\n### Scenario A — typed `/reset` (rollover door)\n\nInbound surface: `chat.send` RPC (admin-scoped), literal text `/reset` sent as a normal chat message (not the `sessions.reset` RPC directly).\n\n**Before** (`agents/main/sessions/`):\n```\n-rw-rw-r-- 1 user user  1641 Jul 12 00:54 bd7bdcfe-86cb-…-7e45.jsonl\n-rw------- 1 user user 77777 Jul 12 00:54 bd7bdcfe-86cb-…-7e45.trajectory.jsonl\n-rw------- 1 user user   252 Jul 12 00:54 bd7bdcfe-86cb-…-7e45.trajectory-path.json\n```\n\n**After** `/reset`:\n```\n-rw-rw-r-- 1 user user  1641 Jul 12 00:54 bd7bdcfe-86cb-…-7e45.jsonl.reset.2026-07-11T21-54-53.103Z\n-rw------- 1 user user 77777 Jul 12 00:54 bd7bdcfe-86cb-…-7e45.trajectory.jsonl.reset.2026-07-11T21-54-53.103Z\n-rw------- 1 user user   252 Jul 12 00:54 bd7bdcfe-86cb-…-7e45.trajectory-path.json.reset.2026-07-11T21-54-53.103Z\n-rw------- 1 user user   976 Jul 12 00:54 8394dfd1-8d1a-…-e8cf.jsonl   ← fresh session\n```\nAll three tombstoned with the **identical** `.reset.2026-07-11T21-54-53.103Z` suffix; fresh session created. **PASS.**\n\n---\n\n### Scenario B — deletion (delete door)\n\nInbound surface: `sessions.delete` RPC (admin-scoped) — the same RPC the dashboard's delete action calls — on a freshly seeded non-main session `proof-b3`.\n\n**Before:**\n```\n-rw-rw-r-- 1 user user  1383 Jul 12 00:55 7d7afdd1-e5a8-…-8b016.jsonl\n-rw------- 1 user user 77611 Jul 12 00:55 7d7afdd1-e5a8-…-8b016.trajectory.jsonl\n-rw------- 1 user user   252 Jul 12 00:55 7d7afdd1-e5a8-…-8b016.trajectory-path.json\n```\n\n**After** `sessions.delete({key:\"proof-b3\"})` → `{\"ok\":true,\"deleted\":true}`:\n```\n-rw-rw-r-- 1 user user  1383 Jul 12 00:55 7d7afdd1-e5a8-…-8b016.jsonl.deleted.2026-07-11T21-55-33.255Z\n-rw------- 1 user user 77611 Jul 12 00:55 7d7afdd1-e5a8-…-8b016.trajectory.jsonl.deleted.2026-07-11T21-55-33.255Z\n-rw------- 1 user user   252 Jul 12 00:55 7d7afdd1-e5a8-…-8b016.trajectory-path.json.deleted.2026-07-11T21-55-33.255Z\n```\nRegistry key `agent:main:proof-b3` absent from `sessions.json` after delete. All three tombstoned with the identical `.deleted.<timestamp>` suffix — no orphaned trajectory. **PASS.**\n\n---\n\n### Scenario C — configured external trajectory directory\n\nGateway restarted with `OPENCLAW_TRAJECTORY_DIR=~/oc-proof-trajectories` (a second scratch dir, separate from the sessions dir). Seeded session `proof-c3`, confirmed placement, then sent `/reset` (admin-scoped `chat.send`).\n\n**Seed placement** — sessions dir holds only the session file + pointer (no local `.trajectory.jsonl`); the trajectory itself lives in the external dir, and the pointer references it:\n```\nagents/main/sessions/b883e5e3-52e8-…-8e66f.jsonl\nagents/main/sessions/b883e5e3-52e8-…-8e66f.trajectory-path.json  → runtimeFile: \"~/oc-proof-trajectories/b883e5e3-52e8-…-8e66f.jsonl\"\noc-proof-trajectories/b883e5e3-52e8-…-8e66f.jsonl\n```\n\n**Before `/reset`:**\n```\nsessions/:              b883e5e3-….jsonl, b883e5e3-….trajectory-path.json\noc-proof-trajectories/: b883e5e3-….jsonl\n```\n\n**After `/reset`:**\n```\nsessions/:              b883e5e3-….jsonl.reset.2026-07-11T21-56-43.689Z\n                         b883e5e3-….trajectory-path.json.reset.2026-07-11T21-56-43.689Z\noc-proof-trajectories/:  b883e5e3-….jsonl.reset.2026-07-11T21-56-43.689Z\n```\nSession + pointer tombstoned in the sessions dir, and the trajectory renamed **in place** inside the external directory — all three sharing the identical `.reset.2026-07-11T21-56-43.689Z` timestamp. No orphaned file left behind in either directory. **PASS.**\n\n---\n\n### Failure-path proof (deterministic regressions at this head)\n\nBoth suites re-run at head `cf2e535`, verbose reporter, on the built/checked-out worktree (no scratch gateway involved). `cleanup.test.ts` grew from 12 to 13 tests: the two race tests that previously asserted same-owner-retired *disambiguation* were reworked to assert outright *rejection* instead.\n\n**1. Runtime-rename failure is retryable, not data-losing, and retired-path late-claims are rejected** — `src/trajectory/cleanup.test.ts`:\n```\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/trajectory/cleanup.test.ts --reporter=verbose\n\n ✓ |unit-fast| src/trajectory/cleanup.test.ts > trajectory cleanup > commits the runtime archive even when the pointer archive fails best-effort 4ms\n ✓ |unit-fast| src/trajectory/cleanup.test.ts > trajectory cleanup > leaves the trajectory pair fully live when the runtime archive fails, then disposes on retry 5ms\n ✓ |unit-fast| src/trajectory/cleanup.test.ts > trajectory cleanup > retires the canonical path before archiving the runtime file 2ms\n ✓ |unit-fast| src/trajectory/cleanup.test.ts > trajectory cleanup > does not admit a writer claim while a delete's archive-rename is still in flight 5ms\n ✓ |unit-fast| src/trajectory/cleanup.test.ts > trajectory cleanup > rejects a queued same-owner re-acquisition after a racing delete retires the path 4ms\n ✓ |unit-fast| src/trajectory/cleanup.test.ts > trajectory cleanup > disables a straggler recorder acquiring its own path after the session was deleted 3ms\n\n Test Files  1 passed (1)\n      Tests  13 passed (13)\n```\nProves two things: (1) when the runtime-file rename (the actual disposal commit point) fails, the session+pointer pair is left **fully live** rather than half-tombstoned — no orphan from a partial failure — and a retry disposes it once the failure clears; (2) a same-owner claim that races a delete onto an already-retired path is now **rejected outright** (lease resolves `status: \"retired\"`, recorder `null`, no fresh pointer/runtime file minted) instead of the old behavior of disambiguating into a second file — closing the exact race the retired-path guard targets.\n\n**2. External-dir ownership guard: ownership proven before reaping** — `src/gateway/session-transcript-files.fs.archive-cleanup.test.ts` (unchanged from the prior head; re-run for completeness):\n```\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.config.ts src/gateway/session-transcript-files.fs.archive-cleanup.test.ts --reporter=verbose\n\n ✓ |gateway-core| ... external-directory ownership guard > in an external dir, reaps a genuine aged trajectory tombstone but keeps a foreign suffix look-alike 5ms\n ✓ |gateway-core| ... external-directory ownership guard > keeps a foreign pointer-shaped tombstone with invalid JSON in an external dir 2ms\n ✓ |gateway-core| ... external-directory ownership guard > still ages in-store-dir tombstones by suffix alone, with no header requirement 2ms\n ✓ |gateway-core| ... external-directory ownership guard > keeps an oversized/garbage external tombstone using only a bounded prefix read 3ms\n (same 4 cases repeat green under the gateway-server and gateway-client projects)\n\n Test Files  3 passed (3)\n      Tests  27 passed (27)\n```\nProves: the retention sweep only reaps a tombstone in an externally-configured trajectory directory when it can prove ownership (a genuine, aged, well-formed pointer-shaped header) — a same-suffix file dropped there by something else survives untouched, while in-store-dir tombstones keep the cheaper suffix-only aging rule since there's no cross-owner ambiguity there.\n\n---\n\n### Isolation proof\n\n- Live gateway `ActiveEnterTimestamp` unchanged across the whole window: `Sat 2026-07-11 20:26:28 +03` (captured before and after this refresh run too).\n- Live gateway still solely bound to `127.0.0.1:18789` / `[::1]:18789`; scratch gateway only ever bound `28789`, confirmed freed after teardown.\n- Scratch gateway PID confirmed gone after `kill`; scratch dirs (`~/oc-proof-home`, `~/oc-proof-trajectories`) left on disk for inspection, nothing else touched or removed.\n\n## Scope notes\n\n- `applySessionEntryLifecycleMutation` (the batched background-maintenance mutation used by the session reaper, cleanup service, and heartbeat runner) is deliberately not touched: its removed-session cleanup already routes through the trajectory-coupled maintenance helpers, and unreferenced pairs are reclaimed by the age-based prune, which is the correct model for background reaping (no user action to timestamp-couple to).\n- [#94593](https://github.com/openclaw/openclaw/pull/94593) partially overlaps on intent (reset-time preservation) but implements it in the shared reset-archive helper; this PR covers the delete lifecycle and the typed-command rollover door. If #94593 lands first we are happy to rebase and drop any overlap, and vice versa.\n\n## User Impact\n\nDeleting or resetting a session, from any surface, now leaves a complete archived trio with one shared timestamp instead of orphaned or destroyed trajectory files. Post-incident forensics of tool calls survives resets. Existing retention behavior and bounds are unchanged.\n",
-        "branch": "fix/session-delete-trajectory-orphan",
-        "head_sha": "cf2e5359e4026710ac36e83eb14ac0195af57213",
-        "author": "gorkem2020",
+        "title": "fix(agents): adopt orphaned managed worktrees left by a crash between git worktree add and registry insert",
+        "body": "## What Problem This Solves\n\nA gateway crash (OOM kill, forced restart) landing between `git worktree add` and the registry insert inside `ManagedWorktreeService.create()` leaves an on-disk worktree and an `openclaw/<name>` branch that no managed API can ever see, repair, or remove: `list()`/`get()` never show it, every `gc()` pass skips it forever, and any later `create()` with the same name fails hard with `branch already exists`. The only way out today is manual operator surgery (`git worktree remove` + `git branch -D`) outside the managed API. Reported with source-level analysis in #103239; this PR makes the orphan self-heal (gc adopts it; a retried create adopts it and preserves the caller's owner) while leaving foreign/detached worktrees untouched.\n\n## Summary\n\n- Problem: A crash between `git worktree add` and `insertRegistryWorktree()` inside `ManagedWorktreeService.create()` leaves a live git worktree + `openclaw/<name>` branch with no registry row. `reconcileOrphans()` explicitly skips it forever (invisible to `list()`/`gc()`), and a retried `create()` with the same name dead-ends on `branch already exists`.\n- Why it matters: In real deployments (OOM kill, forced restart) the orphan is permanently unrecoverable through the managed API — only manual `git worktree remove` + `git branch -D` unblocks the name.\n- What changed: recovery happens through the retried `create()` path only. `create()`'s branch-exists guard self-heals the exact crashed-create signature (live worktree at the derived path on exactly `refs/heads/openclaw/<name>`, no registry row) instead of dead-ending: it atomically claims the path in the registry (`insertRegistryWorktreeIfPathFree()`, a single Kysely `INSERT ... SELECT ... WHERE NOT EXISTS (live row at path)` — no schema change), then re-provisions (`copyIncludedFiles()` + `runSetupScript()`), preserving the caller's `ownerKind`/`ownerId` and recording the real resolved base. Only the claim holder may provision or destroy the path: a losing adopter provably touches nothing, and a holder whose re-provisioning fails removes the worktree and deletes its own row. The registry carries a persisted readiness contract: `readiness ('provisioning'|'ready')` (closed union; additive `ensureColumn` migration per repo precedent — backfill-as-ready is provably safe because no release tag contains the worktrees feature, and unreleased-main builds inserted rows only post-provisioning). The claim inserts `provisioning`; a single UPDATE flips to `ready` only after copy+setup succeed. Every usable-record path is gated on ready (`findLiveByOwner` filters in SQL; the entry shortcut and claim-loser throw a closed `WorktreeProvisioningError`; `restore()` revives as ready; provisioning rows are leases with heartbeats (`lastActiveAt` bumped at claim, post-copy, and at the ready flip): gc reaps only leases SILENT past `PROVISIONING_STALE_MS` — a persisted holder-liveness signal, so claim age alone can never kill a live-but-slow holder — restoring background recovery for auto-named orphans, while a reaped-mid-flight create fails closed with `WorktreeProvisioningReapedError`; a provisioning row whose directory vanished is hard-deleted (branch + row; no snapshot, no user work) so the name stays genuinely retriable). The gateway protocol's `WorktreeRecordSchema` gains an additive optional `readiness` enum (no version bump). Normal (non-adopting) `create()` uses the identical claim-early ordering (claim immediately after `git worktree add`; both paths share one claim → provision-as-holder → holder-only-cleanup helper), establishing the invariant that an in-flight create always holds a live row — so the no-row+live-worktree signature genuinely means a crashed create, and an in-flight worktree can never be adopted, re-provisioned, or destroyed by a concurrent same-name call. Every new live registry row is uniqueness-enforced through the one claim. `reconcileOrphans()`/gc remains preserve-only (upstream behavior) — background adoption is deliberately not shipped (see Risks). `git.ts` additively parses the porcelain `branch` field for the adoption signature check.\n- What did NOT change (scope boundary): gc keeps upstream's preserve-only behavior for foreign/detached and live git-listed worktrees (only dead debris and stale provisioning rows are cleaned); no protocol version bump; no changes to snapshot semantics; web UI status label deliberately unchanged (would pull in i18n regeneration disproportionate to this PR).\n\nThis is AI-assisted work (Claude conductor + Claude worker/verifier agents, human-operated); every change was gated on tests written first and independently reviewed by a fresh-context model before submission.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #103239\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Root Cause (if applicable)\n\n- Root cause: `create()` performs the irreversible git-side effects (`git worktree add`, branch creation) before the registry insert, with no crash-window reconciliation: `reconcileOrphans()` treated \"git still lists this directory as a live worktree\" purely as a preserve signal and never checked whether the worktree matches the managed naming scheme but lacks a registry row.\n- Missing detection / guardrail: no adopt-or-repair path for the crashed-create signature; `create()`'s branch-exists guard had no way to distinguish \"user's foreign branch\" from \"our own crashed create()\".\n- Contributing context (if known): the registry has no `name` column (name derives from the path's last segment), so adoption needs no extra bookkeeping — the orphan is fully re-derivable from path + branch.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [ ] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/agents/worktrees/service.test.ts`\n- Scenario the test should lock in: a live worktree + managed branch with no registry row (the exact end-state of a crash between `git worktree add` and the registry insert) is adopted by a retried `create()` with the same name — preserving the caller's `ownerKind`/`ownerId`, re-running provisioning (include files + setup script restored, real `baseRef` recorded), and holding the loser-touches-nothing / holder-only-destruction invariants under deterministic interleavings; gc during an in-flight normal `create()` adopts nothing and exactly one live row remains; a parked in-flight create cannot be adopted, re-provisioned, or destroyed by a concurrent same-name retry (same-owner and foreign-owner both covered, setup executes exactly once); a failing setup leaves no worktree, branch, or registry row.\n- Why this is the smallest reliable guardrail: the tests use the real `git` binary and real SQLite registry (the file's established pattern — no mocks), produce the crash end-state via production code (`create()` then deleting only the registry row), and assert through the public service API only.\n- Existing test that already covers this (if any): \"deletes unregistered orphan debris but preserves git-listed worktrees\" covers the foreign/detached case and stays green, locking in that non-managed worktrees are never claimed.\n- If no new test is added, why not: N/A — two new tests added.\n\n## User-visible / Behavior Changes\n\n- A retried `create()` with the same name after a crashed create now succeeds (adopts, re-provisions, returns the record) instead of failing with `branch already exists`.\n- gc behavior is unchanged from upstream (preserve-only for live worktrees); foreign or detached-HEAD worktrees are unaffected.\n- Concurrent same-path registrations can no longer produce duplicate live registry rows (atomic claim; loser gets the existing \"name already in use\" semantics).\n- `list()` now shows a worktree from claim-time (during provisioning) rather than after setup completes; failed creates still end with no registry row.\n\n## Diagram (if applicable)\n\n```text\nBefore:\ncreate() crash after `git worktree add` -> live worktree + branch, no registry row\n  -> create(same name): \"branch already exists\" (dead end; manual git surgery required)\n\nAfter:\ncreate() crash after `git worktree add` -> live worktree + branch, no registry row\n  -> create(same name): exact orphan signature -> atomic path claim -> re-provision\n     (owner + real base preserved) -> returns record\n  -> claim loser (concurrent registration won): touches nothing; standard in-use semantics\n  -> gc: preserve-only (unchanged upstream behavior)\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`No`)\n- Secrets/tokens handling changed? (`No`)\n- New/changed network calls? (`No`)\n- Command/tool execution surface changed? (`No`)\n- Data access scope changed? (`No`)\n- If any `Yes`, explain risk + mitigation: N/A. Adoption is gated on an exact `git worktree list --porcelain` path + `refs/heads/openclaw/<name>` branch match; fabricating that state requires local filesystem/git access equivalent to what `create()` already requires. `insertRegistryWorktree` is the same call path `create()` already uses.\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS 26 (arm64); fix is platform-independent (pure git + SQLite service logic)\n- Runtime/container: Node 22 / bun, source checkout\n- Model/provider: N/A\n- Integration/channel (if any): N/A\n- Relevant config (redacted): default `OPENCLAW_STATE_DIR`-backed state\n\n### Steps\n\n1. `ManagedWorktreeService.create({ repoRoot, name: \"task-1\" })` and kill the process after `git worktree add` completes but before the registry insert (repro: create normally, then delete only the registry row — identical end state).\n2. Run `service.create({ repoRoot, name: \"task-1\" })` again.\n\n### Expected\n\n- retried create succeeds (adopts, re-provisions, returns the record); gc preserves the orphan untouched.\n\n### Actual\n\n- Before this PR: gc skips it forever; retried create throws `branch already exists: openclaw/task-1`. After this PR: expected behavior (see tests).\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nBefore (tests added, fix stashed):\n\n```\n❯ |agents| src/agents/worktrees/service.test.ts (24 tests | 2 failed)\nFAIL … adopts a worktree orphaned when create() crashed …, during gc()\n  AssertionError: expected undefined to match object {…}\nFAIL … adopts an orphaned worktree instead of throwing on a retried create() …\n  Error: branch already exists: openclaw/orphan-retry\n```\n\nAfter:\n\n```\npnpm test src/agents/worktrees/service.test.ts src/agents/worktrees/registry.test.ts\n Test Files  2 passed (2)\n      Tests  41 passed (41) agents shard + 23 passed state shard\n```\n\nReal-behavior proof on the FROZEN FINAL head e5b7677497 (all four requested scenarios — active holder survives gc, SIGKILLed holder reaped after lease expiry and recreated fully provisioned, missing-path claim cleaned to a retriable name, pre-column DB backfills ready): https://github.com/openclaw/openclaw/pull/103390#issuecomment-4947439791. Earlier ordering-specific transcript: https://github.com/openclaw/openclaw/pull/103390#issuecomment-4944938951 — Window B is a genuine mid-provisioning SIGKILL (exit 137) showing the crash state is observable (claim-time row, missing setup marker), gc preserves it, and the operator recovery path works end-to-end (remove() cleans worktree+branch, fresh create fully provisions); Window A (add→claim, no user code) is a labeled constructed end-state recovered by retried-create adoption with full re-provisioning. Supersedes the earlier transcript (#issuecomment-4937129438), which demonstrated the pre-claim-early ordering.\n\nAlso green on the touched surface: `pnpm tsgo:core` (exit 0), `oxlint` (0 findings), `oxfmt --check` (formatted). Note: repo-wide `pnpm check` currently fails in its preflight `npm shrinkwrap guard` on an unmodified `origin/main` checkout in this environment (`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` for the `defu` override) — pre-existing and unrelated; no lockfile/override files are touched by this PR.\n\nThe previously-acknowledged gc-vs-create double-insert race is now eliminated by the atomic path claim (deterministic interleaving tests cover both directions, with a pasted negative control showing the pre-claim code produces the duplicate row). Remaining narrow edge deliberately out of scope: a lingering *removed* registry row at the same path still blocks create()-side adoption for a fresh orphan (name-reuse-after-remove + crash sequence).\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: full scoped test suite (25/25) against real git + real SQLite locally, including both new adoption tests and the pre-existing foreign-worktree preservation test; typecheck/lint/format on the touched files.\n- Edge cases checked: detached-HEAD foreign worktree (preserved), bare branch collision without a live worktree (still throws), owner preservation (`workboard`/`ownerId`) on retried-create adoption including `findLiveByOwner()` lookup, crash-before-setup retry re-provisioning (include file + setup marker restored, real base recorded), and full cleanup on a failing setup script during adoption-retry.\n- What you did **not** verify: a literal `kill -9` mid-`create()` on a production gateway (the crash end-state is reproduced through the service's own code paths instead); the two out-of-scope narrow edges above.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes`)\n- Config/env changes? (`No`)\n- Migration needed? (`No`)\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: schema/migration surface (new `readiness` column).\n  - Mitigation: additive `ensureColumn` per the repo's established migration pattern; backfill default provably correct (see body); legacy-DB backfill test included; fresh-vs-migrated CHECK divergence is unobservable to prod writes (closed TS union at every write site).\n- Risk: adopting a worktree that a user intentionally created outside the managed API at the exact managed path on an `openclaw/<name>` branch.\n  - Mitigation: that state is indistinguishable from (and equivalent to) a crashed managed create; adoption only registers it — it never deletes or modifies the worktree.\n- Risk: concurrent adoption attempts (gc vs retried create) racing for one path.\n  - Mitigation: eliminated — adoption is a single-statement atomic path claim with explicit loser handling; losers never provision, mutate, or destroy; covered by deterministic interleaving tests in both directions.\n\n",
+        "branch": "fix/103239-worktree-orphan-reconcile",
+        "head_sha": "32962ff3ae1ca4cfb1c1fc223a8894ec769d849e",
+        "author": "ss251",
         "labels": [
+          "app: web-ui",
           "gateway",
+          "cli",
           "agents",
-          "size: XL",
+          "size: L",
+          "proof: sufficient",
           "P2",
           "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 2,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/agent-command.ts",
+            "path": "packages/gateway-protocol/src/schema/worktrees.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/git.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/registry.test.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/registry.ts",
+            "additions": 83,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/service.test.ts",
+            "additions": 449,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/service.ts",
+            "additions": 240,
+            "deletions": 41,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/types.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/worktrees-cli.ts",
             "additions": 6,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 96,
+            "path": "src/gateway/server-methods/worktrees.test.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/session-accessor.test.ts",
-            "additions": 196,
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/session-accessor.ts",
-            "additions": 123,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store-maintenance-operations.ts",
-            "additions": 33,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.pruning.test.ts",
+            "path": "src/state/openclaw-state-db.test.ts",
             "additions": 50,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.session-lifecycle-mutation.test.ts",
-            "additions": 254,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/config/sessions/store.ts",
-            "additions": 72,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.archive-cleanup.test.ts",
-            "additions": 185,
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 111,
-            "deletions": 4,
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/trajectory/cleanup.test.ts",
-            "additions": 609,
-            "deletions": 6,
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/cleanup.ts",
-            "additions": 243,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/runtime.test.ts",
-            "additions": 350,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/runtime.ts",
-            "additions": 51,
-            "deletions": 27,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/writer-lifecycle.ts",
-            "additions": 316,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 17,
-        "additions": 2699,
-        "deletions": 113,
+        "changedFiles": 15,
+        "additions": 890,
+        "deletions": 48,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99122",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99122.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103390",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103390.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "CHANGES_REQUESTED",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
         "checks": {
-          "total": 103,
-          "gatingTotal": 98,
+          "total": 98,
+          "gatingTotal": 93,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 32,
+            "SUCCESS": 59,
+            "SKIPPED": 24,
+            "IN_PROGRESS": 14,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "PR closed after this re_review command"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2180,
+    "total_ms": 2713,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 535
+        "ms": 651
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1356
+        "ms": 1722
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -254,15 +277,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 261
+        "ms": 325
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
