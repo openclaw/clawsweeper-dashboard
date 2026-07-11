@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T01:42:34.514Z",
+  "generated_at": "2026-07-11T01:43:57.045Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T22:42:05.963Z",
+  "since": "2026-07-10T22:43:31.907Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -12,9 +12,9 @@
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 571,
+  "scanned_comments": 569,
   "commands_seen": 269,
-  "actionable": 2,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -28,6 +28,284 @@
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
   "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103801:4937535729:2026-07-11T01:42:53Z:clawsweeper_auto_repair",
+      "comment_id": "4937535729",
+      "comment_version_key": "4937535729:2026-07-11T01:42:53Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103801#issuecomment-4937535729",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 103801,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-10T16:46:04Z",
+      "comment_updated_at": "2026-07-11T01:42:53Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=06b9e77f3e4089d25e333b9165a92c919a0ae8e9)",
+      "review_summary": "The PR delays runtime config activation until gateway hot-reload state is ready, then publishes subsystem state, hands off cron, and advances shared auth-session generation within the secrets activation lock.\n\nPR surface: Source +53, Tests +315. Total +368 across 3 files.\n\nReproducibility: yes. The linked issue provides a concrete combined hooks, cron, and channel reload path, and the remaining patch defect can be reproduced by delaying or rejecting replacement `cron.start()` and observing publication before readiness.",
+      "review_followup": "- [P1] The blocking readiness defect has a narrow mechanical code-and-test repair, while contributor-owned real-environment proof remains required afterward.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "06b9e77f3e4089d25e333b9165a92c919a0ae8e9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-11T01:41:26.155Z",
+      "review_lease_owner": "github-run-29134908109-1",
+      "review_lease_comment_id": "4941193626",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "7bfa5499c487d4f13052c453327b405206b04286727d81f60d870248cfa48a1d",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): align runtime config activation with subsystem hot-reload publish (#103736)",
+        "body": "\r\nCloses #103736\r\n\r\n## What Problem This Solves\r\n\r\nFixes an issue where a gateway config hot reload that changes hooks, cron, and channel settings simultaneously leaves the process in a mixed state for up to 5 minutes when a channel restart is deferred waiting for active work to drain. During that window, `getRuntimeConfig()` already returns the new configuration while hook routing still resolves against the old hooks config and cron RPCs still target the old (already stopped) cron instance.\r\n\r\nThis means a hook request arriving mid-window is routed to the wrong agent or session, and a cron job created or deleted in that window can be silently ineffective.\r\n\r\n## Why This Change Was Made\r\n\r\nThe root cause is that `onHotReload` commits the runtime config snapshot (`activate: true`) before calling `applyHotReload`, while `applyHotReload` only publishes hooks, cron, heartbeat, and channel-health subsystems at the very end via `setState` — after the channel-restart deferral loop. This fix keeps runtime config activation, gateway subsystem publication, and shared auth-session generation transition inside the same serialized secrets activation lock, so they advance as one atomic unit:\r\n\r\n1. **Delayed activation**: `onHotReload` uses `activate: false` (prepare only) — the snapshot is not committed until after `applyHotReload` completes its work.\r\n\r\n2. **Lock-bound publication via `onActivated`**: A new `onActivated` callback in `RuntimeSecretsActivationParams` is invoked synchronously inside `finishPreparedSnapshot`, immediately after `activateRuntimeSecretsSnapshot` and `logGatewayAuthSurfaceDiagnostics` — still within the `runWithSecretsActivationLock`. This callback calls `params.setState(nextState)` to publish hooks, cron, heartbeat, and channel-health, ensuring no concurrent secrets refresh can activate a different snapshot between config commit and subsystem publication.\r\n\r\n3. **Auth generation inside the lock**: `sharedGatewaySessionGenerationState.current` and `disconnectStaleSharedGatewayAuthClients` also run inside the `onActivated` callback, so auth-client state advances together with config and subsystems.\r\n\r\n4. **Persistent generation update outside the lock**: `setCurrentSharedGatewaySessionGeneration` (durable write) remains outside the lock, which is acceptable since it is a persistent side-effect rather than a live-state reader.\r\n\r\n5. **Error recovery preserved**: If `applyHotReload` fails after `onActivated` committed the new config, the catch block rolls back via `activateSecretsRuntimeSnapshot(previousSnapshot)` and restores the context window cache.\r\n\r\nThe `onNoopConfigCommit` path and `onRestart` path are unchanged.\r\n\r\n## User Impact\r\n\r\nOperators running busy gateways with hooks and cron will see consistent behavior during a config hot reload: hook routing, cron job lifecycle, `getRuntimeConfig()` readers, and shared gateway auth-session generation all observe either the old or the new configuration together, never a mix. This eliminates silent hook misrouting, lost cron jobs, and auth-client state divergence that could occur during deferred channel restarts.\r\n\r\n## Evidence\r\n\r\n**Tests:**\r\n```\r\n✓ src/gateway/server-reload-handlers.test.ts — 60 passed (2 new)\r\n✓ src/gateway/config-reload.test.ts — 348 passed\r\n✓ TypeScript (tsc --noEmit) — clean\r\n✓ oxlint — 0 warnings, 0 errors\r\n```\r\n\r\n**New test — deferral atomicity:** `defers runtime config activation until after channel reload deferral when combined with hooks and cron` — sets active work to block the channel restart deferral, then verifies that `onBeforePublish` (runtime config commit + subsystem publish) is NOT called while the deferral is active, and IS called atomically after the work drains.\r\n\r\n**New test — serialized transaction:** `publishes subsystem state inside the same transaction as config activation when there is no channel deferral` — verifies publication ordering and confirms `setState` is invoked within the `onBeforePublish` callback, matching the lock-bound `onActivated` contract.\r\n\r\n**Error recovery:** Existing test `resets context metadata after a managed hot reload rolls back` continues to pass, confirming the catch block correctly restores the previous runtime snapshot and refreshes the context window cache.\r\n\r\n--- \r\n\r\nThis PR is AI-assisted. Analysis, implementation, and testing were performed using AI tools (opencode) with review by the author.",
+        "branch": "fix/hot-reload-mixed-state",
+        "head_sha": "06b9e77f3e4089d25e333b9165a92c919a0ae8e9",
+        "author": "wangyan2026",
+        "labels": [
+          "gateway",
+          "size: M",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/gateway/server-reload-handlers.test.ts",
+            "additions": 315,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-reload-handlers.ts",
+            "additions": 79,
+            "deletions": 29,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-config.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 397,
+        "deletions": 29,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103801",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103801.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "SUCCESS": 66,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103958:4939796415:2026-07-11T01:42:49Z:clawsweeper_auto_repair",
+      "comment_id": "4939796415",
+      "comment_version_key": "4939796415:2026-07-11T01:42:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103958#issuecomment-4939796415",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 103958,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-10T21:47:35Z",
+      "comment_updated_at": "2026-07-11T01:42:49Z",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=166bed8e6cf1fb73ae420f7115c2519d1fa4f93b)",
+      "review_summary": "The PR records whether ACP thinking came from an explicit request or an inherited default, then skips unsupported inherited thinking controls while keeping explicit controls strict.\n\nPR surface: Source +85, Tests +196. Total +281 across 13 files.\n\nReproducibility: yes. The shipped startup failure follows from inherited thinking reaching the unadvertised-key guard, and the PR's persistence regression follows directly by writing and rereading metadata through `acp_sessions`.",
+      "review_followup": "- [P1] A maintainer must choose the legacy-row compatibility policy before the mechanical persistence repair is safe; contributor exact-head real behavior proof is also still required.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "166bed8e6cf1fb73ae420f7115c2519d1fa4f93b",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-11T01:41:27.823Z",
+      "review_lease_owner": "github-run-29134849763-1",
+      "review_lease_comment_id": "4941173986",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "2da3ca82e988fe48dc40ccbea5c430ba3bcc428ba7f5325464c4f3ede2dba27d",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(acp): ACP session startup fails when backend does not advertise thinking config",
+        "body": "## What Problem This Solves\n\nFixes #103802 — ACP sessions can fail at startup with:\n\n```\nAcpRuntimeError: ACP backend \"acpx\" does not accept config key \"thinking\".: code=ACP_BACKEND_UNSUPPORTED_CONTROL\n```\n\nThis happens when thinking is inherited from defaults/model profile and then applied to a backend that does not advertise a thinking config option.\n\n## Why This Change Was Made\n\nThis patch preserves explicit user intent while tolerating inherited defaults only when unsupported:\n\n1. **Track thinking provenance at spawn/init time**\n   - `thinkingSource: \"explicit\" | \"default\"` is recorded when ACP runtime options are created\n   - persisted in ACP session metadata as `runtimeOptionSources.thinking`\n\n2. **Apply strictness by provenance in runtime controls**\n   - if backend advertises keys and a thinking key is not supported:\n     - `thinkingSource === \"default\"` → skip (best-effort inherited default)\n     - `thinkingSource === \"explicit\"` (or unknown) → throw `ACP_BACKEND_UNSUPPORTED_CONTROL` (fail-visible explicit intent)\n\n3. **Sync provenance on mutation paths**\n   - `setSessionConfigOption` with a thinking key → sets provenance to \"explicit\"\n   - `updateSessionRuntimeOptions` with thinking in patch → sets provenance to \"explicit\"\n   - `resetSessionRuntimeOptions` → clears provenance\n   - This prevents stale provenance from causing incorrect behavior after explicit changes\n\n4. **Preserve existing configured/model-profile defaults on capable backends**\n   - defaults are still inherited and applied where supported\n\n## User Impact\n\n- ACP sessions against limited backends no longer fail due to inherited default thinking values.\n- Explicit `sessions_spawn(thinking: ...)` remains strict and fails visibly when unsupported.\n- Changing thinking after spawn (via setConfigOption or updateRuntimeOptions) correctly updates provenance.\n- Configured/model-profile thinking defaults still apply on backends that support them.\n\n## Evidence\n\n- 15 files changed, 300 insertions, 4 deletions\n- `oxlint`: 0 warnings / 0 errors on all touched files\n- All 23 manager runtime-config tests pass (including 4 new provenance tests)\n- All 8 focused ACP spawn tests pass (including 4 that were failing in CI before the fix)\n\n**Terminal evidence (commit 844c5ea):**\n\n```bash\n$ pnpm exec oxlint <all touched files>\nFound 0 warnings and 0 errors.\n\n$ pnpm vitest run src/acp/control-plane/manager.runtime-config.test.ts\nTest Files 1 passed\nTests 23 passed\n\n$ pnpm vitest run src/agents/acp-spawn.test.ts -t \"...4 ACP spawn tests...\"\nTest Files 2 passed\nTests 8 passed | 124 skipped\n```\n",
+        "branch": "fix/acp-opencode-thinking-config",
+        "head_sha": "166bed8e6cf1fb73ae420f7115c2519d1fa4f93b",
+        "author": "ekinnee",
+        "labels": [
+          "agents",
+          "size: M",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "packages/acp-core/src/types.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.core.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.identity-reconcile.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.initialize-session.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.runtime-config.test.ts",
+            "additions": 184,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.runtime-controls.ts",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.runtime-handle-ensure.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.runtime-options-commands.ts",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.runtime-resume-state.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/acp/control-plane/manager.types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/acp-spawn.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/acp-spawn.ts",
+            "additions": 24,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/types.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 13,
+        "additions": 282,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103958",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103958.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "SUCCESS": 69,
+            "SKIPPED": 25,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:104038:4941233132:2026-07-11T01:41:42Z:clawsweeper_needs_human",
       "comment_id": "4941233132",
@@ -68,65 +346,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(security): bound external-content pattern scan to a fixed window",
-        "body": "## What Problem This Solves\n\n`detectSuspiciousPatterns` (`src/security/external-content.ts`) matches its injection-monitoring patterns against the **full, uncapped** body of untrusted external hook content (up to `hooks.maxBodyBytes`). Some of those patterns are superlinear, so matching a large body can consume excessive CPU and block the single-threaded event loop. The rest of `src/security` already bounds untrusted-input matching via `testRegexWithBoundedInput` (`src/security/safe-regex.ts`) — this scanner was the odd one out.\n\n## Why This Change Was Made\n\nConsistency and robustness. Route each pattern test through the existing bounded matcher (head/tail window) so a large untrusted body can't drive pathological matching cost, mirroring how untrusted-input matching is handled elsewhere in `src/security`.\n\n## User Impact\n\nNo functional change for normal content. Injection-marker detection is preserved — the markers this scanner looks for occur at the content head/tail, which the bounded window covers. Large inputs no longer risk excessive scan cost.\n\n## Evidence\n\n- Routed the pattern loop through `testRegexWithBoundedInput`.\n- Added a regression test bounding scan time on a large input, plus a test confirming head-of-body marker detection still fires.\n- `pnpm test src/security/external-content.test.ts` → **81 passed**.\n",
-        "branch": "harden/bound-external-content-scan",
-        "head_sha": "5813906b215e3a2d340d6ae479120a685557443d",
-        "author": "fede-kamel",
-        "labels": [
-          "size: XS",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/security/external-content.test.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/security/external-content.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 21,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104038",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104038.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "comment-router:openclaw/openclaw:103445:4941216647:2026-07-11T01:40:00Z:re_review",
@@ -166,105 +386,9 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103445,
-          "dispatch_key": "router-a068f10148e3d4cc",
-          "dispatched_at": "2026-07-11T01:43:15.139Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T01:43:15.934Z",
-          "response_comment_id": "4941216859",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(slack): use endsWith instead of includes for _all_ action_id matching",
-        "body": "## What Problem This Solves\n\n`isBulkActionsBlock()` uses `el.action_id.includes(\"_all_\")` to detect bulk-action buttons. This has **two bugs**:\n\n1. **False positives**: Action IDs like `\"deploy_all_services\"` or `\"install_all_deps\"` contain the substring `_all_` and are incorrectly treated as bulk actions — their blocks are silently removed from Slack messages.\n2. **False negatives**: Legitimate bulk action IDs like `\"select_all\"` / `\"deselect_all\"` do **not** contain `_all_` (no trailing underscore), so `includes(\"_all_\")` fails to match them.\n\n## Changes\n\n- Add shared bulk action-ID grammar in `extensions/slack/src/bulk-action-ids.ts` (`SLACK_BULK_ACTION_ID_SUFFIX`, `isSlackBulkActionId()`).\n- `interactions.block-actions.ts`: classify bulk rows with `isSlackBulkActionId()` (`endsWith(\"_all\")`) instead of substring `includes(\"_all_\")`.\n- Add grammar regression tests plus whole-path Slack confirmation update tests for bulk-row removal and `deploy_all_services` false-positive control.\n\n## Evidence\n\n**Current head:** `ffac80ea`\n\n**Unit tests:**\n```\npnpm test extensions/slack/src/bulk-action-ids.test.ts\npnpm test extensions/slack/src/monitor/events/interactions.test.ts -t \"bulk|deploy_all_services\"\n→ 10 passed\n```\n\n**Grammar regression (`isSlackBulkActionId`):**\n\n| action_id | bulk? |\n|-----------|-------|\n| select_all | yes |\n| deselect_all | yes |\n| deploy_all_services | no |\n| install_all_deps | no |\n| approve_selected | no |\n\n**After-fix whole-path message-update proof (handler → `chat.update` blocks):**\n\n1. Last individual selection removes bulk `select_all` / `deselect_all` rows from the updated Slack payload.\n2. A separate `deploy_all_services` row is **not** classified as bulk and remains when another individual control is still present.\n\n**Lint / typecheck:** `npx oxlint` on touched files — clean\n\n## Review\n\n- ClawSweeper review addressed: shared bulk action-ID grammar, whole-path regression, false-positive control\n- AI-assisted: Yes\n\n@clawsweeper re-review\n",
-        "branch": "fix/slack-bulk-actions-all-endsWith",
-        "head_sha": "ffac80ea1a78f911f6abea2e7f86923c29a6e6cc",
-        "author": "zw-xysk",
-        "labels": [
-          "channel: slack",
-          "size: M",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/slack/src/bulk-action-ids.test.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/slack/src/bulk-action-ids.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/events/interactions.block-actions.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/events/interactions.test.ts",
-            "additions": 181,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 214,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103445",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103445.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 93,
-          "gatingTotal": 88,
-          "counts": {
-            "SUCCESS": 59,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T01:42:34.676Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "comment-router:openclaw/openclaw:103445:4941216189:2026-07-11T01:39:56Z:re_review",
@@ -306,7 +430,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "newer re-review command supersedes this request"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "comment-router:openclaw/openclaw:103811:4941212469:2026-07-11T01:39:28Z:re_review",
@@ -348,7 +472,108 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(google-meet): retain the full caption transcript per session (#103387)",
+        "body": "## Summary\n\nImplements #103387.\n\nThe Chrome transport scrapes Meet captions into an in-page buffer capped at 50 lines, and `status` exposed only the last 5 as `recentTranscript` — so for any real meeting the transcript was mostly discarded, and observe-mode users had to build fragile external pollers that still lose lines during fast speech. This follows the accumulation design proposed in the issue.\n\n### Change\n\n- `extensions/google-meet/src/transports/chrome.ts`: the status script now also ships its full in-page buffer as `transcriptWindow` (≤50 lines); `recentTranscript` stays at 5 lines for compatibility.\n- `extensions/google-meet/src/runtime.ts`: the gateway merges `transcriptWindow` into a durable per-session transcript on every health refresh (join + status/health polls), deduped by the page-recorded `at`/`speaker`/`text` key, capped at the most recent **2000 lines** (fixed constant — no new config surface per the repo's config bar; `droppedLines` reports trimming). The window is merge input only and is stripped before health lands in status payloads, so `status` responses stay the same size. New `transcript(sessionId, { sinceIndex? })` refreshes browser health for active sessions and returns lines with absolute indices: `nextIndex` from one call is the `sinceIndex` for the next, which fixes the issue's \"poll gap\" problem exactly.\n- `extensions/google-meet/index.ts`: new `googlemeet.transcript` gateway method and `transcript` tool action with optional `sinceIndex`.\n- `extensions/google-meet/src/cli.ts`: `openclaw googlemeet transcript <session-id> [--since <index>] [--json]`.\n- `docs/plugins/google-meet.md`: observe-only section + tool action table updated.\n\nNot included (flagged in the issue as optional): `chrome.transcriptFile` persistence — repo storage policy points that at SQLite rather than a JSONL sidecar, which is a separate product decision.\n\n## Verification\n\n- `pnpm test extensions/google-meet` — 17 files, 207 tests passed. New regressions: overlapping page windows across polls accumulate without duplicates and the `sinceIndex` cursor returns exactly zero new lines at `nextIndex`; the cap test proves 2100 merged lines yield `droppedLines: 100`, retained lines 100..2099 in order (this test caught and fixed a dedupe-eviction bug during development); status payload health carries no `transcriptWindow`.\n- `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test`, oxfmt, oxlint — clean.\n\n## Real behavior proof\n\nBehavior addressed: caption lines beyond a 5-line window over a 50-line page buffer were irrecoverable; no way to retrieve a meeting transcript after the fact.\nReal environment tested: the plugin's real join/status/transcript gateway methods driven through the existing stubbed browser-proxy harness, with the page status script's real JSON contract (including the new `transcriptWindow`) exercised end to end.\nExact steps or command run after this patch: `pnpm test extensions/google-meet`\nEvidence after fix: joining with page windows `[1..3]` then polling with `[2..5]` yields transcript lines 1..5 exactly once with `nextIndex: 5`; `sinceIndex: 5` returns no lines; a 2100-line window yields `droppedLines: 100` with lines 100..2099 retained in order.\nObserved result after fix: 207/207 tests pass; the transcript survives beyond the page window and is retrievable incrementally via CLI, gateway method, and tool action.\nWhat was not tested: a live Google Meet call with real captions; the merge consumes the same parsed status payload shape the live path produces, and the page-side change is a one-line widening of what the existing scraper already records.\n",
+        "branch": "feat/103387-googlemeet-transcript-retention",
+        "head_sha": "295fc197df1cda01fe614a78c44b2e46d96e8c01",
+        "author": "lonexreb",
+        "labels": [
+          "docs",
+          "size: L",
+          "plugin: google-meet",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/plugins/google-meet.md",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/index.test.ts",
+            "additions": 432,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/index.ts",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/src/cli.ts",
+            "additions": 49,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/src/runtime.ts",
+            "additions": 195,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/src/transports/chrome.ts",
+            "additions": 21,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/google-meet/src/transports/types.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 7,
+        "additions": 771,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103811",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103811.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 94,
+          "gatingTotal": 89,
+          "counts": {
+            "SUCCESS": 64,
+            "SKIPPED": 26,
+            "IN_PROGRESS": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103880:4938448207:2026-07-11T01:38:17Z:clawsweeper_needs_human",
@@ -390,67 +615,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): keep hot reload subsystems consistent during channel deferral",
-        "body": "Closes #103736\n\n## What Problem This Solves\n\nFixes an issue where users/operators changing gateway hooks or cron config together with a plugin/channel setting could see `getRuntimeConfig()` advance while hook routing and cron RPCs stayed on stale live subsystem references for the duration of a deferred reload.\n\n## Why This Change Was Made\n\nHot reload now publishes rebuilt hooks/cron/heartbeat state before both channel restart deferral entry points: ordinary channel restarts and plugin `beforeReplace` waits. If a later fallible reload step fails after that early publish, the handler rolls the gateway subsystem state back and stops the newly published cron instance so failed reloads do not leave partial state committed.\n\nHealth monitor reloads are committed only after the fallible reload work succeeds. That keeps the old monitor tracked and live during any plugin/channel deferral window, then swaps to the new monitor and stops the old one after state commit.\n\n## User Impact\n\nGateway hot reloads no longer leave hook routing and cron operations split across old and new config during active-work reload deferrals. Failed reloads also restore the prior live subsystem references instead of keeping a partially applied hooks/cron state.\n\n## Evidence\n\n- RED proof: `node scripts/run-vitest.mjs src/gateway/server-reload-handlers.test.ts -t \"publishes hooks and cron before a deferred channel restart\" -- --reporter=verbose` failed before the production change with `expected '/old-hook' to be '/new-hook'`.\n- Plugin deferral proof: `node scripts/run-vitest.mjs src/gateway/server-reload-handlers.test.ts -t \"publishes.*plugin|rolls back early subsystem publish|gateway plugin hot reload handlers\" -- --reporter=verbose` passed: 5 passed, 27 skipped.\n- Focused regression proof after CI type/lint repair: `node scripts/run-vitest.mjs src/gateway/server-reload-handlers.test.ts -t \"publishes.*plugin|publishes hooks and cron|rolls back an early subsystem publish|rolls back early subsystem publish|continues restarting later channels after a hot-reload stop failure|continues restarting later channels after a hot-reload start failure\" -- --reporter=verbose` passed: 6 passed, 26 skipped.\n- CI type repair: commit `a6f58902a1` replaces the nullable health-monitor stop handle with a mutable holder to avoid TypeScript narrowing to `never`, and gives the new tests a complete cron-service test double instead of typing a partial `{ start, stop }` mock as the full contract.\n- CI lint repair: commit `234d5ec8f9` narrows the test helper return type so Vitest mock assertions on `cron.start`/`cron.stop` do not trigger `typescript(unbound-method)`.\n- Test type repair: commit `5b981f15f5` completes the cron test double status/listPage/scheduler methods to match the inferred gateway cron contract. Direct local `tsgo` no longer reports `src/gateway/server-reload-handlers.test.ts`; the remaining local `tsgo` failure is `src/secrets/config-io.ts` TS4058 under the local Unicode workspace path.\n- Targeted lint: `node_modules/.bin/oxlint.cmd src/gateway/server-reload-handlers.test.ts` passed.\n- Formatting: `node_modules/.bin/oxfmt.cmd --write --threads=1 src/gateway/server-reload-handlers.ts src/gateway/server-reload-handlers.test.ts` completed, and `git diff --check` passed.\n- Latest GitHub CI: `gh pr checks 103880 --repo openclaw/openclaw` exited 0 for head `5b981f15f5`; `Real behavior proof`, `check-lint`, `check-prod-types`, `check-test-types`, build, QA smoke, security, and compact shards passed or were intentionally skipped by workflow rules.\n- Autoreview: `python .agents\\skills\\autoreview\\scripts\\autoreview --mode local` passed clean with no accepted/actionable findings after commit `234d5ec8f9`. A fresh rerun after commit `5b981f15f5` was blocked by Codex usage limits; alternate helper engines were unavailable locally (`opencode` missing, Claude CLI not logged in).\n\nValidation note: remote Testbox proof could not be used because the local Crabbox wrapper failed its local `crabbox` binary sanity check in this environment. A temporary live-gateway proof probe was attempted locally, but the Vitest project startup did not produce output before it was stopped; it was not committed. The branch therefore relies on focused reload-handler regression proof plus refreshed GitHub CI for the latest commit.\r\n",
-        "branch": "codex/103736-hotreload-transaction",
-        "head_sha": "5b981f15f54409067344693549cc94827dcc0cbb",
-        "author": "lzy3538",
-        "labels": [
-          "gateway",
-          "size: XL",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/server-reload-handlers.test.ts",
-            "additions": 550,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-reload-handlers.ts",
-            "additions": 254,
-            "deletions": 197,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 804,
-        "deletions": 198,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103880",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103880.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:90831:4637168785:2026-07-11T01:37:31Z:clawsweeper_needs_human",
@@ -702,137 +867,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(google-meet): retain the full caption transcript per session (#103387)",
-        "body": "## Summary\n\nImplements #103387.\n\nThe Chrome transport scrapes Meet captions into an in-page buffer capped at 50 lines, and `status` exposed only the last 5 as `recentTranscript` — so for any real meeting the transcript was mostly discarded, and observe-mode users had to build fragile external pollers that still lose lines during fast speech. This follows the accumulation design proposed in the issue.\n\n### Change\n\n- `extensions/google-meet/src/transports/chrome.ts`: the status script now also ships its full in-page buffer as `transcriptWindow` (≤50 lines); `recentTranscript` stays at 5 lines for compatibility.\n- `extensions/google-meet/src/runtime.ts`: the gateway merges `transcriptWindow` into a durable per-session transcript on every health refresh (join + status/health polls), deduped by the page-recorded `at`/`speaker`/`text` key, capped at the most recent **2000 lines** (fixed constant — no new config surface per the repo's config bar; `droppedLines` reports trimming). The window is merge input only and is stripped before health lands in status payloads, so `status` responses stay the same size. New `transcript(sessionId, { sinceIndex? })` refreshes browser health for active sessions and returns lines with absolute indices: `nextIndex` from one call is the `sinceIndex` for the next, which fixes the issue's \"poll gap\" problem exactly.\n- `extensions/google-meet/index.ts`: new `googlemeet.transcript` gateway method and `transcript` tool action with optional `sinceIndex`.\n- `extensions/google-meet/src/cli.ts`: `openclaw googlemeet transcript <session-id> [--since <index>] [--json]`.\n- `docs/plugins/google-meet.md`: observe-only section + tool action table updated.\n\nNot included (flagged in the issue as optional): `chrome.transcriptFile` persistence — repo storage policy points that at SQLite rather than a JSONL sidecar, which is a separate product decision.\n\n## Verification\n\n- `pnpm test extensions/google-meet` — 17 files, 207 tests passed. New regressions: overlapping page windows across polls accumulate without duplicates and the `sinceIndex` cursor returns exactly zero new lines at `nextIndex`; the cap test proves 2100 merged lines yield `droppedLines: 100`, retained lines 100..2099 in order (this test caught and fixed a dedupe-eviction bug during development); status payload health carries no `transcriptWindow`.\n- `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test`, oxfmt, oxlint — clean.\n\n## Real behavior proof\n\nBehavior addressed: caption lines beyond a 5-line window over a 50-line page buffer were irrecoverable; no way to retrieve a meeting transcript after the fact.\nReal environment tested: the plugin's real join/status/transcript gateway methods driven through the existing stubbed browser-proxy harness, with the page status script's real JSON contract (including the new `transcriptWindow`) exercised end to end.\nExact steps or command run after this patch: `pnpm test extensions/google-meet`\nEvidence after fix: joining with page windows `[1..3]` then polling with `[2..5]` yields transcript lines 1..5 exactly once with `nextIndex: 5`; `sinceIndex: 5` returns no lines; a 2100-line window yields `droppedLines: 100` with lines 100..2099 retained in order.\nObserved result after fix: 207/207 tests pass; the transcript survives beyond the page window and is retrievable incrementally via CLI, gateway method, and tool action.\nWhat was not tested: a live Google Meet call with real captions; the merge consumes the same parsed status payload shape the live path produces, and the page-side change is a one-line widening of what the existing scraper already records.\n",
-        "branch": "feat/103387-googlemeet-transcript-retention",
-        "head_sha": "295fc197df1cda01fe614a78c44b2e46d96e8c01",
-        "author": "lonexreb",
-        "labels": [
-          "docs",
-          "size: L",
-          "plugin: google-meet",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/plugins/google-meet.md",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/index.test.ts",
-            "additions": 432,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/index.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/cli.ts",
-            "additions": 49,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/runtime.ts",
-            "additions": 195,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/transports/chrome.ts",
-            "additions": 21,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/transports/types.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 7,
-        "additions": 771,
-        "deletions": 8,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103811",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103811.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 49,
-            "SKIPPED": 26,
-            "IN_PROGRESS": 18,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "trusted ClawSweeper verdict source revision 88467792f47eacf29fdb513e126f20306815bcf03133a3b3df15ff0521b3aaa6 does not match current source revision 89ecb764bd3ceded662c64496ddb3316cfe3f8173de5a7d6a5186c2a55f8e168"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:104033:4941164097:2026-07-11T01:34:09Z:clawsweeper_needs_human",
@@ -1012,7 +1047,7 @@
           "mode": "autonomous",
           "status": "active",
           "reason": "repair worker already active for this job path",
-          "checked_at": "2026-07-11T01:43:25.650Z",
+          "checked_at": "2026-07-11T01:44:47.174Z",
           "run_url": "https://github.com/openclaw/clawsweeper/actions/runs/29134881957",
           "run_id": 29134881957,
           "run_status": "in_progress"
@@ -1020,7 +1055,7 @@
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-11T01:43:26.483Z",
+          "commented_at": "2026-07-11T01:44:47.906Z",
           "response_comment_id": "4931945413",
           "response_comment_mode": "updated"
         }
@@ -1254,7 +1289,7 @@
       },
       "maintainer_authorized": true,
       "author_readonly_authorized": false,
-      "processed_at": "2026-07-11T01:42:34.676Z"
+      "processed_at": "2026-07-11T01:43:57.182Z"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103803:4937616929:2026-07-11T01:32:29Z:clawsweeper_needs_human",
@@ -1607,55 +1642,30 @@
           "total": 99,
           "gatingTotal": 94,
           "counts": {
-            "SUCCESS": 54,
+            "SUCCESS": 66,
             "SKIPPED": 24,
-            "IN_PROGRESS": 18,
+            "IN_PROGRESS": 7,
             "FAILURE": 1,
-            "QUEUED": 1,
             "NEUTRAL": 1
           },
           "blockers": [
             "build-artifacts:IN_PROGRESS",
             "native-i18n:FAILURE",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
             "macos-swift:IN_PROGRESS",
             "ios-build:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
             "android-build-play:IN_PROGRESS",
-            "android-ktlint:QUEUED"
+            "android-ktlint:IN_PROGRESS"
           ],
           "pending": [
             "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS",
             "macos-swift:IN_PROGRESS",
             "ios-build:IN_PROGRESS",
-            "android-test-third-party:IN_PROGRESS",
             "android-build-play:IN_PROGRESS",
-            "android-ktlint:QUEUED"
+            "android-ktlint:IN_PROGRESS"
           ],
           "terminalBlockers": [
             "native-i18n:FAILURE"
@@ -2040,48 +2050,6 @@
       "review_lease_comment_id": null,
       "expected_item_updated_at": null,
       "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103958:4939796415:2026-07-11T01:26:14Z:clawsweeper_auto_repair",
-      "comment_id": "4939796415",
-      "comment_version_key": "4939796415:2026-07-11T01:26:14Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103958#issuecomment-4939796415",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103958,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T21:47:35Z",
-      "comment_updated_at": "2026-07-11T01:26:14Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=844c5ea6765791e614859a6af5f3577d9a5bfe17)",
-      "review_summary": "The PR tracks whether ACP thinking came from an explicit request or an inherited default, skipping unsupported inherited controls while keeping explicit controls strict.\n\nPR surface: Source +87, Tests +196. Total +283 across 13 files.\n\nReproducibility: yes. The shipped startup failure is documented, and the proposed fix's persistence failure follows directly through manager metadata writes into the SQLite binder and reader that omit the new field.",
-      "review_followup": "- [P1] The blocking persistence defect is narrow and mechanically repairable on the PR branch; contributor real-behavior proof remains a separate merge gate.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "844c5ea6765791e614859a6af5f3577d9a5bfe17",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-11T01:24:42.850Z",
-      "review_lease_owner": "github-run-29134309335-1",
-      "review_lease_comment_id": "4941059068",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "2da3ca82e988fe48dc40ccbea5c430ba3bcc428ba7f5325464c4f3ede2dba27d",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
@@ -3344,48 +3312,6 @@
       "review_lease_comment_id": "4940961271",
       "expected_item_updated_at": null,
       "expected_source_revision": "68e9c66151ff48e8aaa9c9dd1c10830c5e6b28ee30f45e188cca885b705a9f79",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103801:4937535729:2026-07-11T01:08:21Z:clawsweeper_auto_repair",
-      "comment_id": "4937535729",
-      "comment_version_key": "4937535729:2026-07-11T01:08:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103801#issuecomment-4937535729",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103801,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T16:46:04Z",
-      "comment_updated_at": "2026-07-11T01:08:21Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=0120967bdd055f2259b14c120811bf5a35c304de)",
-      "review_summary": "The PR delays runtime secrets/config activation until gateway subsystem state can be published under the same activation lock during hot reload.\n\nPR surface: Source +31, Tests +208. Total +239 across 3 files.\n\nReproducibility: yes. The source path deterministically stops the published cron service before a potentially five-minute active-work wait while RPC contexts continue reading that object.",
-      "review_followup": "- [P1] The contributor must address the repeated P1 lifecycle defect and provide real gateway proof; automated repair cannot satisfy the external proof gate for this PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "0120967bdd055f2259b14c120811bf5a35c304de",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-11T01:06:58.853Z",
-      "review_lease_owner": "github-run-29133788176-1",
-      "review_lease_comment_id": "4940946875",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "7bfa5499c487d4f13052c453327b405206b04286727d81f60d870248cfa48a1d",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
@@ -13254,8 +13180,8 @@
       "issue_number": 102300,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -13331,8 +13257,8 @@
       "issue_number": 101752,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -13427,8 +13353,8 @@
       "issue_number": 101748,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -13641,8 +13567,8 @@
       "issue_number": 101593,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -13722,8 +13648,8 @@
       "issue_number": 101209,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -13816,8 +13742,8 @@
       "issue_number": 100932,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -13895,8 +13821,8 @@
       "issue_number": 100845,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14019,8 +13945,8 @@
       "issue_number": 94833,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14126,8 +14052,8 @@
       "issue_number": 92230,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14274,8 +14200,8 @@
       "issue_number": 89291,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14359,8 +14285,8 @@
       "issue_number": 86062,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14494,8 +14420,8 @@
       "issue_number": 85899,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14630,8 +14556,8 @@
       "issue_number": 76221,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14756,8 +14682,8 @@
       "issue_number": 40782,
       "author": "clawsweeper[bot]",
       "author_association": "NONE",
-      "comment_created_at": "2026-07-11T01:42:05.963Z",
-      "comment_updated_at": "2026-07-11T01:42:05.963Z",
+      "comment_created_at": "2026-07-11T01:43:31.907Z",
+      "comment_updated_at": "2026-07-11T01:43:31.907Z",
       "trigger": "trusted_bot",
       "command": "automerge",
       "intent": "automerge",
@@ -14864,42 +14790,42 @@
       "reason": "PR is paused for human review"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 80535,
+    "total_ms": 76014,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 7391
+        "ms": 6935
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 6921
+        "ms": 6363
       },
       {
         "name": "classify_comment_commands",
-        "ms": 7762
+        "ms": 6903
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 6418
+        "ms": 4880
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 10
+        "ms": 7
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 51969
+        "ms": 50861
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 2
       }
     ]
   }
