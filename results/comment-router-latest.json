@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T22:32:16.238Z",
+  "generated_at": "2026-07-11T22:32:17.877Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T19:32:12.895Z",
+  "since": "2026-07-11T19:32:15.588Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    100998
+    46303
   ],
   "comment_ids": [
-    4948991383
+    4948991661
   ],
-  "status_comment_id": 4948991516,
+  "status_comment_id": 4948991775,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:100998:4948991383:2026-07-11T22:30:49Z:re_review",
-      "comment_id": "4948991383",
-      "comment_version_key": "4948991383:2026-07-11T22:30:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/100998#issuecomment-4948991383",
+      "idempotency_key": "comment-router:openclaw/openclaw:46303:4948991661:2026-07-11T22:30:55Z:re_review",
+      "comment_id": "4948991661",
+      "comment_version_key": "4948991661:2026-07-11T22:30:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/46303#issuecomment-4948991661",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 100998,
-      "author": "Pick-cat",
-      "author_id": 266665499,
+      "issue_number": 46303,
+      "author": "joeykrug",
+      "author_id": 5925937,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T22:30:49Z",
-      "comment_updated_at": "2026-07-11T22:30:49Z",
-      "status_comment_id": 4948991516,
+      "comment_created_at": "2026-07-11T22:30:55Z",
+      "comment_updated_at": "2026-07-11T22:30:55Z",
+      "status_comment_id": 4948991775,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -78,117 +78,141 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 100998,
-          "dispatch_key": "router-58d43188e6972cd3",
-          "dispatched_at": "2026-07-11T22:32:17.111Z"
+          "item_number": 46303,
+          "dispatch_key": "router-55115de58105277f",
+          "dispatched_at": "2026-07-11T22:32:18.541Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-11T22:32:18.050Z",
-          "response_comment_id": "4948991516",
+          "commented_at": "2026-07-11T22:32:19.468Z",
+          "response_comment_id": "4948991775",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(channels): fix five channel lifecycle/shutdown bugs",
-        "body": "## What Problem This Solves\nFive small channel reliability bugs where lifecycle/shutdown paths can leak timers, unhandled rejections, or ignore abort signals.\n\n1. **iMessage RPC client** `stop()` left a 500ms SIGTERM fallback timer running when the child process had already exited, keeping the event loop alive unnecessarily.\n2. **Telegram webhook** shutdown could produce an unhandled promise rejection if `bot.stop()` or transport close threw inside the abort listener.\n3. **Telegram ingress worker** `stop()` was not idempotent and could leak a second 15s terminate timer; `worker.terminate()` rejections were unhandled.\n4. **Telegram probe** transport cache eviction closed the oldest transport with `void transport.close()`, so a rejecting `close()` became an unhandled rejection.\n5. **ClickClack gateway** reconnect backoff used a raw `setTimeout` that ignored `abortSignal`, so stopping the gateway could wait the full reconnect delay. It also leaked an abort listener on every normal reconnect.\n\n## Why This Change Was Made\n- iMessage: store the fallback timer, `unref` it, and clear it once the child-close race settles.\n- Telegram webhook: catch shutdown errors inside the abort paths, route them to `runtime.error`, and continue owned transport/status cleanup even if `bot.stop()` rejects.\n- Telegram ingress worker: guard `stop()` with a `stopped` flag and catch `worker.terminate()` rejections.\n- Telegram probe: wrap the close result with `Promise.resolve(...).catch(...)` so both sync and async rejections are swallowed safely.\n- ClickClack gateway: reconnect backoff uses the shared `sleepWithAbort` from `openclaw/plugin-sdk/runtime-env`, treating abort rejection as normal gateway termination instead of a local timer/listener.\n- Telegram probe test: use `vi.stubEnv` for `NODE_ENV`/`VITEST` so Vitest teardown restores them, instead of direct `process.env` assignment that leaked production-mode values to worker siblings.\n\nThis update also fixes the `check-test-types` failures reported by ClawSweeper (iMessage child mock typing and ClickClack config narrowing) and strengthens the iMessage test to assert the timer is cleared immediately on settlement, not only after it would have fired.\n\n## User Impact\nCleaner shutdown for channel gateways and fewer uncaught/unhandled rejection crashes during abort, restart, or transport eviction.\n\n## Real behavior proof\n\n**Environment:** Linux, Node v22.22.0, pnpm 11.2.2.\n\nThe proof now includes a standalone real-gateway run for the ClickClack reconnect backoff fix (local HTTP + WebSocket servers driving the real `startClickClackGatewayAccount` production function), plus the regression-test negative controls used earlier.\n\n### ClickClack gateway: real reconnect run with local servers\n\nThis script starts real local HTTP and WebSocket servers, configures `startClickClackGatewayAccount` to point at them, waits for the websocket cycle to start, forces a reconnect, then aborts. With the fix the gateway run resolves in ~50 ms instead of waiting the configured 60 s reconnect delay.\n\n```bash\nnode --import tsx proof-clickclack-reconnect.mts\n```\n\n```typescript\nimport { createServer } from \"node:http\";\nimport { AddressInfo } from \"node:net\";\nimport { WebSocket, WebSocketServer } from \"ws\";\nimport type { ChannelGatewayContext } from \"openclaw/plugin-sdk/channel-contract\";\nimport { startClickClackGatewayAccount } from \"./extensions/clickclack/src/gateway.js\";\nimport type { ResolvedClickClackAccount } from \"./extensions/clickclack/src/types.js\";\n\nfunction assert(description: string, condition: boolean) {\n  if (condition) console.log(`  ok: ${description}`);\n  else { console.log(`  FAIL: ${description}`); process.exitCode = 1; }\n}\n\nasync function startClickClackMockServers() {\n  const connections: WebSocket[] = [];\n  const httpServer = createServer((req, res) => {\n    const url = new URL(req.url ?? \"/\", `http://localhost`);\n    res.setHeader(\"Content-Type\", \"application/json\");\n    if (url.pathname === \"/api/me\") {\n      res.end(JSON.stringify({ user: { id: \"bot-1\", display_name: \"Bot\", handle: \"bot\", avatar_url: \"\", created_at: \"2026-01-01T00:00:00.000Z\" } }));\n    } else if (url.pathname === \"/api/realtime/events\") {\n      res.end(JSON.stringify({ events: [] }));\n    } else {\n      res.statusCode = 404;\n      res.end(JSON.stringify({ error: \"not found\" }));\n    }\n  });\n  const wss = new WebSocketServer({ server: httpServer });\n  wss.on(\"connection\", (ws) => { connections.push(ws); });\n  await new Promise<void>((resolve) => httpServer.listen(0, \"127.0.0.1\", resolve));\n  const addr = httpServer.address() as AddressInfo;\n  return { httpUrl: `http://127.0.0.1:${addr.port}`, httpServer, wss, connections };\n}\n\nasync function main() {\n  const { httpUrl, httpServer, wss, connections } = await startClickClackMockServers();\n  const abort = new AbortController();\n  const ctx: ChannelGatewayContext<ResolvedClickClackAccount> = {\n    cfg: { channels: { clickclack: { baseUrl: httpUrl, token: \"test-token\", workspace: \"wsp_test\", reconnectMs: 60_000 } } } as any,\n    accountId: \"default\",\n    account: {} as ResolvedClickClackAccount,\n    runtime: {} as any,\n    abortSignal: abort.signal,\n    log: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} },\n    getStatus: () => ({ accountId: \"default\" }) as any,\n    setStatus: () => {},\n  };\n\n  const start = Date.now();\n  const runPromise = startClickClackGatewayAccount(ctx);\n\n  await new Promise<void>((resolve) => {\n    const check = setInterval(() => { if (connections.length > 0) { clearInterval(check); resolve(); } }, 10);\n  });\n\n  for (const ws of connections) ws.close();\n  abort.abort();\n  await runPromise;\n  const elapsed = Date.now() - start;\n\n  assert(`gateway run resolved in under 5s (actual ${elapsed}ms)`, elapsed < 5_000);\n\n  httpServer.close();\n  wss.close();\n  console.log(\"\\nPROOF ASSERTIONS: all passed\");\n}\n\nmain().catch((err) => { console.error(err); process.exit(1); });\n```\n\nTerminal output (fix):\n\n```text\n=== ClickClack reconnect backoff real behavior proof ===\nNode: v22.22.0\n\n[case 1] startClickClackGatewayAccount aborts promptly during reconnect backoff\n  ok: gateway run resolved in under 5s (actual 50ms)\n  ok: reconnectMs was 60s, so a raw setTimeout would have hung\n\n[case 2] raw setTimeout reconnect wait ignores abort (negative control)\n  ok: raw setTimeout wait did NOT resolve early (actual 5002ms >= 4500ms)\n  ok: resolved flag is false because the 60s timer never fired\n\n=== Summary ===\nPROOF ASSERTIONS: all passed\n```\n\nThe second case demonstrates the old raw-`setTimeout` behavior: aborting has no effect, so the wait continues for the full delay. The first case shows the fixed production gateway reacting to abort immediately while a real reconnect delay is pending.\n\n### Regression-test negative controls\n\nThese temporarily restore the `origin/main` source for each fix, run the relevant test to reproduce the bug, then restore the fix and show the test passes.\n\n#### ClickClack reconnect backoff ignores abort\n\nNegative control (`extensions/clickclack/src/gateway.ts` from `origin/main`):\n\n```text\n$ timeout 12 pnpm test extensions/clickclack/src/gateway.test.ts -- --run -t \"exits immediately when aborted during reconnect backoff\"\n[test] test/vitest/vitest.extensions.config.ts exited by signal SIGTERM\nexit=124 (timeout/hang)\n```\n\nFix restored:\n\n```text\n$ pnpm test extensions/clickclack/src/gateway.test.ts -- --run -t \"exits immediately when aborted during reconnect backoff\"\n Test Files  1 passed (1)\n      Tests  1 passed | 6 skipped (7)\n   Duration  4.57s\nexit=0\n```\n\n#### iMessage SIGTERM fallback timer leak\n\nNegative control (`extensions/imessage/src/client.ts` from `origin/main`):\n\n```text\n$ pnpm test extensions/imessage/src/client.test.ts -- --run -t \"clears the SIGTERM fallback timer\"\n FAIL  |extension-imessage| extensions/imessage/src/client.test.ts > IMessageRpcClient.stop > clears the SIGTERM fallback timer\nAssertionError: expected 1 to be +0\n    expect(vi.getTimerCount()).toBe(0)\nexit=1\n```\n\nFix restored:\n\n```text\n$ pnpm test extensions/imessage/src/client.test.ts -- --run -t \"clears the SIGTERM fallback timer\"\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Duration  912ms\nexit=0\n```\n\n#### Telegram webhook unhandled rejection on shutdown\n\nNegative control (`extensions/telegram/src/webhook.ts` from `origin/main`):\n\n```text\n$ pnpm test extensions/telegram/src/webhook.test.ts -- --run -t \"does not leak unhandled rejections when shutdown throws\"\n⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯\nError: bot stop failed\n Test Files  1 failed (1)\nexit=1\n```\n\nFix restored:\n\n```text\n$ pnpm test extensions/telegram/src/webhook.test.ts -- --run -t \"does not leak unhandled rejections when shutdown throws\"\n Test Files  1 passed (1)\n      Tests  1 passed | 29 skipped (30)\nexit=0\n```\n\n### Repro scripts\n\n- `/tmp/proof-clickclack-reconnect.mts` — real ClickClack gateway reconnect run against local servers.\n- `/tmp/proof-channel-lifecycle.sh` — automates the negative-control / restore cycle for the regression tests above.\n\n## Evidence\n\nAll fixes are accompanied by regression tests:\n\n```text\nextensions/imessage/src/client.test.ts                     2 passed\nextensions/telegram/src/webhook.test.ts                   30 passed\nextensions/telegram/src/telegram-ingress-worker.test.ts    2 passed\nextensions/telegram/src/probe.test.ts                     14 passed\nextensions/clickclack/src/gateway.test.ts                  7 passed\n```\n\nRun locally with:\n\n```bash\npnpm test extensions/imessage/src/client.test.ts extensions/telegram/src/webhook.test.ts extensions/telegram/src/telegram-ingress-worker.test.ts extensions/telegram/src/probe.test.ts extensions/clickclack/src/gateway.test.ts -- --run\n```\n\nLocal validation also passes:\n\n```text\n$ pnpm format:check extensions/imessage/src/client.test.ts extensions/clickclack/src/gateway.test.ts extensions/telegram/src/webhook.ts extensions/clickclack/src/gateway.ts\nAll matched files use the correct format.\n\n$ pnpm lint:all -- extensions/imessage/src/client.test.ts extensions/clickclack/src/gateway.test.ts extensions/telegram/src/webhook.ts extensions/clickclack/src/gateway.ts\n(no errors)\n\n$ pnpm tsgo:extensions:test\n(no errors)\n```\n\n### iMessage RPC client: real stop() timer cleanup\n\nDrives the real `IMessageRpcClient` against a real spawned child process (node with bogus args exits -> close event) with real timers, and quantifies how long the process stays alive AFTER `stop()` settles. A leaked 500ms fallback timer keeps the process alive; a cleared one lets it exit immediately.\n\n```bash\nnode --import tsx proof-imessage-stop.mts\n```\n\nTerminal output (fix):\n\n```text\n[case 1] IMessageRpcClient.stop does not leak the 500ms fallback timer\n  Node: v22.22.0\n  stop settled in 43ms; process exit at 43ms (post-stop wait 0ms)\n  ok: process exits promptly after stop (no leaked 500ms fallback timer) (post-stop wait 0ms)\n\n=== Summary ===\nALL PROOF ASSERTIONS: 1 passed, 0 failed\n```\n\nNegative control (`extensions/imessage/src/client.ts` from `origin/main`):\n\n```text\n[case 1] IMessageRpcClient.stop does not leak the 500ms fallback timer\n  Node: v22.22.0\n  stop settled in 41ms; process exit at 508ms (post-stop wait 467ms)\n  FAIL: process exits promptly after stop (no leaked 500ms fallback timer) (post-stop wait 467ms)\n\n=== Summary ===\nALL PROOF ASSERTIONS: 0 passed, 1 failed\n```\n\nThe main version leaves the 500ms SIGTERM fallback timer ref'd and uncleared, so the process waits ~467ms for it to fire before exiting. The fix clears the timer in `finally`, so the process exits immediately (post-stop wait 0ms).\n\n### Telegram shutdown paths: proof boundary\n\nThe Telegram webhook and ingress-worker shutdown fixes are covered by the regression-test negative controls below (real `startTelegramWebhook` with a mock bot whose `stop()` rejects; real `createTelegramIngressWorker` stop idempotency). A standalone real-setup proof for these paths requires a live Telegram bot token and a public webhook endpoint, which is not available in this contributor environment (per the local proof matrix, Telegram channel proofs need bot credentials + a public callback). The iMessage and ClickClack real-production proofs above cover the same fix shape (lifecycle/timer cleanup on shutdown); maintainer validation on a real Telegram setup is requested for the two Telegram shutdown paths.\n\n---\n\n@clawsweeper re-review\n\nPatch-quality findings from the previous review are addressed:\n- [P1] ClickClack reconnect backoff now reuses the shared `sleepWithAbort` from `openclaw/plugin-sdk/runtime-env` (treating abort rejection as normal gateway termination) instead of a local timer/listener.\n- [P3] Telegram probe test uses `vi.stubEnv` for `NODE_ENV`/`VITEST` so teardown restores them.\n\nReal behavior proof added for the iMessage shutdown path: a standalone script drives the real `IMessageRpcClient` against a real spawned child with real timers, quantifying post-stop wait (0ms fix vs 467ms main negative control). This joins the existing ClickClack real-gateway proof.\n\nProof boundary: the Telegram webhook and ingress-worker shutdown paths rely on the regression-test negative controls in the body; a standalone real-setup proof needs a live bot token + public webhook (not available in this contributor environment). Requesting evaluation under Maintainer option 1 (accept the iMessage + ClickClack real proofs and the Telegram regression-test negative controls as the mergeable proof surface), or option 2 if a maintainer can validate the Telegram shutdown paths on a real setup.\n\n",
-        "branch": "fix/channel-bugs-batch-2026-07-06",
-        "head_sha": "65b77527e8d4d92d4bc25397f846ca38f41d01dc",
-        "author": "pick-cat",
+        "title": "fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload",
+        "body": "Related: #51620\n\n## What Problem This Solves\n\nFixes an issue where users whose inbound message was accepted shortly before a SIGUSR1 or config reload could have buffered message content silently dropped before it reached the reply pipeline.\n\n## Why This Change Was Made\n\nThe gateway now closes ordinary work admission synchronously, flushes accepted inbound debounce work inside one core-private restart continuation, drains channel, active-turn, and followup work in order, then rechecks work created by followup delivery. Pre-created debounce callbacks reserve tracked required-continuation ownership, including parentless accepted work. Already-reserved required continuations may finish during the signal-pending gap while ordinary roots remain fenced, and removed-but-unsettled timer flushes remain visible until settlement. Buffered callbacks can also be explicitly rebound to the private restart admission context, while the global sweep is bounded by both the remaining restart deadline and a 100-pass/30-second ceiling so continued ingress cannot stall reload indefinitely.\n\nEvery non-forced phase now shares one absolute restart-drain deadline. Initial active-task and embedded-run waits receive only the budget remaining after inbound debounce and channel queue draining, so earlier phases cannot reset the configured maximum.\n\nForced restarts retain the existing skip-drain behavior. This does not persist messages sent while the gateway is offline.\n\n## User Impact\n\nMessages accepted immediately before an in-process reload can complete through the normal command/reply path instead of being rejected by the restart fence or disappearing from in-memory buffers. A sustained stream of new transport events also cannot hold the gateway forever in the debounce-flush phase, and the configured restart deferral maximum is honored across the full drain sequence.\n\n## Evidence\n\nExact-head validation for `bb8f1b842e85c6745e7f8a1bfb8303d73ca6f7f6`:\n\n- **Focused behavior tests:** 4 files, 167 tests passed.\n  - `src/auto-reply/inbound.test.ts`: 65 passed.\n  - `src/process/command-queue.test.ts`: 42 passed.\n  - `src/process/gateway-work-admission.test.ts`: 16 passed.\n  - `src/cli/gateway-cli/run-loop.test.ts`: 44 passed.\n- **New P1 regressions:** a buffer created inside an admitted inbound root survives that root's release; timer-started required work can finish through the restart-signal-pending fence while ordinary roots remain blocked; a timer-started callback remains visible and keeps the restart sweep pending until its real command enqueue settles; parentless accepted continuations retain required ownership; continuous ingress stops at the pass cap; the exact final-pass boundary reports drained correctly; a slow callback returns at the supplied deadline; and a deterministic 100 ms restart budget reduced to 40 ms by earlier debounce/channel work is passed as 40 ms to both initial active-work waits and the final close drain.\n- **Formatting/lint:** `oxfmt --check` and type-aware `oxlint` passed on all touched files.\n- **Type safety:** core production, core test, and plugin SDK declaration `tsgo` checks passed.\n- **Tree identity:** GitHub tree `37822eb909f4bd797d9bc6eb7d8488286f39637a` is the exact locally tested tree; both newly uploaded blob SHAs matched the local Git objects.\n- **CI:** GitHub Actions is running on the exact head above.\n\nA live Signal/Telegram account is not paired in this environment. I have requested the repository's Mantis Telegram proof flow below so maintainers can attach redacted channel-to-gateway reload evidence to this exact head.\n\n## Implementation and Safety Notes\n\n- `createInboundDebouncer()` retains its public `enqueue` / `flushKey` / `cancelKey` return shape.\n- `ChannelRunQueue` retains its public `enqueue` / `deactivate` shape.\n- No public `enqueueInternal`, `allowDuringGatewayDrain`, or command-queue admission bypass is exposed.\n- The debounce registry is weak, avoiding channel teardown requirements.\n- Overflow-summary backlog is included in followup pending counts.\n- Bounded restarts use one absolute deadline; unbounded restarts continue passing `undefined` and wait indefinitely.\n- The branch remains a focused 13-file change.\n\n## Synchronization\n\n- **PR head:** `bb8f1b842e85c6745e7f8a1bfb8303d73ca6f7f6`\n- **Immediate parent:** `38befdcf347331814f3453093ff3ef0c31cc33c0`\n- **Synchronized main cutoff:** `262baedcf7fa3d66dc35cce7d0253e0a31f0cc0e`\n- **Cutoff merge topology:** synchronization commit `5ae09ec76ee9b851cb24b07acad291724c185868` has first parent `da4b1b9c15b6a7b965657fc753e0c25d8dd0e4fa` and second parent `262baedcf7fa3d66dc35cce7d0253e0a31f0cc0e`.\n- **Diff:** 13 files, +1167/-155.\n",
+        "branch": "fix/drain-queue-before-sigusr1",
+        "head_sha": "bb8f1b842e85c6745e7f8a1bfb8303d73ca6f7f6",
+        "author": "joeykrug",
         "labels": [
-          "channel: imessage",
-          "channel: telegram",
-          "size: M",
-          "P2",
-          "rating: 🦐 gold shrimp",
+          "channel: bluebubbles",
+          "cli",
+          "size: XL",
+          "triage: dirty-candidate",
+          "proof: supplied",
+          "mantis: telegram-visible-proof",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/clickclack/src/gateway.test.ts",
-            "additions": 28,
-            "deletions": 0,
+            "path": "src/auto-reply/inbound-debounce.ts",
+            "additions": 211,
+            "deletions": 19,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/clickclack/src/gateway.ts",
-            "additions": 5,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/client.test.ts",
-            "additions": 116,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/client.ts",
-            "additions": 19,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/probe.test.ts",
-            "additions": 64,
+            "path": "src/auto-reply/inbound.test.ts",
+            "additions": 123,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/probe.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/telegram-ingress-worker.test.ts",
-            "additions": 91,
+            "path": "src/auto-reply/reply/queue/drain-all.test.ts",
+            "additions": 47,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "extensions/telegram/src/telegram-ingress-worker.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
+            "path": "src/auto-reply/reply/queue/drain-all.ts",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/telegram/src/webhook.test.ts",
-            "additions": 27,
+            "path": "src/channels/run-queue-registry.ts",
+            "additions": 54,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/telegram/src/webhook.ts",
-            "additions": 22,
+            "path": "src/cli/gateway-cli/run-loop.test.ts",
+            "additions": 137,
             "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 184,
+            "deletions": 106,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts",
+            "additions": 30,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/channel-lifecycle.queue.test.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/command-queue.test.ts",
+            "additions": 151,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/gateway-work-admission.test.ts",
+            "additions": 92,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/gateway-work-admission.ts",
+            "additions": 80,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 10,
-        "additions": 387,
-        "deletions": 57,
+        "changedFiles": 13,
+        "additions": 1167,
+        "deletions": 155,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-100998",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-100998.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-46303",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-46303.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 101,
+          "gatingTotal": 96,
           "counts": {
-            "SUCCESS": 23,
-            "IN_PROGRESS": 49,
-            "SKIPPED": 26,
+            "SUCCESS": 31,
+            "IN_PROGRESS": 47,
+            "SKIPPED": 21,
+            "QUEUED": 1,
             "NEUTRAL": 1
           },
           "blockers": [
@@ -211,7 +235,6 @@
             "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -225,7 +248,6 @@
             "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-dependencies:IN_PROGRESS",
@@ -240,7 +262,8 @@
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
             "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "check-docs:IN_PROGRESS",
+            "checks-windows-node-test:QUEUED"
           ],
           "pending": [
             "Security High (process-exec-boundary):IN_PROGRESS",
@@ -262,7 +285,6 @@
             "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-10:IN_PROGRESS",
             "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -276,7 +298,6 @@
             "checks-node-compact-small-whole-3:IN_PROGRESS",
             "check-guards:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-dependencies:IN_PROGRESS",
@@ -291,7 +312,8 @@
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
             "check-additional-runtime-topology-architecture:IN_PROGRESS",
-            "check-docs:IN_PROGRESS"
+            "check-docs:IN_PROGRESS",
+            "checks-windows-node-test:QUEUED"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -299,21 +321,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T22:32:16.458Z"
+      "processed_at": "2026-07-11T22:32:18.074Z"
     }
   ],
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5642,
+    "total_ms": 4338,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1675
+        "ms": 488
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1652
+        "ms": 1782
       },
       {
         "name": "classify_comment_commands",
@@ -329,15 +351,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 2288
+        "ms": 2020
       },
       {
         "name": "append_ledger",
-        "ms": 2
+        "ms": 1
       }
     ]
   }
