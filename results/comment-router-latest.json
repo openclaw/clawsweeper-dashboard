@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T02:58:24.786Z",
+  "generated_at": "2026-07-11T02:58:36.697Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-10T23:58:22.279Z",
+  "since": "2026-07-10T23:58:36.250Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4941897131
   ],
-  "status_comment_id": 4941897647,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4941897131:2026-07-11T02:56:56Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/104085#issuecomment-4941897131",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 104085,
-      "author": "ekinnee",
-      "author_id": 1707617,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-11T02:56:56Z",
-      "comment_updated_at": "2026-07-11T02:56:56Z",
-      "status_comment_id": 4941897647,
+      "target_branch": null,
+      "issue_number": 103867,
+      "author": "yetval",
+      "author_id": 102706514,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-11T02:55:51Z",
+      "comment_updated_at": "2026-07-11T02:55:51Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,105 +70,27 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 104085,
-          "dispatch_key": "router-565a7912d7c30915",
-          "dispatched_at": "2026-07-11T02:58:25.779Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T02:58:26.942Z",
-          "response_comment_id": "4941897647",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(dreaming): drop heartbeat assistant responses from dream corpus",
-        "body": "Fixes #103720\n\n## Summary\n\n**Problem**: The dreaming ingestion pipeline filters heartbeat user messages (containing `[OpenClaw heartbeat poll]`) via `sanitizeSessionText`, but the paired assistant response is only dropped when it is the exact string `HEARTBEAT_OK`. Local models frequently respond with natural-language acknowledgments (e.g. \"Heartbeat received. Main is active.\") which pass through the sanitizer unchanged and enter the dream corpus as low-confidence (0.58) memory snippets.\n\n**Solution**: Track heartbeat user message drops in `buildSessionEntry` and skip the immediately following assistant response. This is a safe cross-message coupling because the heartbeat prompt pattern is injected by the runtime and cannot be spoofed by user input.\n\n**What changed**: One function in `packages/memory-host-sdk/src/host/session-files.ts`:\n- Added `pendingHeartbeatUserDrop` flag before the message loop\n- Before sanitization, check if the user message is a heartbeat poll\n- When `sanitizeSessionText` drops a heartbeat user message, set the flag\n- After sanitization, if the flag is set and the current message is an assistant response, skip it\n\n**What did NOT change**:\n- Archive/deleted transcript handling — already handled in `dreaming-phases.ts` (skips `archive-artifact` entries)\n- The existing `HEARTBEAT_OK` exact-string match remains as a secondary filter\n- No changes to the shared session corpus lister — `memory_search` continues to work\n\n## Root Cause\n\n`sanitizeSessionText` in `session-files.ts` filters heartbeat user messages via `isGeneratedHeartbeatPromptMessage` (checks for `[OpenClaw heartbeat poll]`), but the assistant-side filter is only:\n```js\nif (role === \"assistant\" && normalized === HEARTBEAT_TOKEN) {\n  return null;\n}\n```\nThis exact-string match misses natural-language acknowledgments. The existing `isHeartbeatOkResponse` helper in `heartbeat.ts` also relies on token presence, so importing it wouldn't help either.\n\nThe code deliberately avoids cross-message coupling for `[cron:...]` and `System (untrusted): ...` patterns because those are user-spoofable (see PR #70737). The heartbeat prompt pattern is injected by the runtime and cannot be spoofed, making this a safe exception.\n\n## Real behavior proof\n\n**Behavior addressed**: Dreaming Light and REM phases produce ghost entries (\"A memory trace surfaced, but details were unavailable in this run.\") instead of real dream content because heartbeat assistant responses dominate the session corpus.\n\n**Real environment tested**: Source review against `packages/memory-host-sdk/src/host/session-files.ts` on current main. The issue provides source-level reproduction with exact file paths and function names.\n\n**Exact steps or command run after this patch**: Source review of the message loop in `buildSessionEntry` — the change is a narrow logic addition that only affects the message filtering path. The existing `HEARTBEAT_OK` exact match remains as a secondary filter.\n\n**After-fix evidence**:\n- The heartbeat prompt pattern (`[OpenClaw heartbeat poll]`) is injected by the runtime in `src/auto-reply/heartbeat.ts` and cannot be spoofed by user input, making this a safe exception to the cross-message coupling rule (PR #70737)\n- The flag (`pendingHeartbeatUserDrop`) is scoped to a single `buildSessionEntry` call — it cannot leak between files or sessions\n- On back-to-back user messages (no assistant in between), the flag clears harmlessly on the second user message\n- The change is 27 insertions, 7 deletions in one function\n\n**Observed result after the fix**: When a heartbeat user message is filtered by `sanitizeSessionText`, the immediately following assistant response is also excluded from the dream corpus. Natural-language heartbeat acknowledgments no longer enter the session corpus as low-confidence memory snippets.\n\n**What was not tested**: End-to-end with a live dreaming pipeline. The change is a narrow logic addition to `buildSessionEntry` that only affects the message filtering path. The original issue (#103720) provides source-level reproduction with clear symptoms (ghost dream entries).\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Low risk declaration: additive flag tracking in one function, only triggers on runtime-injected heartbeat prompts\n- [x] 27 insertions, 7 deletions — well within the Diamond Lobster 100-line limit\n- [x] No change to archive/deleted transcript handling (already correct in dreaming-phases.ts)\n- [x] No change to memory_search (shared corpus lister untouched)\n- [x] Heartbeat prompt pattern is non-spoofable — safe exception to cross-message coupling rule\n- [x] Flag clears harmlessly on back-to-back user messages (no dangling state)",
-        "branch": "fix/dreaming-heartbeat-filter",
-        "head_sha": "8de7aaf267c8badaacb7df7cf6bddd636d6e5be9",
-        "author": "ekinnee",
-        "labels": [
-          "size: XS",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "packages/memory-host-sdk/src/host/session-files.ts",
-            "additions": 27,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 27,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104085",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104085.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 34,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE",
-            "check-additional-extension-bundled:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T02:58:25.115Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5355,
+    "total_ms": 1677,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 533
+        "ms": 433
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1958
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -180,11 +102,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2833
+        "ms": 1230
       },
       {
         "name": "append_ledger",
