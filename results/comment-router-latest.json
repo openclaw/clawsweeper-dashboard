@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T18:55:29.644Z",
+  "generated_at": "2026-07-11T18:55:52.239Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T15:55:26.995Z",
+  "since": "2026-07-11T15:55:51.646Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4948367179
   ],
-  "status_comment_id": 4948367320,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4948367179:2026-07-11T18:54:00Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/104492#issuecomment-4948367179",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 104492,
-      "author": "arcabotai",
-      "author_id": 261107832,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-11T18:54:00Z",
-      "comment_updated_at": "2026-07-11T18:54:00Z",
-      "status_comment_id": 4948367320,
+      "target_branch": null,
+      "issue_number": 104612,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-11T18:53:07Z",
+      "comment_updated_at": "2026-07-11T18:53:07Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,197 +70,27 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 104492,
-          "dispatch_key": "router-24144c994da987a6",
-          "dispatched_at": "2026-07-11T18:55:30.691Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T18:55:31.926Z",
-          "response_comment_id": "4948367320",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): preserve channel restart ownership",
-        "body": "## Summary\n\n- keep `ChannelManager` authoritative while crash-loop backoff is active\n- expose a closed restart state (`idle | backoff | gave-up`) to the health monitor\n- prevent health-monitor sweeps from clearing active manager retry progress\n- preserve the existing bounded post-give-up health-monitor revival policy\n- preserve monitor-owned recovery for genuinely idle, unhealthy, and timed-out recovery paths\n\nFixes #104458\n\n## What Problem This Solves\n\nThe channel manager owns crash-loop attempts and backs off between retries. The health monitor separately evaluates stopped accounts and calls `resetRestartAttempts()` before recovery.\n\nDuring an active manager backoff, a health sweep could therefore:\n\n1. clear the manager's private attempt count,\n2. call `startChannel()`, which no-ops because the manager task still exists,\n3. let the manager resume with its retry progress erased.\n\nThat composition prevents the manager from reaching its retry cap and can keep a persistently failing account in an unbounded restart loop.\n\nThe monitor cannot safely infer manager ownership from snapshot fields such as `running`, `restartPending`, and `reconnectAttempts`, because timed-out monitor recovery also uses `restartPending`. This patch puts the ownership decision at the manager boundary that owns the private attempt map.\n\n## Implementation\n\n`ChannelManager.getRestartState()` returns:\n\n- `idle`: no active manager backoff; the health monitor may own recovery\n- `backoff`: manager retry progress is active and must not be reset\n- `gave-up`: the manager exhausted its retry budget\n\nThe health monitor skips only `backoff`. A `gave-up` account continues through the monitor's existing cooldown and `maxRestartsPerHour` budget, preserving the established bounded revival contract. Timed-out recovery remains `idle` because that path resets manager attempts to zero, so its existing two-pass recovery is unchanged.\n\n## Evidence\n\n### RED: current-main behavior before the fix\n\nThe manager-plus-monitor integration regression uses the real `createChannelManager`, real `startChannelHealthMonitor`, production retry limit, and deterministic fake time.\n\nBefore the fix, the monitor cleared active manager progress and the failing account reached 16 starts instead of terminating its first manager cycle at 11.\n\n```console\nactive-backoff regression:\n  expected first manager cycle: 11 starts\n  received:                     16 starts\n```\n\n### GREEN: exact-head behavior after the fix\n\nWith the monitor active through the first six attempts, the manager now observes the complete monotonic sequence:\n\n```text\nreconnectAttempts at each start: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10\nfirst manager cycle:             11 starts\n```\n\nThe monitor is then stopped in that test so the first cycle can be asserted independently from the separate post-give-up policy.\n\nA second real manager-plus-monitor integration test configures `maxRestartsPerHour: 1` and proves the existing bounded revival contract remains intact:\n\n```text\ninitial manager cycle: 11 starts\none monitor revival:   11 starts\ntotal:                 22 starts\nfurther revival:       blocked by monitor hourly budget\n```\n\nFocused validation:\n\n```console\n$ pnpm test \\\n  src/gateway/channel-health-monitor.test.ts \\\n  src/gateway/channel-health-policy.test.ts \\\n  src/gateway/server-channels.test.ts \\\n  src/gateway/server/readiness.test.ts\n\nTest Files  14 passed (14)\nTests       396 passed (396)\n```\n\n### Changed-file gate\n\n```console\n$ OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 CI=1 \\\n  pnpm check:changed -- \\\n  src/gateway/channel-health-monitor.ts \\\n  src/gateway/channel-health-monitor.test.ts \\\n  src/gateway/server-channels.ts \\\n  src/gateway/server-channels.test.ts \\\n  src/gateway/server/readiness.test.ts\n\nexit 0\n```\n\nThis includes production and test typechecks, changed-file lint, dependency/package guards, database-first guards, and runtime import-cycle checks.\n\n## Review feedback addressed\n\nThe first review correctly identified that making manager give-up terminal reversed the established health-monitor revival contract. The revised patch now:\n\n- protects only active manager backoff,\n- preserves post-give-up bounded revival,\n- restores the focused monitor contract test,\n- adds cross-module proof that the revival remains capped.\n\n## Compatibility and risk\n\n- no configuration changes\n- no protocol changes\n- no provider/channel-specific behavior\n- existing bounded post-give-up revival is preserved\n- ordinary idle unhealthy accounts remain restartable\n- manual and terminal-disconnect guards are unchanged\n- timed-out recovery remains monitor-owned\n- stable runs still reset crash-loop attempts through the existing manager path\n",
-        "branch": "fix/channel-health-restart-ownership",
-        "head_sha": "2ea60ecfc183006815b091696b94f604c8765fd4",
-        "author": "arcabotai",
-        "labels": [
-          "gateway",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/channel-health-monitor.test.ts",
-            "additions": 11,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/channel-health-monitor.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-channels.test.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-channels.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server/readiness.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 108,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104492",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104492.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 96,
-          "gatingTotal": 91,
-          "counts": {
-            "SUCCESS": 32,
-            "IN_PROGRESS": 35,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-bundled-channel-config-metadata:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T18:55:29.972Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5738,
+    "total_ms": 2088,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 702
+        "ms": 579
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1935
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -276,7 +106,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3027
+        "ms": 1496
       },
       {
         "name": "append_ledger",
