@@ -1,0 +1,461 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+export const ACTION_LEDGER_SCHEMA = JSON.parse(
+  fs.readFileSync(path.join(scriptDir, "..", "schema", "state-ledger-event.schema.json"), "utf8"),
+);
+
+export class LedgerValidationError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "LedgerValidationError";
+  }
+}
+
+export function validateActionLedgerEvent(value, location = "action ledger event") {
+  validateSchemaValue(value, ACTION_LEDGER_SCHEMA, ACTION_LEDGER_SCHEMA, location);
+  const semantic = actionEventSemanticValue(value, location);
+  const expectedEventId = actionEventId(value.subject.repository, value.event_key);
+  if (value.event_id !== expectedEventId) {
+    throw new LedgerValidationError(`${location}: event_id does not match repository and event_key`);
+  }
+  const expectedSemanticSha256 = sha256(stableJson(semantic));
+  if (value.semantic_sha256 !== expectedSemanticSha256) {
+    throw new LedgerValidationError(`${location}: semantic_sha256 does not match event payload`);
+  }
+  const canonical = sortStable({
+    schema: "clawsweeper.state-ledger-event.v1",
+    schema_version: 1,
+    event_id: value.event_id,
+    event_key: canonicalText(value.event_key, `${location}.event_key`),
+    semantic_sha256: value.semantic_sha256,
+    occurred_at: canonicalTimestamp(value.occurred_at, `${location}.occurred_at`),
+    recorded_at: canonicalTimestamp(value.recorded_at, `${location}.recorded_at`),
+    ...semantic,
+  });
+  if (stableJson(canonical) !== stableJson(value)) {
+    throw new LedgerValidationError(`${location}: event contains non-canonical fields`);
+  }
+  return canonical;
+}
+
+export function actionEventId(repository, eventKey) {
+  return sha256(`${canonicalText(repository, "repository")}\n${canonicalText(eventKey, "event_key")}`);
+}
+
+export function actionEventSemanticSha256(event, location = "action ledger event") {
+  return sha256(stableJson(actionEventSemanticValue(event, location)));
+}
+
+export function stableJson(value) {
+  return JSON.stringify(sortStable(value));
+}
+
+export function sortStable(value) {
+  if (Array.isArray(value)) return value.map(sortStable);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortStable(item)]),
+  );
+}
+
+function actionEventSemanticValue(event, location) {
+  return sortStable({
+    event_type: canonicalText(event.event_type, `${location}.event_type`),
+    producer: {
+      repository: canonicalText(event.producer.repository, `${location}.producer.repository`),
+      sha: canonicalText(event.producer.sha, `${location}.producer.sha`),
+      workflow: canonicalText(event.producer.workflow, `${location}.producer.workflow`),
+      job: canonicalText(event.producer.job, `${location}.producer.job`),
+      run_id: canonicalText(event.producer.run_id, `${location}.producer.run_id`),
+      run_attempt: safePositiveInteger(
+        event.producer.run_attempt,
+        `${location}.producer.run_attempt`,
+      ),
+      component: canonicalText(event.producer.component, `${location}.producer.component`),
+    },
+    subject: normalizeSubject(event.subject, location),
+    action: {
+      name: canonicalText(event.action.name, `${location}.action.name`),
+      status: canonicalText(event.action.status, `${location}.action.status`),
+      ...(event.action.reason_code
+        ? {
+            reason_code: canonicalText(
+              event.action.reason_code,
+              `${location}.action.reason_code`,
+            ),
+          }
+        : {}),
+      retryable: event.action.retryable,
+      mutation: event.action.mutation,
+    },
+    ...(event.learning ? { learning: normalizeLearning(event.learning, location) } : {}),
+    ...(event.evidence?.length
+      ? {
+          evidence: event.evidence
+            .map((entry, index) => normalizeEvidence(entry, `${location}.evidence[${index}]`))
+            .sort((left, right) => stableJson(left).localeCompare(stableJson(right))),
+        }
+      : {}),
+    ...(event.attributes
+      ? { attributes: normalizeAttributes(event.attributes, location) }
+      : {}),
+    privacy: {
+      classification: event.privacy.classification,
+      redaction_version: canonicalText(
+        event.privacy.redaction_version,
+        `${location}.privacy.redaction_version`,
+      ),
+      fields_dropped: event.privacy.fields_dropped
+        .map((field) => canonicalText(field, `${location}.privacy.fields_dropped`))
+        .sort(),
+    },
+  });
+}
+
+function normalizeSubject(subject, location) {
+  return {
+    repository: canonicalText(subject.repository, `${location}.subject.repository`),
+    kind: subject.kind,
+    ...(subject.number !== undefined
+      ? { number: safePositiveInteger(subject.number, `${location}.subject.number`) }
+      : {}),
+    ...(subject.cluster_id
+      ? {
+          cluster_id: canonicalText(subject.cluster_id, `${location}.subject.cluster_id`),
+        }
+      : {}),
+    ...(subject.source_revision
+      ? {
+          source_revision: canonicalText(
+            subject.source_revision,
+            `${location}.subject.source_revision`,
+          ),
+        }
+      : {}),
+    ...(subject.record_path
+      ? {
+          record_path: canonicalRelativePath(
+            subject.record_path,
+            `${location}.subject.record_path`,
+          ),
+        }
+      : {}),
+  };
+}
+
+function normalizeLearning(learning, location) {
+  return {
+    category: canonicalText(learning.category, `${location}.learning.category`),
+    signal: canonicalText(learning.signal, `${location}.learning.signal`),
+    ...(learning.rule_id
+      ? { rule_id: canonicalText(learning.rule_id, `${location}.learning.rule_id`) }
+      : {}),
+    ...(learning.confidence !== undefined ? { confidence: learning.confidence } : {}),
+  };
+}
+
+function normalizeEvidence(evidence, location) {
+  return {
+    kind: canonicalText(evidence.kind, `${location}.kind`),
+    ...(evidence.sha256 ? { sha256: evidence.sha256 } : {}),
+    ...(evidence.report_path
+      ? {
+          report_path: canonicalRelativePath(evidence.report_path, `${location}.report_path`),
+        }
+      : {}),
+    ...(evidence.run_url
+      ? { run_url: canonicalPublicUrl(evidence.run_url, `${location}.run_url`) }
+      : {}),
+    ...(evidence.snapshot_id
+      ? { snapshot_id: canonicalText(evidence.snapshot_id, `${location}.snapshot_id`) }
+      : {}),
+  };
+}
+
+function normalizeAttributes(attributes, location) {
+  const normalized = {};
+  for (const [key, raw] of Object.entries(attributes).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const attributeLocation = `${location}.attributes.${key}`;
+    if (/(?:body|comment|diff|patch|prompt|raw|stderr|stdout|log|text)/i.test(key)) {
+      throw new LedgerValidationError(`${attributeLocation}: privacy-unsafe attribute name`);
+    }
+    normalized[key] = Array.isArray(raw)
+      ? raw.map((value) => normalizeAttributeScalar(value, attributeLocation))
+      : normalizeAttributeScalar(raw, attributeLocation);
+  }
+  return normalized;
+}
+
+function normalizeAttributeScalar(value, location) {
+  if (typeof value !== "string") return value;
+  const normalized = canonicalText(value, location);
+  if (containsPrivateData(normalized)) {
+    throw new LedgerValidationError(`${location}: privacy-unsafe attribute value`);
+  }
+  return normalized;
+}
+
+function containsPrivateData(value) {
+  if (
+    /^(?:\/|[A-Za-z]:[\\/])/.test(value) ||
+    [
+      /\/(?:Users|home|private|tmp)\//,
+      /\\Users\\/,
+      /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/,
+      /(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]{16,}/,
+      /(?:127\.0\.0\.1|localhost):\d+/,
+      /\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/,
+      /\b192\.168\.\d{1,3}\.\d{1,3}\b/,
+      /\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/,
+      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+    ].some((pattern) => pattern.test(value))
+  ) {
+    return true;
+  }
+  try {
+    const parsed = new URL(value);
+    return Boolean(
+      parsed.username ||
+        parsed.password ||
+        parsed.hostname === "localhost" ||
+        parsed.hostname.endsWith(".local"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function canonicalPublicUrl(value, location) {
+  const normalized = canonicalText(value, location);
+  const parsed = new URL(normalized);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hostname !== "github.com"
+  ) {
+    throw new LedgerValidationError(`${location}: run URL must use the public github.com host`);
+  }
+  const canonical = parsed.toString();
+  if (canonical !== value) {
+    throw new LedgerValidationError(`${location}: run URL is not canonical`);
+  }
+  return canonical;
+}
+
+function canonicalRelativePath(value, location) {
+  const normalized = canonicalText(value, location).replaceAll("\\", "/").replace(/^\.\//, "");
+  if (normalized !== value) {
+    throw new LedgerValidationError(`${location}: path is not canonical`);
+  }
+  return normalized;
+}
+
+function canonicalText(value, location) {
+  if (typeof value !== "string") {
+    throw new LedgerValidationError(`${location}: expected string`);
+  }
+  const normalized = value.trim();
+  if (!normalized || normalized !== value || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new LedgerValidationError(`${location}: text is not canonical`);
+  }
+  return normalized;
+}
+
+function canonicalTimestamp(value, location) {
+  const normalized = canonicalText(value, location);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      normalized,
+    ) ||
+    !Number.isFinite(Date.parse(normalized))
+  ) {
+    throw new LedgerValidationError(`${location}: invalid canonical date-time`);
+  }
+  return normalized;
+}
+
+function safePositiveInteger(value, location) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new LedgerValidationError(`${location}: expected a positive safe integer`);
+  }
+  return value;
+}
+
+function validateSchemaValue(value, schema, rootSchema, location) {
+  if (schema.$ref) {
+    validateSchemaValue(value, resolveRef(rootSchema, schema.$ref), rootSchema, location);
+    return;
+  }
+  if (schema.allOf) {
+    for (const branch of schema.allOf) validateSchemaValue(value, branch, rootSchema, location);
+  }
+  if (schema.anyOf && !schema.anyOf.some((branch) => matchesSchema(value, branch, rootSchema))) {
+    throw new LedgerValidationError(`${location}: does not match any allowed schema`);
+  }
+  if (schema.oneOf) {
+    const matches = schema.oneOf.filter((branch) => matchesSchema(value, branch, rootSchema)).length;
+    if (matches !== 1) {
+      throw new LedgerValidationError(`${location}: must match exactly one allowed schema`);
+    }
+  }
+  if (schema.not && matchesSchema(value, schema.not, rootSchema)) {
+    throw new LedgerValidationError(`${location}: matches a forbidden schema`);
+  }
+  if ("const" in schema && !deepEqual(value, schema.const)) {
+    throw new LedgerValidationError(`${location}: must equal ${JSON.stringify(schema.const)}`);
+  }
+  if (schema.enum && !schema.enum.some((candidate) => deepEqual(value, candidate))) {
+    throw new LedgerValidationError(`${location}: is not an allowed value`);
+  }
+  if (schema.type && !hasJsonType(value, schema.type)) {
+    throw new LedgerValidationError(`${location}: expected ${schema.type}`);
+  }
+  if (typeof value === "string") validateString(value, schema, location);
+  if (typeof value === "number") validateNumber(value, schema, location);
+  if (Array.isArray(value)) validateArray(value, schema, rootSchema, location);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    validateObject(value, schema, rootSchema, location);
+  }
+}
+
+function validateString(value, schema, location) {
+  const length = [...value].length;
+  if (schema.minLength !== undefined && length < schema.minLength) {
+    throw new LedgerValidationError(`${location}: shorter than ${schema.minLength} characters`);
+  }
+  if (schema.maxLength !== undefined && length > schema.maxLength) {
+    throw new LedgerValidationError(`${location}: longer than ${schema.maxLength} characters`);
+  }
+  if (schema.pattern && !new RegExp(schema.pattern, "u").test(value)) {
+    throw new LedgerValidationError(`${location}: does not match required pattern`);
+  }
+  if (schema.format === "date-time" && !isDateTime(value)) {
+    throw new LedgerValidationError(`${location}: invalid date-time`);
+  }
+  if (schema.format === "uri" && !isAbsoluteUri(value)) {
+    throw new LedgerValidationError(`${location}: invalid URI`);
+  }
+}
+
+function validateNumber(value, schema, location) {
+  if (!Number.isFinite(value)) throw new LedgerValidationError(`${location}: must be finite`);
+  if (schema.minimum !== undefined && value < schema.minimum) {
+    throw new LedgerValidationError(`${location}: below minimum ${schema.minimum}`);
+  }
+  if (schema.maximum !== undefined && value > schema.maximum) {
+    throw new LedgerValidationError(`${location}: above maximum ${schema.maximum}`);
+  }
+}
+
+function validateArray(value, schema, rootSchema, location) {
+  if (schema.maxItems !== undefined && value.length > schema.maxItems) {
+    throw new LedgerValidationError(`${location}: has more than ${schema.maxItems} items`);
+  }
+  if (schema.uniqueItems) {
+    const keys = value.map(stableJson);
+    if (new Set(keys).size !== keys.length) {
+      throw new LedgerValidationError(`${location}: items must be unique`);
+    }
+  }
+  if (schema.items) {
+    value.forEach((item, index) =>
+      validateSchemaValue(item, schema.items, rootSchema, `${location}[${index}]`),
+    );
+  }
+}
+
+function validateObject(value, schema, rootSchema, location) {
+  const properties = schema.properties ?? {};
+  for (const required of schema.required ?? []) {
+    if (!Object.hasOwn(value, required)) {
+      throw new LedgerValidationError(`${location}: missing required property ${required}`);
+    }
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (schema.propertyNames) {
+      validateSchemaValue(key, schema.propertyNames, rootSchema, `${location}.${key}`);
+    }
+    if (Object.hasOwn(properties, key)) {
+      validateSchemaValue(item, properties[key], rootSchema, `${location}.${key}`);
+    } else if (schema.additionalProperties === false) {
+      throw new LedgerValidationError(`${location}: unexpected property ${key}`);
+    } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+      validateSchemaValue(
+        item,
+        schema.additionalProperties,
+        rootSchema,
+        `${location}.${key}`,
+      );
+    }
+  }
+}
+
+function matchesSchema(value, schema, rootSchema) {
+  try {
+    validateSchemaValue(value, schema, rootSchema, "candidate");
+    return true;
+  } catch (error) {
+    if (error instanceof LedgerValidationError) return false;
+    throw error;
+  }
+}
+
+function resolveRef(rootSchema, ref) {
+  if (!ref.startsWith("#/")) throw new LedgerValidationError(`unsupported schema ref: ${ref}`);
+  return ref
+    .slice(2)
+    .split("/")
+    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"))
+    .reduce((value, segment) => value?.[segment], rootSchema);
+}
+
+function hasJsonType(value, type) {
+  if (type === "null") return value === null;
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (type === "integer") return Number.isInteger(value);
+  return typeof value === type;
+}
+
+function isDateTime(value) {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/,
+  );
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const [, year, month, day, hour, minute, second] = match.map(Number);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59
+  );
+}
+
+function isAbsoluteUri(value) {
+  try {
+    return Boolean(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+function deepEqual(left, right) {
+  return stableJson(left) === stableJson(right);
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
