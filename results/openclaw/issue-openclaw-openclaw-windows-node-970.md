@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-970"
 mode: "autonomous"
-run_id: "29170688119"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29170688119"
+run_id: "29171669290"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29171669290"
 head_sha: "7b2b88c900c1f4cf5b82aa1ff2f2e3de8b498cc8"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-11T22:37:31.012Z"
+published_at: "2026-07-11T23:13:37.237Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/970"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/970"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29170688119](https://github.com/openclaw/clawsweeper/actions/runs/29170688119)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29171669290](https://github.com/openclaw/clawsweeper/actions/runs/29171669290)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/970
 
 ## Summary
 
-Issue #970 remains valid on current main SHA 622c0e27c6b0473c57d087f595581cb9eb29c03b. Snapshot-driven renders reuse the FunctionalUI Border but create and attach a new native session ComboBox each time, which replaces an open picker during thinking/status updates. A narrow new fix PR should retain one ComboBox instance, reconcile its grouped items and selection without unnecessary mutations, and add focused identity/runtime coverage. This read-only worker could not modify the branch or run Windows-only validation and UI proof.
+Issue #970 remains valid on current main SHA 622c0e27c6b0473c57d087f595581cb9eb29c03b. OpenClawComposer still creates and attaches a new native session ComboBox on every snapshot-driven render, replacing an open picker during thinking/status updates. A narrow new fix PR should preserve the ComboBox identity, reconcile grouped items and selection only when needed, and add focused regression and current-head WinUI proof. The read-only, non-Windows worker could not implement or validate the branch.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Issue #970 remains valid on current main SHA 622c0e27c6b0473c57d087f595581cb9eb2
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #970 | fix_needed | planned | canonical | The source-level reproduction is current and the implementation shape is narrow, but the read-only worker cannot create the locally validated branch required for the PR. |
-| cluster:issue-openclaw-openclaw-windows-node-970 | build_fix_artifact | planned |  | Executor work is required to implement the narrow fix, run mandatory Windows validation, collect current-head UI proof, perform rubber-duck review, and open the PR. |
+| #970 | fix_needed | planned | canonical | The defect is current, non-security-sensitive, and narrowly implementable, but no viable implementation PR exists. |
+| cluster:issue-openclaw-openclaw-windows-node-970 | build_fix_artifact | planned |  | The executor must implement and validate the narrow repair before opening the PR. |
 
 ## Needs Human
 
