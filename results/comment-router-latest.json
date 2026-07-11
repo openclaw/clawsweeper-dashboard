@@ -1,18 +1,18 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T03:23:53.858Z",
+  "generated_at": "2026-07-11T03:25:03.229Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T00:23:51.666Z",
+  "since": "2026-07-11T00:25:01.337Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103578
+    104071
   ],
   "comment_ids": [
-    4942026751
+    4942025924
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -33,18 +33,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:103578:4942026751:2026-07-11T03:22:22Z:re_review",
-      "comment_id": "4942026751",
-      "comment_version_key": "4942026751:2026-07-11T03:22:22Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103578#issuecomment-4942026751",
+      "idempotency_key": "comment-router:openclaw/openclaw:104071:4942025924:2026-07-11T03:22:02Z:re_review",
+      "comment_id": "4942025924",
+      "comment_version_key": "4942025924:2026-07-11T03:22:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/104071#issuecomment-4942025924",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 103209,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
+      "issue_number": 104071,
+      "author": "wm0018",
+      "author_id": 13618944,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T03:20:51Z",
-      "comment_updated_at": "2026-07-11T03:20:51Z",
+      "comment_created_at": "2026-07-11T03:22:02Z",
+      "comment_updated_at": "2026-07-11T03:22:02Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -72,25 +72,90 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(workboard): check active claim before dependency status guard in claim()",
+        "body": "## What Problem This Solves\n\nFixes #104050 — `claim()` checks the dependency status guard (card status must be `\"ready\"`) before checking whether the card is already claimed. Since a successful claim moves the card to `\"running\"`, any repeat claim on a card with parents returns the misleading error `\"card dependencies are not done\"` instead of `\"card already claimed by <owner>\"`.\n\nCards without parents are unaffected — only the misordered dependency guard triggers this false error.\n\n## Why This Change Was Made\n\nSwap the order of two guards in `claim()`: check the active claim lease before the dependency status guard. The existing claim check (`already claimed by`) and dependency check (`dependencies are not done`) each remain correct on their own; the fix is purely about which one runs first.\n\nNo status transitions, no new error messages, no API changes — just moving `existingClaim` above `cardParentIds`.\n\n**Test correction (`fbb9293dc5`):** the regression test first pushed here built the parent link through raw `metadata.links`, which `create()` strips (parent/child dependencies must go through `linkCards`). The child was therefore parentless, the dependency guard never fired, and the test passed with *or* without the fix. It now builds a real dependency via `linkCards` + `promoteReady` and asserts the link and promotion, so it genuinely guards the ordering (fails pre-fix, passes post-fix).\n\n## User Impact\n\nAgents that repeat-claim a dependency-backed card now see the correct `\"already claimed by <owner>\"` error instead of a misleading `\"dependencies not done\"` that sends them into dependency-debugging loops.\n\n## Evidence\n\n### Real runtime behavior (SQLite-backed `WorkboardStore`)\n\nReproduced #104050 end-to-end against a real `node:sqlite` store (not the in-memory test double), driving the public store API — build a parent→child dependency with `linkCards`, mark the parent `done`, `promoteReady`, then claim the child twice. `before` = pre-fix (`HEAD~1`), `after` = this fix.\n\n```\n########## BEFORE (pre-fix) ##########\nsetup   child.parents=[<cardId>] child.status=ready\nclaim#1 owner=main   -> status=running  token=<redacted>\nclaim#2 owner=other  -> Error: card dependencies are not done.     # misleading\n\n########## AFTER (this fix) ##########\nsetup   child.parents=[<cardId>] child.status=ready\nclaim#1 owner=main   -> status=running  token=<redacted>\nclaim#2 owner=other  -> Error: card already claimed by main.       # correct\n```\n\n<details><summary>Repro driver (throwaway, not committed)</summary>\n\n```ts\nimport { mkdtempSync } from \"node:fs\";\nimport { tmpdir } from \"node:os\";\nimport { join } from \"node:path\";\nimport { WorkboardStore } from \"./extensions/workboard/src/store.ts\";\nimport { createWorkboardSqliteStores } from \"./extensions/workboard/src/sqlite-store.ts\";\n\nconst s = createWorkboardSqliteStores({\n  dbPath: join(mkdtempSync(join(tmpdir(), \"wb-\")), \"workboard.sqlite\"),\n});\nconst store = new WorkboardStore(s.cards, {\n  boards: s.boards, subscriptions: s.subscriptions, attachments: s.attachments,\n});\n\nconst parent = await store.create({ title: \"Parent A\", status: \"todo\" });\nconst child  = await store.create({ title: \"Child B\",  status: \"todo\" });\nawait store.linkCards(parent.id, child.id);          // real parent->child dependency\nawait store.update(parent.id, { status: \"done\" });\nawait store.promoteReady();                          // child -> ready\n\nconst first = await store.claim(child.id, { ownerId: \"main\", ttlSeconds: 60 });\nconsole.log(\"claim#1 ->\", first.card.status);        // running\ntry { await store.claim(child.id, { ownerId: \"other\" }); }\ncatch (e) { console.log(\"claim#2 ->\", e.message); }\n```\n\n</details>\n\n### Regression test (now effective)\n\nThe corrected test fails on the pre-fix guard order and passes after the fix:\n\n```\n# new test @ FIXED store.ts\n  Tests  1 passed\n\n# new test @ PRE-FIX store.ts (HEAD~1)\n  × reports already claimed instead of dependency error for a claimed dependency-backed card\n  AssertionError: expected [Function] to throw error matching /already claimed/\n    but got 'card dependencies are not done.'\n```\n\n### Full suite + lint\n\n```\n$ node scripts/run-vitest.mjs extensions/workboard/src/store.test.ts\n  Test Files  1 passed (1)\n       Tests  80 passed (80)\n\n$ node scripts/run-oxlint.mjs extensions/workboard/src/store.ts extensions/workboard/src/store.test.ts\n  exit 0\n```\n\n1 production line moved + 1 effective regression test. Bounded to `extensions/workboard/src/`. No config, SDK, CLI, docs, or changelog surface was added.\n",
+        "branch": "fix/workboard-claim-dependency-guard-ordering",
+        "head_sha": "fbb9293dc58a8687c4e2e7f53cf7ed160dfc8afa",
+        "author": "wm0018",
+        "labels": [
+          "size: XS",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof",
+          "plugin: workboard"
+        ],
+        "files": [
+          {
+            "path": "extensions/workboard/src/store.test.ts",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/workboard/src/store.ts",
+            "additions": 7,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 36,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-104071",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104071.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 87,
+          "gatingTotal": 82,
+          "counts": {
+            "SUCCESS": 58,
+            "SKIPPED": 27,
+            "FAILURE": 2
+          },
+          "blockers": [
+            "QA Smoke CI (profile 1/2):FAILURE",
+            "QA Smoke CI (profile 2/2):FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "QA Smoke CI (profile 1/2):FAILURE",
+            "QA Smoke CI (profile 2/2):FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3490,
+    "total_ms": 2096,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 2178
+        "ms": 574
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1303
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -102,11 +167,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 1299
+        "ms": 204
       },
       {
         "name": "append_ledger",
