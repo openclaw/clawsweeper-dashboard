@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T04:43:22.455Z",
+  "generated_at": "2026-07-11T04:44:49.057Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T01:43:19.578Z",
+  "since": "2026-07-11T01:44:48.610Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,11 +14,11 @@
   "comment_ids": [
     4942465232
   ],
-  "status_comment_id": 4942465411,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 661,
-  "commands_seen": 329,
-  "actionable": 3,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -38,14 +38,14 @@
       "comment_version_key": "4942465232:2026-07-11T04:41:51Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/102243#issuecomment-4942465232",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 102243,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-11T04:41:51Z",
       "comment_updated_at": "2026-07-11T04:41:51Z",
-      "status_comment_id": 4942465411,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -69,472 +69,36 @@
       "review_lease_comment_id": null,
       "expected_item_updated_at": null,
       "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 102243,
-          "dispatch_key": "router-3e5e51da097eba2f",
-          "dispatched_at": "2026-07-11T04:43:23.467Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T04:43:24.659Z",
-          "response_comment_id": "4942465411",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(write): add append mode to prevent silent data loss",
-        "body": "## What Problem This Solves\n\nThe `write` tool always overwrites files completely. When multiple isolated sessions (e.g., main session + cron jobs) write to the same shared file, the last write wins and **prior content is silently destroyed** with no warning, no backup, and no recovery path. This is especially dangerous with cron/isolated sessions, where sub-agents independently decide to \"log results\" to a shared file and overwrite hours of main-session work.\n\nPrompt-level guards are insufficient — sub-agents ignore or forget \"NEVER overwrite\" / \"APPEND ONLY\" instructions under complex task prompts.\n\n## Why This Change Was Made\n\nThe existing `write` tool provides no append primitive. To append, an agent must:\n1. Read the full file\n2. Concatenate new content\n3. Write the entire result back\n\nThis is wasteful, error-prone, and most models naturally interpret \"write\" as \"append\" rather than \"overwrite.\" Adding a first-class `append: true` parameter resolves the root cause — agents can append without synthesizing a read-concatenate-overwrite sequence.\n\nInternal primitives already exist: `fs.appendFile` for host paths, `root.append()` for workspace-scoped paths in `@openclaw/fs-safe`. This change exposes them through the model-facing tool API.\n\n## User Impact\n\n- **No breaking change**: default behavior (no `append` param) is identical — overwrite\n- **New capability**: `write` with `append: true` appends instead of overwrites\n- **Safer default**: append mode skips the \"identical content → no-op\" optimization so intentional duplicate content is preserved\n- **Backward-compatible**: existing write operations, prompts, and workflows unchanged\n\n## Evidence\n\n### Unit tests (12/12 passing)\n```\n Test Files  1 passed (1)\n      Tests  12 passed (12)\n```\n\n5 new tests covering:\n- Append to existing file preserves prior content\n- Append to non-existent path creates the file\n- Default overwrite still works when append is not set\n- Overwrite with identical content still returns no-op\n- Malformed `append: \"true\"` (string) is rejected with clear error\n\n### Live proof\n\n```\nStep 1 - Write initial (overwrite):    content=\"line 1\\n\"                    ✅\nStep 2 - Append to existing file:      content=\"line 1\\nline 2\\n\"            ✅\nStep 3 - Overwrite (default):          content=\"replaced\\n\"                  ✅\nStep 4 - Append to new file (creates): content=\"fresh\\n\"                     ✅\nStep 5 - Overwrite identical content:  \"No changes made ...\"                 ✅\n```\n\n### Scope\n\n**4 files changed**, 0 unrelated changes:\n- `src/agents/sessions/tools/write.ts` — core schema/execute/recovery\n- `src/agents/sessions/tools/tool-contracts.ts` — WriteToolInput type\n- `src/agents/agent-tools.read.ts` — appendFile for sandbox/host/workspace paths\n- `src/agents/sessions/tools/write.test.ts` — 5 new append-mode tests\n\nCloses #40001\n\n\n## P2 fixes (post-review)\n\n### Sandbox byte preservation\n\nThe sandbox append path was a UTF-8 read-modify-write (`existing + content`); files containing invalid UTF-8 bytes had those bytes replaced with U+FFFD during append. Adds `SandboxFsBridge.appendFile` that opens the pinned file with `O_APPEND | O_CREAT` via the same Python helper that backs `writeFile`, mirroring host `fs.appendFile` and `@openclaw/fs-safe` `root.append` semantics. Binary files (build artifacts, NDJSON chunks, image data) keep their original bytes through the sandbox path.\n\n- `src/agents/sandbox/fs-bridge.ts` — `appendFile` impl on `SandboxFsBridgeImpl`, mirrors `writeFile` exactly (Buffer|string normalization, path-safety guard, pinned entry).\n- `src/agents/sandbox/fs-bridge-mutation-helper.ts` — `APPEND_FLAGS = O_WRONLY | O_CREAT | O_APPEND`, `write_append(parent_fd, basename, stdin_buffer)` Python helper (opens, fstat checks, writes stdin chunks, fsync), `'append'` dispatcher branch, `buildPinnedAppendPlan` JS builder.\n- `src/agents/sandbox/fs-bridge.types.ts` — interface declaration.\n- `src/agents/sandbox/remote-fs-bridge.ts` — `appendFile` impl on `RemoteShellSandboxFsBridge`.\n- `extensions/openshell/src/fs-bridge.ts` — `appendFile` impl on `OpenShellFsBridge` (uses `@openclaw/fs-safe` `root.append`).\n- `src/agents/agent-tools.read.ts:941-961` — `appendFile` collapses to a one-liner `bridge.appendFile({ ... mkdir: true })`.\n\n### Post-mutation abort check\n\nThe if/else unification in the append branch silently dropped the `if (signal?.aborted) throw` that current main retains after `await ops.writeFile(...)` (sibling reference: `src/agents/sessions/tools/edit.ts:460-463`). Restore the check between the append/overwrite branch and the success return so cancellation-after-success flows through `recoverSuccessfulWrite` (which now has append-aware content checks via `isRecoveredAppendContent`).\n\n- `src/agents/sessions/tools/write.ts:484-507` — `if (signal?.aborted) throw new Error(\"Operation aborted\")` inserted between the if/else (append|write) and the success return, applies to both branches.\n\n### Tests\n\n- `src/agents/sessions/tools/write.test.ts` — new tests `recovers success when appendFile aborts AFTER successfully appending` and `propagates abort when no successful append happened`. The first proves append-after-success recovery returns \"Successfully appended\"; the second proves abort-without-success does NOT manufacture a success.\n- `src/agents/sandbox/fs-bridge.shell.test.ts` — new `appends via O_APPEND (no temp file, no os.replace)` asserts `write_append(` is in the script, the dispatched operation is `append` (argv[1] == \"append\"), and the args include the target mount root + parent + basename.\n- `src/agents/sandbox/fs-bridge.anchored-ops.test.ts` — new pinned case `append pins canonical parent + basename` exercises `appendFile` through the canonical entrypoint.\n- `src/agents/sandbox/fs-bridge.boundary.test.ts` — new `blocks appends into read-only bind mounts` mirrors the existing `writeFile` boundary rejection.\n\n### Sandbox contract surface\n\n`SandboxFsBridge` is now `appendFile`-complete across `SandboxFsBridgeImpl`, `RemoteShellSandboxFsBridge`, `OpenShellFsBridge`, and the host-sandbox test stub. Test fixtures that declare inline `SandboxFsBridge` literals (`agent-tools-agent-config.test.ts`, `apply-patch.test.ts`) gain matching `appendFile` entries to satisfy the contract.\n\n## Verification\n\nLocal fallback (Crabbox unavailable in this env), per CLAUDE.md \"report local fallback\":\n\n```\n$ node scripts/run-vitest.mjs run src/agents/sessions/tools/write.test.ts \\\n    src/agents/sandbox/fs-bridge.boundary.test.ts \\\n    src/agents/sandbox/fs-bridge.shell.test.ts \\\n    src/agents/sandbox/fs-bridge.anchored-ops.test.ts \\\n    src/agents/agent-tools-agent-config.test.ts \\\n    src/agents/apply-patch.test.ts --reporter=verbose\n Test Files  6 passed (6)\n      Tests  91 passed (91)\n\n$ node scripts/run-oxlint.mjs <touched files>\nexit=0\n\n$ node scripts/run-tsgo.mjs\nexit=0\n```\n\nHead: 881c195db7.\n",
-        "branch": "fix/write-append-mode",
-        "head_sha": "881c195db7e7bd125820621330694e932b65683b",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "app: web-ui",
-          "agents",
-          "size: L",
-          "extensions: openshell",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/openshell/src/fs-bridge.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools-agent-config.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.read.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/apply-patch.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/fs-bridge-mutation-helper.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/fs-bridge.anchored-ops.test.ts",
-            "additions": 10,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/fs-bridge.boundary.test.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/fs-bridge.shell.test.ts",
-            "additions": 30,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/fs-bridge.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/fs-bridge.types.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sandbox/remote-fs-bridge.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/tool-contracts.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/write.test.ts",
-            "additions": 156,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/write.ts",
-            "additions": 86,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/system-prompt.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/test-helpers/host-sandbox-fs-bridge.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-catalog.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/lib/agents/display.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 501,
-        "deletions": 12,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102243",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102243.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 32,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T04:41:49.522Z"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:103522:4934739257:2026-07-11T04:40:32Z:clawsweeper_needs_human",
-      "comment_id": "4934739257",
-      "comment_version_key": "4934739257:2026-07-11T04:40:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103522#issuecomment-4934739257",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103522,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-10T11:17:14Z",
-      "comment_updated_at": "2026-07-11T04:40:32Z",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] The remaining merge gates are contributor or feature-owner live behavior proof and refreshed exact-head review after rebase, not a concrete source defect suitable for automated repair.; Cleared: The diff introduces no dependency, workflow, permission, secret, package-resolution, download, install, or supply-chain execution changes, and its browser actions stay scoped to the persisted session target. (sha=091ab280323ebdeb14de3c977c7809b9894ead71)",
-      "review_summary": "The PR persists Google Meet browser-tab identity and ownership at join, uses them to leave Chrome sessions safely, propagates uncertain departure to CLI and gateway callers, and adds documentation and regression tests.\n\nPR surface: Source +246, Tests +324, Docs 0. Total +570 across 6 files.\n\nReproducibility: yes. Current main's Chrome leave path performs session cleanup without touching the browser participant, and the linked issue provides deterministic live reproduction steps from a real deployment.",
-      "review_followup": "- [P1] The remaining merge gates are contributor or feature-owner live behavior proof and refreshed exact-head review after rebase, not a concrete source defect suitable for automated repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "091ab280323ebdeb14de3c977c7809b9894ead71",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-11T04:39:13.552Z",
-      "review_lease_owner": "github-run-29139718304-1",
-      "review_lease_comment_id": "4942408931",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "4a4a6f7e7702f5b9f616671d28135a47e2246bac5987e5cadc933b5ad6feaa33",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(google-meet): actually leave the Meet call in the browser on leave (#103386)",
-        "body": "## Summary\n\nFixes #103386.\n\n`openclaw googlemeet leave <session-id>` on the Chrome transports printed `left <session-id>` and marked the session `ended`, but only ran the registered stop hook (the realtime audio bridge; in transcribe mode nothing at all). No code path touched the meeting, so the browser participant kept sitting in the call — a ghost participant receiving audio/captions after the operator was told it left. Twilio sessions already end the real call via their stop hook, so the transports were inconsistent.\n\n### Change\n\n- `extensions/google-meet/src/transports/types.ts` + `chrome.ts`: join now persists the exact tab identity on the session — `browserTargetId` plus `browserTabOpenedByPlugin` (opened via `/tabs/open` vs adopted via `reuseExistingTab`). `openMeetWithBrowserRequest` returns it through both the local and node launch paths.\n- `chrome.ts`: new `leaveChromeMeet` / `leaveChromeMeetOnNode` (shared `leaveMeetWithBrowserRequest` core). Leave acts on the persisted target only: verifies the tab still exists (already-closed is a clean no-op), clicks Meet's **Leave call** button via browser evaluate (reliable now that tabs are pinned to `?hl=en`), then closes the tab **only when the plugin opened it** — reused user-owned tabs get the click but stay open. Failures degrade to session notes instead of throwing.\n- `extensions/google-meet/src/runtime.ts`: `leave()` calls the browser leave for `chrome`/`chrome-node` sessions and records the outcome in session notes. Guards:\n  - sessions with no tracked tab (e.g. `chrome.launch: false`, or browser control never returned a targetId) get an explicit note instead of a guessy URL match;\n  - the internal tab-reassignment path in `join()` passes `keepBrowserTab: true` so agent handoff keeps the in-call tab and avoids lobby re-admission;\n  - the shared-tab guard compares the persisted `browserTargetId` + node context — same meeting URL in a different browser/node no longer suppresses departure.\n- `docs/plugins/google-meet.md`: `leave` row now documents the Chrome-transport behavior.\n\n### Review follow-up (b95168f8ece)\n\nAll three ClawSweeper P1 findings addressed: leave no longer rediscovers tabs by URL (persisted `targetId` from join), never closes tabs it did not open (opened-vs-reused ownership tracked), and the shared-tab guard is scoped to the actual target + browser context. A reused-tab regression test now covers the default `reuseExistingTab: true` path end to end.\n\n## Verification\n\n- `pnpm test extensions/google-meet` — 17 files, 209 tests passed. New/updated regressions: plugin-opened tab leave (click + close on the exact persisted target), reused user-owned tab leave (click, `DELETE` throws in the mock if attempted, tab stays open), already-closed tab leave (clean note, no `DELETE`), and a vm test that the leave script clicks only an enabled Leave call button.\n- `pnpm tsgo:extensions && pnpm tsgo:extensions:test` — clean.\n- oxfmt / oxlint on touched files — clean.\n\n## Real behavior proof\n\nBehavior addressed: `googlemeet leave` leaves the browser participant in the Google Meet call on chrome/chrome-node transports while reporting `left`.\nReal environment tested: No live Google Meet call was run; behavior is proven at the browser-proxy request boundary with the plugin's existing stubbed-gateway test harness (same harness the join/status paths use), covering opened, reused, and already-closed tab lifecycles.\nExact steps or command run after this patch: `pnpm test extensions/google-meet` and `pnpm test extensions/google-meet/index.test.ts`.\nEvidence after fix: \"leaves the Meet call in the browser when a chrome session leaves\" asserts the `/act` evaluate carries the leave-click script against the persisted join target and that `DELETE /tabs/local-meet-tab` is issued; \"keeps a reused Meet tab open on leave\" asserts the same click against an adopted pre-existing tab with a mock that throws on any `DELETE`.\nObserved result after fix: 209/209 tests pass; leave issues real browser actions scoped to the session's own tab and records an explanatory note in every fallback path.\nWhat was not tested: A live Meet meeting (real Chrome, real Google account) and the chrome-node transport against a physical node; both share `leaveMeetWithBrowserRequest`, which is covered by the harness. Live-call proof of actual participant departure is pending a real Meet setup.\n",
-        "branch": "fix/103386-googlemeet-chrome-leave",
-        "head_sha": "091ab280323ebdeb14de3c977c7809b9894ead71",
-        "author": "lonexreb",
-        "labels": [
-          "docs",
-          "size: L",
-          "plugin: google-meet",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "docs/plugins/google-meet.md",
-            "additions": 19,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/index.test.ts",
-            "additions": 324,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/cli.ts",
-            "additions": 15,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/runtime.ts",
-            "additions": 70,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/transports/chrome.ts",
-            "additions": 171,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/google-meet/src/transports/types.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 603,
-        "deletions": 33,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103522",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103522.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 27,
-            "FAILURE": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI (profile 1/2):FAILURE",
-            "QA Smoke CI (profile 2/2):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "QA Smoke CI (profile 1/2):FAILURE",
-            "QA Smoke CI (profile 2/2):FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:103622:4942458368:2026-07-11T04:40:16Z:re_review",
-      "comment_id": "4942458368",
-      "comment_version_key": "4942458368:2026-07-11T04:40:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103622#issuecomment-4942458368",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103622,
-      "author": "chengzhichao-xydt",
-      "author_id": 264300353,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T04:40:16Z",
-      "comment_updated_at": "2026-07-11T04:40:16Z",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103622,
-          "dispatch_key": "router-0fc6755abec999ea",
-          "dispatched_at": "2026-07-11T04:43:14.789Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T04:43:16.044Z",
-          "response_comment_id": "4942458623",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(extensions/anthropic): preserve migrated model entries when inherited keys shadow converted refs",
-        "body": "@/tmp/pr-body-103622.md",
-        "branch": "fix/anthropic-cli-migration-own-entries",
-        "head_sha": "2792ed95134a95ccc150419e661c9b55046dfd9f",
-        "author": "chengzhichao-xydt",
-        "labels": [
-          "size: S",
-          "extensions: anthropic",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "extensions/anthropic/cli-migration.test.ts",
-            "additions": 94,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/cli-migration.ts",
-            "additions": 14,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 108,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103622",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103622.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 16,
-            "SKIPPED": 34,
-            "IN_PROGRESS": 40
-          },
-          "blockers": [
-            "QA Smoke CI (profile 1/2):FAILURE",
-            "QA Smoke CI (profile 2/2):FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "QA Smoke CI (profile 1/2):FAILURE",
-            "QA Smoke CI (profile 2/2):FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T04:43:22.769Z"
+      "reason": "comment version already processed in ledger"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5783,
+    "total_ms": 1647,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 696
+        "ms": 433
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2167
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 18853
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5346
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "claim_dispatch_commands",
@@ -542,11 +106,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2891
+        "ms": 1200
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
