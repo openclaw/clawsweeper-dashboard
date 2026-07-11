@@ -8,6 +8,8 @@ records from the `state` branch into a compact dashboard on `main`.
 
 - The `state` branch is the durable source. `README.md` is a generated projection,
   not an independently edited source of truth.
+- Immutable action-ledger shards are durable source. Current ledger indexes and
+  dashboard metrics are disposable projections and never mutation authority.
 - Dashboard rows are snapshots. They must state that boundary and link operators
   to the source record and live GitHub item for current status.
 - Rendering is read-only. GitHub mutations, repair execution, routing, and state
@@ -21,6 +23,7 @@ records from the `state` branch into a compact dashboard on `main`.
 2. Fast recognition of maintainer decisions and failed automation.
 3. Fresh, deterministic rendering from the current durable state.
 4. Compact output that remains useful at fleet scale.
+5. Deterministic ledger replay with fail-closed provenance and privacy checks.
 
 The current state data shape is an integration contract. Renderer changes must
 replay against `origin/state`, preserve supported records, and add focused
@@ -32,6 +35,10 @@ This repository and its dashboard are public. Render only state intended for
 public disclosure; never add credentials, private artifacts, or unredacted
 security-sensitive details. Sensitive routing and remediation stay in approved
 private or upstream security workflows.
+
+The action ledger stores bounded machine-readable facts. It rejects raw bodies,
+comments, diffs, patches, prompts, logs, local paths, credentials, private
+hosts, and email addresses before projection.
 
 ## Non-goals
 
