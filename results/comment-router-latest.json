@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T16:07:19.505Z",
+  "generated_at": "2026-07-11T16:07:32.621Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T13:07:17.518Z",
+  "since": "2026-07-11T13:07:30.445Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    89040
+    103390
   ],
   "comment_ids": [
-    4947444032
+    4947446536
   ],
-  "status_comment_id": 4947444531,
+  "status_comment_id": 4947446917,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4947444032:2026-07-11T16:05:55Z:re_review",
-      "comment_id": "4947444032",
-      "comment_version_key": "4947444032:2026-07-11T16:05:55Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4947444032",
+      "idempotency_key": "comment-router:openclaw/openclaw:103390:4947446536:2026-07-11T16:06:07Z:re_review",
+      "comment_id": "4947446536",
+      "comment_version_key": "4947446536:2026-07-11T16:06:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103390#issuecomment-4947446536",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T16:05:55Z",
-      "comment_updated_at": "2026-07-11T16:05:55Z",
-      "status_comment_id": 4947444531,
+      "issue_number": 103390,
+      "author": "ss251",
+      "author_id": 32437884,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-11T16:06:07Z",
+      "comment_updated_at": "2026-07-11T16:06:07Z",
+      "status_comment_id": 4947446917,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -78,126 +78,141 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89040,
-          "dispatch_key": "router-dddb1dba8568bb46",
-          "dispatched_at": "2026-07-11T16:07:20.270Z"
+          "item_number": 103390,
+          "dispatch_key": "router-17dbd0572c712a4f",
+          "dispatched_at": "2026-07-11T16:07:33.711Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-11T16:07:21.877Z",
-          "response_comment_id": "4947444531",
+          "commented_at": "2026-07-11T16:07:35.019Z",
+          "response_comment_id": "4947446917",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Preserve `fs.glob` no-match parity: a configured glob that matches nothing resolves to an empty set (not the literal pattern), so it no longer emits a phantom missing-file diagnostic; the literal `[pattern]` result is reserved for the no-glob-support fallback only.\n- Preserve `fs.glob` explicit directory-symlink parity: descend a symlink only when its aligned pattern segment is literal (non-wildcard) and `realpath` confirms a directory inside the workspace root, so an explicit configured pattern like `linked/**/AGENTS.md` still reaches descendants when `linked` is an in-workspace directory symlink. Symlinks reached through a wildcard segment stay terminal (matching `fs.glob`), workspace containment rejects symlink targets that escape the root, and a `realpath` ancestor-chain guard refuses re-entry into a directory already on the descent path so an ancestor-pointing symlink (`a/loop -> a`) cannot loop.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`** / **`src/hooks/internal-hook-dispatch.ts`**\n- Keep the public `triggerInternalHook(event)` signature (re-exported via `plugin-sdk/hook-runtime`) unchanged and matching `main` — no new public parameter or exported options type.\n- Move the bootstrap-only handler scheduling (`yieldBetweenHandlers` with `setImmediate` yield between handlers) and per-handler timing/slow-handler (>500ms) warning into an internal `internal-hook-dispatch` module that is not on the plugin SDK surface.\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable yielding between handlers for `agent:bootstrap` hook triggers (via the internal dispatch entrypoint)\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Keep the public `resolveBootstrapFilesForRun` params (re-exported via `plugin-sdk/agent-harness-runtime`) callback-free and matching `main`; route embedded-runner substage timing through an internal `resolveBootstrapFilesForRunWithTiming` variant kept off the SDK surface.\n- Support the new async workspace file loading interface.\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — yield-between-handlers ordering, handler timing reporting, and slow handler warning exercised through the internal dispatch entrypoint\n- `workspace.load-extra-bootstrap-files.test.ts` — a no-match glob resolves to an empty set with no missing-file diagnostic (fs.glob parity)\n- `workspace.load-extra-bootstrap-files.test.ts` — explicit directory-symlink glob parity across three states (real `fs.symlink`): a literal-named directory symlink is descended and its descendants match; a `**`-reached symlink stays terminal; an ancestor-pointing (cyclic) literal symlink terminates without looping\n\nThe public plugin SDK surface is unchanged: `node scripts/plugin-sdk-surface-report.mjs` exits 0 with no new package-exported entrypoints. All existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\n### Directory-symlink glob parity proof\n\n- **Behavior addressed**: The cooperative walker only descended `Dirent.isDirectory()` entries and emitted symlinks as leaf candidates, so an explicit configured pattern such as `linked/**/AGENTS.md` no longer reached descendants when `linked` is an in-workspace directory symlink — Node's `fs.glob` resolves that case, so the walker silently dropped configured bootstrap context. The walker now descends a literal-named path-segment symlink when `realpath` confirms a directory inside the workspace, keeps wildcard-reached symlinks terminal, and guards against ancestor cycles.\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`. Three regression tests build real temp directories with real `fs.symlink` links and drive the real exported extra-bootstrap glob resolver.\n- **Steps run**: `npx vitest run src/agents/workspace.load-extra-bootstrap-files.test.ts src/agents/workspace.test.ts`\n- **Observed result**: `Test Files 4 passed (4)`, `Tests 156 passed (156)`. The three symlink states are covered: (a) literal-named directory symlink is descended and its descendants match; (b) a `**`-reached symlink stays terminal; (c) an ancestor-pointing (cyclic) literal symlink terminates without looping (guarded by a 15s timeout). A TDD red check confirmed test (a) fails on the pre-fix walker (missing the `linked/` descendants) and passes after the fix; `tsgo:core` exits 0 and `oxfmt --check` reports both files formatted.\n- **What was not tested**: Behavior on Windows/`EPERM`/`ENOSYS` filesystems where symlink creation is unavailable — those cases skip cleanly rather than assert.\n\nCloses #87509\n\n\n\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "b3aefd9087b9aa14a97732fdc64a067c68119130",
-        "author": "jerry-xin",
+        "title": "fix(agents): adopt orphaned managed worktrees left by a crash between git worktree add and registry insert",
+        "body": "## What Problem This Solves\n\nA gateway crash (OOM kill, forced restart) landing between `git worktree add` and the registry insert inside `ManagedWorktreeService.create()` leaves an on-disk worktree and an `openclaw/<name>` branch that no managed API can ever see, repair, or remove: `list()`/`get()` never show it, every `gc()` pass skips it forever, and any later `create()` with the same name fails hard with `branch already exists`. The only way out today is manual operator surgery (`git worktree remove` + `git branch -D`) outside the managed API. Reported with source-level analysis in #103239; this PR makes the orphan self-heal (gc adopts it; a retried create adopts it and preserves the caller's owner) while leaving foreign/detached worktrees untouched.\n\n## Summary\n\n- Problem: A crash between `git worktree add` and `insertRegistryWorktree()` inside `ManagedWorktreeService.create()` leaves a live git worktree + `openclaw/<name>` branch with no registry row. `reconcileOrphans()` explicitly skips it forever (invisible to `list()`/`gc()`), and a retried `create()` with the same name dead-ends on `branch already exists`.\n- Why it matters: In real deployments (OOM kill, forced restart) the orphan is permanently unrecoverable through the managed API — only manual `git worktree remove` + `git branch -D` unblocks the name.\n- What changed: recovery happens through the retried `create()` path only. `create()`'s branch-exists guard self-heals the exact crashed-create signature (live worktree at the derived path on exactly `refs/heads/openclaw/<name>`, no registry row) instead of dead-ending: it atomically claims the path in the registry (`insertRegistryWorktreeIfPathFree()`, a single Kysely `INSERT ... SELECT ... WHERE NOT EXISTS (live row at path)` — no schema change), then re-provisions (`copyIncludedFiles()` + `runSetupScript()`), preserving the caller's `ownerKind`/`ownerId` and recording the real resolved base. Only the claim holder may provision or destroy the path: a losing adopter provably touches nothing, and a holder whose re-provisioning fails removes the worktree and deletes its own row. The registry carries a persisted readiness contract: `readiness ('provisioning'|'ready')` (closed union; additive `ensureColumn` migration per repo precedent — backfill-as-ready is provably safe because no release tag contains the worktrees feature, and unreleased-main builds inserted rows only post-provisioning). The claim inserts `provisioning`; a single UPDATE flips to `ready` only after copy+setup succeed. Every usable-record path is gated on ready (`findLiveByOwner` filters in SQL; the entry shortcut and claim-loser throw a closed `WorktreeProvisioningError`; `restore()` revives as ready; provisioning rows are leases with heartbeats (`lastActiveAt` bumped at claim, post-copy, and at the ready flip): gc reaps only leases SILENT past `PROVISIONING_STALE_MS` — a persisted holder-liveness signal, so claim age alone can never kill a live-but-slow holder — restoring background recovery for auto-named orphans, while a reaped-mid-flight create fails closed with `WorktreeProvisioningReapedError`; a provisioning row whose directory vanished is hard-deleted (branch + row; no snapshot, no user work) so the name stays genuinely retriable). The gateway protocol's `WorktreeRecordSchema` gains an additive optional `readiness` enum (no version bump). Normal (non-adopting) `create()` uses the identical claim-early ordering (claim immediately after `git worktree add`; both paths share one claim → provision-as-holder → holder-only-cleanup helper), establishing the invariant that an in-flight create always holds a live row — so the no-row+live-worktree signature genuinely means a crashed create, and an in-flight worktree can never be adopted, re-provisioned, or destroyed by a concurrent same-name call. Every new live registry row is uniqueness-enforced through the one claim. `reconcileOrphans()`/gc remains preserve-only (upstream behavior) — background adoption is deliberately not shipped (see Risks). `git.ts` additively parses the porcelain `branch` field for the adoption signature check.\n- What did NOT change (scope boundary): gc keeps upstream's preserve-only behavior for foreign/detached and live git-listed worktrees (only dead debris and stale provisioning rows are cleaned); no protocol version bump; no changes to snapshot semantics; web UI status label deliberately unchanged (would pull in i18n regeneration disproportionate to this PR).\n\nThis is AI-assisted work (Claude conductor + Claude worker/verifier agents, human-operated); every change was gated on tests written first and independently reviewed by a fresh-context model before submission.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #103239\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Root Cause (if applicable)\n\n- Root cause: `create()` performs the irreversible git-side effects (`git worktree add`, branch creation) before the registry insert, with no crash-window reconciliation: `reconcileOrphans()` treated \"git still lists this directory as a live worktree\" purely as a preserve signal and never checked whether the worktree matches the managed naming scheme but lacks a registry row.\n- Missing detection / guardrail: no adopt-or-repair path for the crashed-create signature; `create()`'s branch-exists guard had no way to distinguish \"user's foreign branch\" from \"our own crashed create()\".\n- Contributing context (if known): the registry has no `name` column (name derives from the path's last segment), so adoption needs no extra bookkeeping — the orphan is fully re-derivable from path + branch.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n  - [ ] Unit test\n  - [x] Seam / integration test\n  - [ ] End-to-end test\n  - [ ] Existing coverage already sufficient\n- Target test or file: `src/agents/worktrees/service.test.ts`\n- Scenario the test should lock in: a live worktree + managed branch with no registry row (the exact end-state of a crash between `git worktree add` and the registry insert) is adopted by a retried `create()` with the same name — preserving the caller's `ownerKind`/`ownerId`, re-running provisioning (include files + setup script restored, real `baseRef` recorded), and holding the loser-touches-nothing / holder-only-destruction invariants under deterministic interleavings; gc during an in-flight normal `create()` adopts nothing and exactly one live row remains; a parked in-flight create cannot be adopted, re-provisioned, or destroyed by a concurrent same-name retry (same-owner and foreign-owner both covered, setup executes exactly once); a failing setup leaves no worktree, branch, or registry row.\n- Why this is the smallest reliable guardrail: the tests use the real `git` binary and real SQLite registry (the file's established pattern — no mocks), produce the crash end-state via production code (`create()` then deleting only the registry row), and assert through the public service API only.\n- Existing test that already covers this (if any): \"deletes unregistered orphan debris but preserves git-listed worktrees\" covers the foreign/detached case and stays green, locking in that non-managed worktrees are never claimed.\n- If no new test is added, why not: N/A — two new tests added.\n\n## User-visible / Behavior Changes\n\n- A retried `create()` with the same name after a crashed create now succeeds (adopts, re-provisions, returns the record) instead of failing with `branch already exists`.\n- gc behavior is unchanged from upstream (preserve-only for live worktrees); foreign or detached-HEAD worktrees are unaffected.\n- Concurrent same-path registrations can no longer produce duplicate live registry rows (atomic claim; loser gets the existing \"name already in use\" semantics).\n- `list()` now shows a worktree from claim-time (during provisioning) rather than after setup completes; failed creates still end with no registry row.\n\n## Diagram (if applicable)\n\n```text\nBefore:\ncreate() crash after `git worktree add` -> live worktree + branch, no registry row\n  -> create(same name): \"branch already exists\" (dead end; manual git surgery required)\n\nAfter:\ncreate() crash after `git worktree add` -> live worktree + branch, no registry row\n  -> create(same name): exact orphan signature -> atomic path claim -> re-provision\n     (owner + real base preserved) -> returns record\n  -> claim loser (concurrent registration won): touches nothing; standard in-use semantics\n  -> gc: preserve-only (unchanged upstream behavior)\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`No`)\n- Secrets/tokens handling changed? (`No`)\n- New/changed network calls? (`No`)\n- Command/tool execution surface changed? (`No`)\n- Data access scope changed? (`No`)\n- If any `Yes`, explain risk + mitigation: N/A. Adoption is gated on an exact `git worktree list --porcelain` path + `refs/heads/openclaw/<name>` branch match; fabricating that state requires local filesystem/git access equivalent to what `create()` already requires. `insertRegistryWorktree` is the same call path `create()` already uses.\n\n## Repro + Verification\n\n### Environment\n\n- OS: macOS 26 (arm64); fix is platform-independent (pure git + SQLite service logic)\n- Runtime/container: Node 22 / bun, source checkout\n- Model/provider: N/A\n- Integration/channel (if any): N/A\n- Relevant config (redacted): default `OPENCLAW_STATE_DIR`-backed state\n\n### Steps\n\n1. `ManagedWorktreeService.create({ repoRoot, name: \"task-1\" })` and kill the process after `git worktree add` completes but before the registry insert (repro: create normally, then delete only the registry row — identical end state).\n2. Run `service.create({ repoRoot, name: \"task-1\" })` again.\n\n### Expected\n\n- retried create succeeds (adopts, re-provisions, returns the record); gc preserves the orphan untouched.\n\n### Actual\n\n- Before this PR: gc skips it forever; retried create throws `branch already exists: openclaw/task-1`. After this PR: expected behavior (see tests).\n\n## Evidence\n\n- [x] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [ ] Screenshot/recording\n- [ ] Perf numbers (if relevant)\n\nBefore (tests added, fix stashed):\n\n```\n❯ |agents| src/agents/worktrees/service.test.ts (24 tests | 2 failed)\nFAIL … adopts a worktree orphaned when create() crashed …, during gc()\n  AssertionError: expected undefined to match object {…}\nFAIL … adopts an orphaned worktree instead of throwing on a retried create() …\n  Error: branch already exists: openclaw/orphan-retry\n```\n\nAfter:\n\n```\npnpm test src/agents/worktrees/service.test.ts src/agents/worktrees/registry.test.ts\n Test Files  2 passed (2)\n      Tests  41 passed (41) agents shard + 23 passed state shard\n```\n\nReal-behavior proof on the FROZEN FINAL head e5b7677497 (all four requested scenarios — active holder survives gc, SIGKILLed holder reaped after lease expiry and recreated fully provisioned, missing-path claim cleaned to a retriable name, pre-column DB backfills ready): https://github.com/openclaw/openclaw/pull/103390#issuecomment-4947439791. Earlier ordering-specific transcript: https://github.com/openclaw/openclaw/pull/103390#issuecomment-4944938951 — Window B is a genuine mid-provisioning SIGKILL (exit 137) showing the crash state is observable (claim-time row, missing setup marker), gc preserves it, and the operator recovery path works end-to-end (remove() cleans worktree+branch, fresh create fully provisions); Window A (add→claim, no user code) is a labeled constructed end-state recovered by retried-create adoption with full re-provisioning. Supersedes the earlier transcript (#issuecomment-4937129438), which demonstrated the pre-claim-early ordering.\n\nAlso green on the touched surface: `pnpm tsgo:core` (exit 0), `oxlint` (0 findings), `oxfmt --check` (formatted). Note: repo-wide `pnpm check` currently fails in its preflight `npm shrinkwrap guard` on an unmodified `origin/main` checkout in this environment (`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` for the `defu` override) — pre-existing and unrelated; no lockfile/override files are touched by this PR.\n\nThe previously-acknowledged gc-vs-create double-insert race is now eliminated by the atomic path claim (deterministic interleaving tests cover both directions, with a pasted negative control showing the pre-claim code produces the duplicate row). Remaining narrow edge deliberately out of scope: a lingering *removed* registry row at the same path still blocks create()-side adoption for a fresh orphan (name-reuse-after-remove + crash sequence).\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: full scoped test suite (25/25) against real git + real SQLite locally, including both new adoption tests and the pre-existing foreign-worktree preservation test; typecheck/lint/format on the touched files.\n- Edge cases checked: detached-HEAD foreign worktree (preserved), bare branch collision without a live worktree (still throws), owner preservation (`workboard`/`ownerId`) on retried-create adoption including `findLiveByOwner()` lookup, crash-before-setup retry re-provisioning (include file + setup marker restored, real base recorded), and full cleanup on a failing setup script during adoption-retry.\n- What you did **not** verify: a literal `kill -9` mid-`create()` on a production gateway (the crash end-state is reproduced through the service's own code paths instead); the two out-of-scope narrow edges above.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes`)\n- Config/env changes? (`No`)\n- Migration needed? (`No`)\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: schema/migration surface (new `readiness` column).\n  - Mitigation: additive `ensureColumn` per the repo's established migration pattern; backfill default provably correct (see body); legacy-DB backfill test included; fresh-vs-migrated CHECK divergence is unobservable to prod writes (closed TS union at every write site).\n- Risk: adopting a worktree that a user intentionally created outside the managed API at the exact managed path on an `openclaw/<name>` branch.\n  - Mitigation: that state is indistinguishable from (and equivalent to) a crashed managed create; adoption only registers it — it never deletes or modifies the worktree.\n- Risk: concurrent adoption attempts (gc vs retried create) racing for one path.\n  - Mitigation: eliminated — adoption is a single-statement atomic path claim with explicit loser handling; losers never provision, mutate, or destroy; covered by deterministic interleaving tests in both directions.\n\n",
+        "branch": "fix/103239-worktree-orphan-reconcile",
+        "head_sha": "e5b767749769b473023da0fba6787206d5f27882",
+        "author": "ss251",
         "labels": [
+          "app: web-ui",
+          "gateway",
+          "cli",
           "agents",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
+          "size: L",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 28,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/bootstrap-hooks.ts",
+            "path": "packages/gateway-protocol/src/schema/worktrees.ts",
             "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/git.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/registry.test.ts",
+            "additions": 36,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/registry.ts",
+            "additions": 83,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stage-timing.test.ts",
-            "additions": 42,
+            "path": "src/agents/worktrees/service.test.ts",
+            "additions": 384,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/service.ts",
+            "additions": 208,
+            "deletions": 35,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/types.ts",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stage-timing.ts",
-            "additions": 19,
-            "deletions": 0,
+            "path": "src/cli/worktrees-cli.ts",
+            "additions": 6,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
+            "path": "src/gateway/server-methods/worktrees.test.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 64,
-            "deletions": 41,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 317,
+            "path": "src/state/openclaw-state-db.generated.d.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/workspace.test.ts",
-            "additions": 148,
-            "deletions": 19,
+            "path": "src/state/openclaw-state-db.test.ts",
+            "additions": 50,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/workspace.ts",
-            "additions": 254,
-            "deletions": 46,
+            "path": "src/state/openclaw-state-db.ts",
+            "additions": 4,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 42,
+            "path": "src/state/openclaw-state-schema.generated.ts",
+            "additions": 2,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/internal-hook-dispatch.ts",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.test.ts",
-            "additions": 102,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 6,
-            "deletions": 44,
+            "path": "src/state/openclaw-state-schema.sql",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 13,
-        "additions": 1133,
-        "deletions": 153,
+        "changedFiles": 15,
+        "additions": 793,
+        "deletions": 42,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103390",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103390.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -206,16 +221,15 @@
           "total": 96,
           "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 34,
-            "IN_PROGRESS": 34,
-            "SKIPPED": 27,
+            "SUCCESS": 43,
+            "IN_PROGRESS": 28,
+            "SKIPPED": 24,
             "NEUTRAL": 1
           },
           "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Scan iOS dead code:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI (profile 2/2):IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
@@ -224,34 +238,28 @@
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
             "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
             "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "ios-build:IN_PROGRESS"
           ],
           "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Scan iOS dead code:IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
             "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI (profile 2/2):IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
@@ -260,28 +268,23 @@
             "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-small-1:IN_PROGRESS",
             "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
             "checks-node-compact-small-5:IN_PROGRESS",
             "checks-node-compact-small-6:IN_PROGRESS",
             "checks-node-compact-small-7:IN_PROGRESS",
             "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
             "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-channels:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "ios-build:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -289,25 +292,25 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T16:07:19.740Z"
+      "processed_at": "2026-07-11T16:07:32.945Z"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4899,
+    "total_ms": 5291,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 544
+        "ms": 547
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1426
+        "ms": 1615
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -323,7 +326,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2881
+        "ms": 3106
       },
       {
         "name": "append_ledger",
