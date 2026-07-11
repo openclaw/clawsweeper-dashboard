@@ -1,0 +1,73 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { renderActionLedgerDashboard } from "../scripts/ledger-dashboard.mjs";
+import { writeActionLedgerIndexes } from "../scripts/ledger-project.mjs";
+import { buildActionLedgerProjection } from "../scripts/ledger-projections.mjs";
+import { actionEvent, tempRoot, writeShard } from "./ledger-fixtures.mjs";
+
+test("ledger projections expose source, family, repository, status, and freshness metrics", (context) => {
+  const root = tempRoot(context);
+  writeShard(root, [
+    actionEvent(),
+    actionEvent({
+      event_key: "apply.executed:openclaw/openclaw:42:abc123",
+      event_type: "apply.executed",
+      action: {
+        name: "close",
+        status: "executed",
+        reason_code: "implemented_on_main",
+        retryable: false,
+        mutation: true,
+      },
+      occurred_at: "2026-07-10T10:00:00.000Z",
+    }),
+  ]);
+
+  const projection = buildActionLedgerProjection(root, {
+    now: "2026-07-12T12:00:00.000Z",
+  });
+
+  assert.equal(projection.source.shard_count, 1);
+  assert.equal(projection.metrics.by_event_family.review.count, 1);
+  assert.equal(projection.metrics.by_event_family.apply.count, 1);
+  assert.equal(projection.metrics.by_repository["openclaw/openclaw"].count, 2);
+  assert.equal(projection.metrics.by_action_status.completed.count, 1);
+  assert.equal(projection.metrics.by_action_status.executed.count, 1);
+  assert.equal(projection.metrics.by_freshness.last_24_hours.count, 1);
+  assert.equal(projection.metrics.by_freshness.days_1_to_7.count, 1);
+});
+
+test("ledger current indexes replace stale projection files", (context) => {
+  const root = tempRoot(context);
+  const output = path.join(root, "indexes", "current");
+  writeShard(root, [actionEvent()]);
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(path.join(output, "stale.json"), "{}\n", "utf8");
+
+  writeActionLedgerIndexes(root, output, { now: "2026-07-12T12:00:00.000Z" });
+
+  assert.deepEqual(fs.readdirSync(output).sort(), ["metrics.json", "source.json"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(output, "source.json"))).event_count, 1);
+});
+
+test("action ledger dashboard renders concise source and metric projections", (context) => {
+  const root = tempRoot(context);
+  writeShard(root, [actionEvent()]);
+
+  const dashboard = renderActionLedgerDashboard(root, {
+    now: "2026-07-12T12:00:00.000Z",
+  });
+
+  assert.match(dashboard, /^## Action Ledger/m);
+  assert.match(dashboard, /Immutable source: 1 events across 1 JSONL shards/);
+  assert.match(dashboard, /\| Review \| 1 \|/);
+  assert.match(
+    dashboard,
+    /\[openclaw\/openclaw\]\(https:\/\/github\.com\/openclaw\/openclaw\)/,
+  );
+  assert.match(dashboard, /\| completed \| 1 \|/);
+  assert.match(dashboard, /\| Last 24 hours \| 1 \|/);
+  assert.match(dashboard, /replaceable projections, never mutation authority/);
+});

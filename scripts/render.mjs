@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { renderActionLedgerDashboard } from "./ledger-dashboard.mjs";
 import { renderRepairDashboard } from "./repair-dashboard.mjs";
 import { writeText } from "./source.mjs";
 import { renderSweepDashboard } from "./sweep-dashboard.mjs";
@@ -14,6 +15,8 @@ Generated from the durable state branch for [` +
   `openclaw/clawsweeper](https://github.com/openclaw/clawsweeper).
 
 ${renderSweepDashboard(sourceRoot)}
+
+${renderActionLedgerDashboard(sourceRoot)}
 
 ${renderRepairDashboard(sourceRoot)}
 `;
