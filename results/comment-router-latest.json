@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T13:40:06.064Z",
+  "generated_at": "2026-07-11T13:40:36.950Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T10:40:05.357Z",
+  "since": "2026-07-11T10:40:30.172Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    104420
+    103263
   ],
   "comment_ids": [
-    4946225386
+    4946234880
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4946235227,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:104420:4946225386:2026-07-11T13:37:13Z:re_review",
-      "comment_id": "4946225386",
-      "comment_version_key": "4946225386:2026-07-11T13:37:13Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/104420#issuecomment-4946225386",
+      "idempotency_key": "comment-router:openclaw/openclaw:103263:4946234880:2026-07-11T13:39:09Z:re_review",
+      "comment_id": "4946234880",
+      "comment_version_key": "4946234880:2026-07-11T13:39:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103263#issuecomment-4946234880",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 104420,
-      "author": "cxbAsDev",
-      "author_id": 294098203,
+      "target_branch": "main",
+      "issue_number": 103263,
+      "author": "yetval",
+      "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T13:37:13Z",
-      "comment_updated_at": "2026-07-11T13:37:13Z",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-11T13:39:09Z",
+      "comment_updated_at": "2026-07-11T13:39:09Z",
+      "status_comment_id": 4946235227,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,27 +70,143 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 103263,
+          "dispatch_key": "router-304c06c2cb148dd2",
+          "dispatched_at": "2026-07-11T13:40:37.616Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-11T13:40:38.647Z",
+          "response_comment_id": "4946235227",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): lease session worktrees during runs",
+        "body": "## What Problem This Solves\n\nA resumed session's managed git worktree could be deleted out from under an active agent run. Idle GC, a separate remover, or a manual `worktrees.gc` would remove the session's isolated checkout while the run was still using it, destroying in-flight workspace files. The silent counterpart also existed: a session whose managed worktree had already been removed was admitted anyway and ran as if its cwd were an ordinary directory, with no checkout.\n\n## Why This Change Was Made\n\nThis is a rewrite of the earlier approach after maintainer review. The earlier head used a process-local FIFO lease, which was an exclusive full-run mutex (a parent and a child run sharing one worktree could deadlock), leased only `cwd`, and leaned on `git worktree lock` as the admission/removal mutex even though that lock is not an atomic cross-process check-and-act.\n\nRuns now take a shared run-lease and removal takes an exclusive claim, both stored as rows in the existing shared-state `state_leases` table. Admission and removal each run inside one `runOpenClawStateWriteTransaction`, which uses `BEGIN IMMEDIATE` (`src/infra/sqlite-transaction.ts`), so the read-check-write is serialized across processes by SQLite itself. That single transaction is the atomic admission/removal gate, replacing the git-lock TOCTOU. The git worktree lock is kept only as a secondary raw-Git guard, refcounted per process so a parent and a same-process child do not unlock each other.\n\nOwnership and lifetime details:\n- The lease is acquired in `prepareAgentCommandExecution` before `ensureAgentWorkspace`, so the checkout is protected during workspace-dependent preparation, not just the run body; it is released on any prepare failure and in the run's outer cleanup.\n- The worktree id is resolved from the session's stored `worktree.id` binding, or by containment over the run cwd and workspace dir. A session whose authoritative binding is removed or missing fails closed rather than continuing unmanaged.\n- Run leases and the removal claim are both token-owned: a run releases only its own token, and the removal claim rejects a competing live remover and clears or finalizes only under its own token, so two removers can never enter destructive work on one worktree at once.\n- Dead or reused-pid owners, including a removal claim whose remover process died before finalizing, are pruned inside the same transaction via `isLockOwnerDefinitelyStale`, so a killed holder never strands the worktree.\n- Lease release retries the row deletion within the single cleanup call and drops the git guard only after the row is gone, so a transient state-database failure keeps the worktree protected and retryable instead of stranding a half-released lease.\n\nChoosing the shared state DB over sidecar claim files follows the repository storage policy (SQLite only for runtime registries), and reuses the cross-process lease table and transaction primitive already used by startup-migration checkpoints.\n\n## User Impact\n\nUsers resuming sessions with isolated worktrees can no longer have their live checkout deleted underneath an active run by idle GC, a manual gc, or session cleanup, including during workspace preparation, when the session works in a subdirectory of the worktree, and when a second process races the removal. A session whose checkout was removed while it was away now fails fast with a clear error instead of silently continuing without its files. Concurrent parent and child runs share one worktree without deadlocking, and two removers cannot corrupt a worktree by deleting it concurrently.\n\n## Evidence\n\n- Branched off `origin/main`; head `0d1f681f`. Mergeable, behind current main.\n- Focused suites pass. `src/commands/agent.worktree-race.test.ts` drives the real `prepareAgentCommandExecution` to prove the workspace-preparation window is leased and an authoritative removed binding fails closed before workspace setup. `src/agents/worktrees/run-lease.test.ts` and `src/agents/worktrees/service.remove-lease.test.ts` cover parent/child shared readers with git-lock refcounting, workspace-only id resolution, fail-closed removed binding, dead-owner (SIGKILL) pruning, reused-pid (ABA) pruning, force parity, admission-fails-once-removing, dead-remover recovery, exclusive rejection of a second live remover (with and without force), owner-scoped abort that cannot clear a newer claim, a concurrent second remover rejected at the service level, and a release that fails on a database error recovering within one call and retaining the lease and git guard until it succeeds. `agent.test.ts`, `agent.session.test.ts`, and the gateway worktrees/session-create/session-delete-lifecycle/server-maintenance suites pass unchanged.\n- `oxlint --type-aware` and `oxfmt --check` clean on all changed files; `run-tsgo.mjs -p tsconfig.core.json` clean.\n- Review findings addressed across iterations: a stranded removal marker after a mid-removal crash (self-healing pid/start-time owner); an overwritable removal claim with non-owner-scoped cleanup (opaque token, exclusive rejection, owner-scoped abort); a lease acquired after workspace preparation and a removed authoritative binding that failed open (lease moved before `ensureAgentWorkspace`, fail-closed binding); and a non-retryable cleanup that dropped the git guard on a failed delete (bounded retry within the single release, guard retained until success).\n\n### Real behavior proof\n\nBehavior addressed: the managed worktree must stay protected while the production run preparation reads or creates files and a separate process races removal; a session whose bound worktree was removed must fail admission before workspace setup instead of running without its checkout; and two removers must not enter destructive removal of one worktree at once.\nReal environment tested: the real `prepareAgentCommandExecution` preparation path plus the real `ManagedWorktreeService` and the real shared-state SQLite lease store, driven on pristine `origin/main` `fa77fe10` versus this patch `0d1f681f` with identical inputs. The production path is driven with only config and plugin-registry loaders mocked (the real worktree service, registry, session store, and workspace step stay real, with the workspace step paused to hold the preparation window open). A second capture drives a genuine two-process race: a separate node process holds the run lease while the parent issues the removal, and a second overlapping removal is issued against the real service.\nExact steps or command run after this patch: run the composed preparation test with observations recorded (`OPENCLAW_PROOF_OUT=... run-vitest src/commands/agent.worktree-race.test.ts`), and run the two-process harness (`node --import tsx proof-lease.mts`) that creates a real session-owned git worktree with a nested workspace file, spawns a separate node process that acquires the run lease, issues non-force `ManagedWorktreeService` removals from the parent during and after the run, and issues a second overlapping removal.\nEvidence after fix:\n```\n### production run preparation\n# BEFORE (pristine origin/main fa77fe10)\nremoval during production workspace preparation: removed=true\nmanaged checkout survived preparation: false\nadmission for a removed authoritative binding: preparation proceeded without its checkout\nworkspace setup ran on the removed worktree: true\n# AFTER (this patch 0d1f681f, identical inputs)\nremoval during production workspace preparation: rejected: worktree is busy: locked by live pid 3076226\nmanaged checkout survived preparation: true\nadmission for a removed authoritative binding: preparation fails: managed worktree was removed: .../worktrees/e5d327b0fb6c1e1c/race-session\nworkspace setup ran on the removed worktree: false\n\n### two-process race against the real service\n# BEFORE (pristine origin/main fa77fe10)\nseparate-process run holder: run holds no lease\nseparate non-force removal during the live run: removed=true\nnested in-flight file survived the removal attempt: false\nremoval after the run ends: rejected: unknown active worktree: 7dc55fc4-e5de-4616-8ce4-029eb2a5ee7b\nsecond remover racing the first: rejected: git worktree remove failed: fatal: '.../proof-concurrent' is not a working tree\n# AFTER (this patch 0d1f681f, identical inputs)\nseparate-process run holder: run holds a lease\nseparate non-force removal during the live run: rejected: worktree is busy: locked by live pid 3076725\nnested in-flight file survived the removal attempt: true\nremoval after the run ends: removed=true\nsecond remover racing the first: rejected: worktree removal is already in progress\n```\nObserved result after fix: during production run preparation a racing removal is rejected as busy and the checkout survives, and a session bound to a removed worktree fails preparation before workspace setup runs; in the two-process race a separate process holding the run lease has its checkout preserved while a non-force removal is rejected and only succeeds after the run ends, and a second remover racing the first is rejected as already in progress. On the base, the same removals delete the live checkout and its in-flight file, preparation proceeds without a checkout and runs workspace setup on the removed worktree, and two removers collide into a corrupt half-removed worktree.\nWhat was not tested: no live provider request, gateway deployment, or multi-host run was exercised; the two racing processes ran on the development Linux host sharing one state directory and git worktree, so cross-process protection rests on the directly exercised SQLite BEGIN IMMEDIATE serialization plus the on-disk git worktree lock; the production preparation capture mocks only the config and plugin-registry loaders and drives the real preparation, worktree service, registry, and session store.\n",
+        "branch": "fix/worktree-gc-live-session-race",
+        "head_sha": "0d1f681f9f037c8187e57c93b90f3353f618a37b",
+        "author": "yetval",
+        "labels": [
+          "commands",
+          "agents",
+          "size: XL",
+          "P0",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-command.ts",
+            "additions": 124,
+            "deletions": 98,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/git-lock.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/worktrees/registry.ts",
+            "additions": 274,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/worktrees/run-lease.test.ts",
+            "additions": 268,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/worktrees/run-lease.ts",
+            "additions": 222,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/worktrees/service.remove-lease.test.ts",
+            "additions": 104,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/worktrees/service.ts",
+            "additions": 93,
+            "deletions": 98,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/agent.worktree-race.test.ts",
+            "additions": 206,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 8,
+        "additions": 1343,
+        "deletions": 196,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103263",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103263.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 104,
+          "gatingTotal": 99,
+          "counts": {
+            "SUCCESS": 68,
+            "SKIPPED": 35,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-11T13:40:37.175Z"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2302,
+    "total_ms": 8934,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 692
+        "ms": 5116
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1645
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -102,11 +218,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "execute_commands",
-        "ms": 1594
+        "ms": 2144
       },
       {
         "name": "append_ledger",
