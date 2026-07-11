@@ -432,7 +432,8 @@ owns that separately revalidated intake. The exact run does not claim an atomic
 state-publish-and-route boundary.
 `stale_insufficient_info` issue reports and `mostly_implemented_on_main` PR
 reports are never applied to young items; apply requires those reports to be at
-least 60 days old unless a manual run explicitly changes the threshold.
+least 60 days old unless a manual run explicitly changes the threshold. A stale
+issue also stays open when a non-bot comment was posted in the last 60 days.
 
 The external state dashboard is fleet-scoped. Each configured repository gets
 its own record folder, status JSON, audit state, cadence counts, and recent
