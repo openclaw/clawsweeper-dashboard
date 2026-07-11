@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T12:42:54.657Z",
+  "generated_at": "2026-07-11T12:43:46.581Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T09:42:52.718Z",
+  "since": "2026-07-11T09:43:44.722Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    103263
+    104394
   ],
   "comment_ids": [
-    4945979681
+    4945976658
   ],
-  "status_comment_id": 4945979890,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,19 +33,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:103263:4945979681:2026-07-11T12:41:29Z:re_review",
-      "comment_id": "4945979681",
-      "comment_version_key": "4945979681:2026-07-11T12:41:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/103263#issuecomment-4945979681",
+      "idempotency_key": "comment-router:openclaw/openclaw:104394:4945976658:2026-07-11T12:40:49Z:re_review",
+      "comment_id": "4945976658",
+      "comment_version_key": "4945976658:2026-07-11T12:40:49Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/104394#issuecomment-4945976658",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 103263,
-      "author": "yetval",
-      "author_id": 102706514,
+      "target_branch": null,
+      "issue_number": 104394,
+      "author": "SebTardif",
+      "author_id": 1413412,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T12:41:29Z",
-      "comment_updated_at": "2026-07-11T12:41:29Z",
-      "status_comment_id": 4945979890,
+      "comment_created_at": "2026-07-11T12:40:49Z",
+      "comment_updated_at": "2026-07-11T12:40:49Z",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -70,43 +70,22 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 103263,
-          "dispatch_key": "router-326ab2ebfdf5ceba",
-          "dispatched_at": "2026-07-11T12:42:55.292Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T12:42:56.132Z",
-          "response_comment_id": "4945979890",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): lease session worktrees during runs",
-        "body": "## What Problem This Solves\n\nA resumed session's managed git worktree could be deleted out from under an active agent run. Idle GC, a separate remover, or a manual `worktrees.gc` would remove the session's isolated checkout while the run was still using it, destroying in-flight workspace files. The silent counterpart also existed: a session whose managed worktree had already been removed was admitted anyway and ran as if its cwd were an ordinary directory, with no checkout.\n\n## Why This Change Was Made\n\nThis is a rewrite of the earlier approach after maintainer review. The earlier head used a process-local FIFO lease, which was an exclusive full-run mutex (a parent and a child run sharing one worktree could deadlock), leased only `cwd` (a workspace-only child was unprotected), and leaned on `git worktree lock` as the admission/removal mutex even though that lock is not an atomic cross-process check-and-act.\n\nRuns now take a shared run-lease and removal takes an exclusive claim, both stored as rows in the existing shared-state `state_leases` table. Admission and removal each run inside one `runOpenClawStateWriteTransaction`, which uses `BEGIN IMMEDIATE` (`src/infra/sqlite-transaction.ts`), so the read-check-write is serialized across processes by SQLite itself. That single transaction is the atomic admission/removal gate, replacing the git-lock TOCTOU. The git worktree lock is kept only as a secondary raw-Git guard, refcounted per process so a parent and a same-process child do not unlock each other.\n\nEach lease row carries an opaque token plus `pid` and process start time. Run leases and the removal claim are both token-owned: a run releases only its own token, and the removal claim rejects a competing live remover and clears or finalizes only under its own token, so two removers can never enter destructive work on the same worktree at once. Dead or reused-pid owners, including a removal claim whose remover process died before finalizing, are pruned inside the same transaction via `isLockOwnerDefinitelyStale`, so a killed holder never strands the worktree. The worktree id is resolved from the session's stored `worktree.id` binding, or by containment over both the run cwd and workspace dir, so a workspace-only child still leases. Removal claims before any cleanliness or snapshot work and rejects while a live run lease exists.\n\nChoosing the shared state DB over sidecar claim files follows the repository storage policy (SQLite only for runtime registries), and reuses the same cross-process lease table and transaction primitive already used by startup-migration checkpoints.\n\n## User Impact\n\nUsers resuming sessions with isolated worktrees can no longer have their live checkout deleted underneath an active run by idle GC, a manual gc, or session cleanup, including when the session works in a subdirectory of the worktree and including when a second process races the removal. A session whose checkout was removed while it was away now fails fast with a clear error instead of silently continuing without its files. Concurrent parent and child runs can share one worktree without deadlocking, and two removers cannot corrupt a worktree by deleting it concurrently.\n\n## Evidence\n\n- Branched off `origin/main` `cba9ffb1`; head `20d188b0`. Mergeable, behind current main.\n- Focused suites pass (40 in the worktree group): `src/agents/worktrees/run-lease.test.ts` and `src/agents/worktrees/service.remove-lease.test.ts` cover parent/child shared readers with git-lock refcounting, the workspace-only child id resolution, dead-owner (SIGKILL) pruning, reused-pid (ABA) pruning, force parity, admission-fails-once-removing, dead-remover recovery, exclusive rejection of a second live remover (with and without force), owner-scoped abort that cannot clear a newer claim, a concurrent second remover rejected at the service level, a release that fails on a database error keeping the lease and git guard and then freeing them on retry, and gc skipping a busy worktree; existing `service.test.ts` still passes. `agent.test.ts`, `agent.session.test.ts`, and the gateway worktrees/session-create/session-delete-lifecycle/server-maintenance suites pass unchanged.\n- `oxlint --type-aware` and `oxfmt --check` clean on all changed files; `run-tsgo.mjs -p tsconfig.core.json` clean.\n- Three pre-ship Codex reviews were addressed: a stranded removal marker after a mid-removal crash (fixed by the self-healing pid/start-time owner); an overwritable removal claim whose cleanup was not owner-scoped (fixed by the opaque token, exclusive rejection, and owner-scoped abort); and a lease release that dropped the git guard and became non-retryable when the state-database delete failed (fixed by deleting the row first and dropping the guard only on success, so a failed release retries and the worktree stays protected meanwhile).\n\n### Real behavior proof\n\nBehavior addressed: a resumed session's managed worktree must survive a concurrent separate-process non-force removal while its run is active; a session whose managed worktree was already removed must fail admission instead of running without its checkout; and two removers must not enter destructive removal of the same worktree at once.\nReal environment tested: two real OS processes sharing one on-disk git worktree, the real `ManagedWorktreeService` removal path, and the real shared-state SQLite lease store, driven on pristine `origin/main` `597de699` versus this patch `20d188b0` with identical inputs; a genuine second node process holds the run lease while the parent issues the removal, and a second overlapping removal is issued against the real service.\nExact steps or command run after this patch: `node --import tsx proof-lease.mts`, which creates a real session-owned git worktree with a nested workspace file, spawns a separate node process that acquires the run lease, issues a non-force `ManagedWorktreeService` removal from the parent while that process holds the lease, releases and re-removes, removes a second worktree and attempts admission for its path, then starts one removal of a third worktree and issues a second overlapping removal against the same service.\nEvidence after fix:\n```\n# BEFORE (pristine origin/main 597de699)\nseparate-process run holder: run holds no lease\nseparate non-force removal during the live run: removed=true\nnested session workspace file survived the removal attempt: false\nremoval after the run ends: rejected: unknown active worktree: 26576991-7aef-4631-90e2-736900df892b\nadmission for an already-removed managed worktree: no admission guard exists on this tree\nsecond remover racing the first: rejected: git worktree remove failed: fatal: '.../proof-concurrent' is not a working tree\n# AFTER (this patch 20d188b0, identical inputs)\nseparate-process run holder: run holds a lease\nseparate non-force removal during the live run: rejected: worktree is busy: locked by live pid 3063548\nnested session workspace file survived the removal attempt: true\nremoval after the run ends: removed=true\nadmission for an already-removed managed worktree: admission fails with: managed worktree was removed: /tmp/openclaw-proof-L9gT62/state/worktrees/b52965bdfb863c5f/proof-removed\nsecond remover racing the first: rejected: worktree removal is already in progress\n```\nObserved result after fix: while a separate process holds the run lease, a non-force removal is rejected as busy and the run's uncommitted workspace file survives, then succeeds only after the run ends; a second remover racing the first is rejected as already in progress; on the base the same first removal deletes the live checkout and its in-flight file, the second remover instead collides with the first into a corrupt half-removed worktree, and admission for an already-removed worktree proceeds with no guard.\nWhat was not tested: no live provider request, gateway deployment, or multi-host run was exercised; the processes ran on the development Linux host sharing one state directory and git worktree, so cross-process protection rests on the directly exercised SQLite BEGIN IMMEDIATE serialization plus the on-disk git worktree lock; the parent/child shared-reader, dead-owner recovery, reused-pid, force-parity, workspace-only, and owner-scoped-abort cases are covered by the regression suite rather than this harness.\n",
-        "branch": "fix/worktree-gc-live-session-race",
-        "head_sha": "20d188b0d7fd494f2e9a02c36b4a6aa0ea9f10b6",
-        "author": "yetval",
+        "title": "fix(agents): resolve channel and account messagePrefix overrides",
+        "body": "## What Problem This Solves\n\n`resolveMessagePrefix` only read global `messages.messagePrefix` (or an\nexplicit caller `configured` override). Channel-level and account-level\n`messagePrefix` fields (supported in channel schemas such as WhatsApp\nand Zalouser) were ignored, while `resolveResponsePrefix` already\ncascades account → channel → global. Operators who set per-channel or\nper-account inbound prefixes got the wrong prefix or identity default.\n\n## Evidence\n\n```console\n$ pnpm exec vitest run src/agents/identity.per-channel-prefix.test.ts\n✓ resolveMessagePrefix with per-channel override (6)\n✓ 29 tests passed\n\n$ pnpm exec tsx -e '...'  # channel-aware resolveMessagePrefix\nglobal [Global]\nchannel [WA]\naccount [Biz]\neffective [WA]\n```\n\nRed-green: without the production change, the new channel/account tests\nfail (expected global); with the fix, all 29 tests pass.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** channel/account `messagePrefix` overrides ignored\n- **Real environment tested:** macOS, Node via worktree on branch fix/message-prefix-channel-account\n- **Exact steps or command run after this patch:** `pnpm exec vitest run src/agents/identity.per-channel-prefix.test.ts` and `pnpm exec tsx` calling `resolveMessagePrefix` with channel/account opts\n- **Evidence after fix:** terminal output above (channel and account prefixes win over global)\n- **Observed result after fix:** account `[Biz]`, channel `[WA]`, global `[Global]` as designed\n- **What was not tested:** live WhatsApp inbound session with multi-account config\n\n## Summary\n\n- Cascade account → channel → global for `messagePrefix` (mirror `responsePrefix`)\n- Pass channel/account through `resolveEffectiveMessagesConfig`\n- Regression tests in `identity.per-channel-prefix.test.ts`\n\nCloses #102937\n",
+        "branch": "fix/message-prefix-channel-account",
+        "head_sha": "1182df97c4b3a97d5ca845bb35375480d8b4d311",
+        "author": "sebtardif",
         "labels": [
           "agents",
-          "size: XL",
-          "proof: sufficient",
-          "P0",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
@@ -116,22 +95,10 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/worktrees/git-lock.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/worktrees/registry.ts",
-            "additions": 274,
-            "deletions": 0,
+            "path": "src/agents/identity.per-channel-prefix.test.ts",
+            "additions": 75,
+            "deletions": 1,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/worktrees/run-lease.test.ts",
-            "additions": 235,
-            "deletions": 0,
-            "changeType": "ADDED"
           },
           {
             "path": "src/agents/worktrees/run-lease.ts",
@@ -152,16 +119,16 @@
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 7,
-        "additions": 986,
-        "deletions": 98,
+        "changedFiles": 3,
+        "additions": 111,
+        "deletions": 3,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-103263",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103263.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-104394",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104394.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -170,24 +137,48 @@
           "total": 95,
           "gatingTotal": 90,
           "counts": {
-            "SUCCESS": 61,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 5,
+            "SUCCESS": 50,
+            "SKIPPED": 27,
+            "IN_PROGRESS": 17,
             "NEUTRAL": 1
           },
           "blockers": [
             "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS"
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "pending": [
             "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
             "checks-node-compact-large-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-whole-1:IN_PROGRESS",
             "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS"
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -195,21 +186,21 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T12:42:54.830Z"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3881,
+    "total_ms": 2069,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 447
+        "ms": 599
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1473
+        "ms": 1247
       },
       {
         "name": "classify_comment_commands",
@@ -233,11 +224,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 1914
+        "ms": 210
       },
       {
         "name": "append_ledger",
