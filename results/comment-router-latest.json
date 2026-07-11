@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T18:23:33.525Z",
+  "generated_at": "2026-07-11T18:23:36.607Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T15:23:31.106Z",
+  "since": "2026-07-11T15:23:34.516Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -39,12 +39,12 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99122#issuecomment-4948264295",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99122,
-      "author": "gorkem2020",
-      "author_id": 29964484,
+      "issue_number": 104585,
+      "author": "hugenshen",
+      "author_id": 16300669,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-11T18:20:46Z",
-      "comment_updated_at": "2026-07-11T18:20:46Z",
+      "comment_created_at": "2026-07-11T18:20:55Z",
+      "comment_updated_at": "2026-07-11T18:20:55Z",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -72,183 +72,25 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: deleting a session leaves its trajectory artifacts orphaned on disk",
-        "body": "Closes [#89200](https://github.com/openclaw/openclaw/issues/89200)\n\n> This PR is AI-assisted: the analysis, patch, and tests were written with an AI coding agent. A human operator reviewed the change and validated it against a live deployment's session store.\n\n## What Problem This Solves\n\nSession trajectory artifacts (`.trajectory.jsonl` + `.trajectory-path.json`) were handled inconsistently, and destructively, across the session lifecycle:\n\n1. **Delete** (dashboard / `sessions.delete` RPC) archived the transcript but left the trajectory pair orphaned on disk forever (the original [#89200](https://github.com/openclaw/openclaw/issues/89200) defect).\n2. **Reset paths** either deleted the trajectory outright (destroying the forensic tool-call record, flagged as a P1 by the automated review on this PR) or left it at its live name to be misclassified later.\n3. The **typed `/new` and `/reset`** commands (and the implicit daily/idle rollover) went through a code path with no trajectory handling at all, so fixes applied to the other reset doors never reached the path users actually type.\n\n## What This Change Does\n\nOne consistent model: **trajectory artifacts shadow their transcript**. Whenever a session's transcript is archived with a `.reset.<ts>` or `.deleted.<ts>` suffix, the trajectory runtime file and pointer are renamed with the byte-identical suffix in the same operation (shared `nowMs`), never unlinked:\n\n- A `TrajectoryArtifactDisposal` union threads the disposal mode through the cleanup helpers: `{ mode: \"tombstone\", reason, nowMs }` for user-visible lifecycle events, with rename-in-place semantics under the same `withTrajectoryPathLock` retire turn.\n- All three lifecycle doors are coupled: `deleteSessionEntryLifecycle` (delete), `resetSessionEntryLifecycle` (dashboard New Session button), and the typed-command rollover path `initSessionState` → `commitReplySessionInitialization`, plus the internal self-heal path `persistSessionResetLifecycle`.\n- The referenced-sessions guard snapshot is taken **inside the locked store mutator** (`referencedSessionIdsAtSwap`), closing a race where an unlocked re-read after two await points could see a concurrent writer's row and silently skip the tombstone.\n- **External trajectory directories** (`OPENCLAW_TRAJECTORY_DIR`): the pair is tombstoned in place only under proven ownership (registry-owned, or the session's own pointer file names the target); unproven files in an operator-configured directory are left untouched. The retention sweep follows tombstone directories, so aging works there too.\n- **No new retention code.** Tombstoned trajectories reuse the existing `.reset.<ts>` / `.deleted.<ts>` suffix conventions and age out with the existing archived-transcript sweep.\n\n## Why rename instead of delete on reset\n\nNo merged commit or confirmed-maintainer comment currently states reset-vs-trajectory policy explicitly, but the record strongly and repeatedly converges on one answer: reset must preserve trajectory records via rename/archive, never delete them outright. This is proposed directly in [#90707](https://github.com/openclaw/openclaw/issues/90707) (with a concrete forensics-loss incident as motivation), implemented the same way in the still-open [#94593](https://github.com/openclaw/openclaw/pull/94593) (after two prior closed-unmerged attempts at the identical shape, [#93319](https://github.com/openclaw/openclaw/pull/93319) and [#94895](https://github.com/openclaw/openclaw/pull/94895)), echoed by the broader \"never `rm` a session file, only move/rename\" position in [#56609](https://github.com/openclaw/openclaw/issues/56609), and most directly, flagged as a P1 blocker on this very branch by the automated reviewer, which asked explicitly to \"preserve or archive pre-reset trajectories instead of deleting them.\" This PR's tombstone-rename on the runner-driven `/reset` path is our attempt to satisfy that converging intent without waiting on #94593 to land, since the two changes touch adjacent but distinct code paths (delete-lifecycle cleanup vs. the shared reset-archive helper) and reconciling them is better done as a maintainer-guided follow-up than by blocking this fix on an unrelated open PR.\n\n## Evidence\n\nTest gates on the final head: `session-accessor.test.ts` 73/73, `session.test.ts` 143/143, adjacent lifecycle suites 24/24 (240 total), typecheck (`tsgo:core` + `tsgo:core:test`) clean, oxlint/oxfmt clean. Every fix commit is red-proven: the concurrent-writer race test and the entry-level typed-`/reset` test (entering through `initSessionState`, not the inner function) each fail against the pre-fix code exactly as observed live and pass after.\n\nLive validation on a v2026.6.10 production deployment (session ids redacted):\n\n```\ntyped /reset:\n  <sid-A>.jsonl.reset.2026-07-11T16-45-15.346Z\n  <sid-A>.trajectory.jsonl.reset.2026-07-11T16-45-15.346Z\n  <sid-A>.trajectory-path.json.reset.2026-07-11T16-45-15.346Z\n\ndashboard delete: same trio shape with .deleted.<ts>, session key removed, clean re-mint on next message\n\ntyped /new with OPENCLAW_TRAJECTORY_DIR set (trajectory lives outside the sessions dir):\n  sessions dir:  <sid-B>.jsonl.reset.<ts>  +  <sid-B>.trajectory-path.json.reset.<ts>\n  external dir:  <sid-B>.jsonl.reset.<ts>   (renamed in place, same timestamp)\n```\n\n## Scope notes\n\n- `applySessionEntryLifecycleMutation` (the batched background-maintenance mutation used by the session reaper, cleanup service, and heartbeat runner) is deliberately not touched: its removed-session cleanup already routes through the trajectory-coupled maintenance helpers, and unreferenced pairs are reclaimed by the age-based prune, which is the correct model for background reaping (no user action to timestamp-couple to).\n- [#94593](https://github.com/openclaw/openclaw/pull/94593) partially overlaps on intent (reset-time preservation) but implements it in the shared reset-archive helper; this PR covers the delete lifecycle and the typed-command rollover door. If #94593 lands first we are happy to rebase and drop any overlap, and vice versa.\n\n## User Impact\n\nDeleting or resetting a session, from any surface, now leaves a complete archived trio with one shared timestamp instead of orphaned or destroyed trajectory files. Post-incident forensics of tool calls survives resets. Existing retention behavior and bounds are unchanged.\n",
-        "branch": "fix/session-delete-trajectory-orphan",
-        "head_sha": "f067be4506297a9779c810c526e7930c8f537db1",
-        "author": "gorkem2020",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: XL",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/agent-command.live-model-switch.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/session.test.ts",
-            "additions": 96,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.test.ts",
-            "additions": 193,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.ts",
-            "additions": 123,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store-maintenance-operations.ts",
-            "additions": 27,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.pruning.test.ts",
-            "additions": 45,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.session-lifecycle-mutation.test.ts",
-            "additions": 254,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/store.ts",
-            "additions": 72,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.archive-cleanup.test.ts",
-            "additions": 34,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/session-transcript-files.fs.ts",
-            "additions": 20,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/cleanup.test.ts",
-            "additions": 448,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/cleanup.ts",
-            "additions": 213,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/runtime.test.ts",
-            "additions": 343,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/runtime.ts",
-            "additions": 44,
-            "deletions": 27,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/trajectory/writer-lifecycle.ts",
-            "additions": 261,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 17,
-        "additions": 2183,
-        "deletions": 107,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99122",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99122.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "CHANGES_REQUESTED",
-        "checks": {
-          "total": 102,
-          "gatingTotal": 97,
-          "counts": {
-            "SUCCESS": 68,
-            "SKIPPED": 31,
-            "IN_PROGRESS": 2,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS"
-          ],
-          "pending": [
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2586,
+    "total_ms": 4153,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 510
+        "ms": 2078
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1891
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -260,11 +102,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 168
+        "ms": 2062
       },
       {
         "name": "append_ledger",
