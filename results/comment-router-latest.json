@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-11T08:59:32.068Z",
+  "generated_at": "2026-07-11T09:00:17.935Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T05:59:29.653Z",
+  "since": "2026-07-11T06:00:17.320Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    104076
+    103118
   ],
   "comment_ids": [
-    4944134654
+    4944128996
   ],
-  "status_comment_id": 4944134983,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,10 +38,10 @@
       "comment_version_key": "4944134654:2026-07-11T08:58:04Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/104076#issuecomment-4944134654",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 104076,
-      "author": "sheyanmin",
-      "author_id": 44184140,
+      "target_branch": null,
+      "issue_number": 103118,
+      "author": "llagy007",
+      "author_id": 17695126,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-11T08:58:04Z",
       "comment_updated_at": "2026-07-11T08:58:04Z",
@@ -70,147 +70,31 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 104076,
-          "dispatch_key": "router-b029f805e819e122",
-          "dispatched_at": "2026-07-11T08:59:32.971Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-11T08:59:33.995Z",
-          "response_comment_id": "4944134983",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): distinguish z.ai code 1305 content rejection from generic overload",
-        "body": "## Summary\n\n**Problem**: z.ai Coding Plan endpoint returns HTTP 429 with code 1305 deterministically when the system prompt contains \"You are a personal assistant running inside OpenClaw\". The current error classifier treats all 1305 responses as generic overload, showing \"The AI service is temporarily overloaded\" to users — which is misleading for the content-rejection case.\n\n**Solution**: Add a `ZAI_CODE_1305_RE` pattern to detect `{\"code\":1305,...}` or `{\"code\":\"1305\",...}` (quoted or unquoted) in the raw error message and surface a more specific diagnostic before falling back to the generic overload message. The `classifyFailoverReason` hook in the z.ai plugin ensures code 1305 is classified as \"overloaded\" (provider-scoped), preventing misclassification by the generic rate-limit pattern.\n\n**What changed**: \n- `sanitize-user-facing-text.ts`: Updated `ZAI_CODE_1305_RE` regex constant to match both `\"code\":1305` (unquoted number) and `\"code\":\"1305\"` (quoted string) JSON values; new check in `formatRateLimitOrOverloadedErrorCopy` that runs before `isOverloadedErrorMessage` and returns a neutral diagnostic for z.ai 1305 errors: \"transient overload or a provider-side content restriction — try again later or with a different model.\"\n- `extensions/zai/index.ts`: Added `classifyFailoverReason` hook that explicitly classifies z.ai code 1305 as \"overloaded\" (provider-scoped, prevents generic rate-limit classification from bypassing the diagnostic check)\n- `failover-matches.test.ts`, `formatassistanterrortext.test.ts`: Updated tests to expect the new diagnostic message\n\n**What did NOT change**:\n- The `rate_limit` failover classification is preserved — backoff and fallback continue working\n- Non-1305 overload errors return the original \"overloaded\" message unchanged\n- Zhipu GLM `[1305]` format is not affected (doesn't match the JSON key pattern)\n\n**Fixes**: #103529\n\n## What Problem This Solves\n\nUsers onboarding a valid z.ai Coding Plan key successfully, but every chat turn fails with a misleading \"overloaded\" error. The real cause — the system prompt signature line triggering a provider-side content filter — is invisible. Users waste time checking quota, retrying, or switching API keys when the issue is the system prompt content.\n\n## Root Cause\n\nz.ai's Coding Plan endpoint returns HTTP 429 with `{\"error\":{\"code\":\"1305\",\"message\":\"The service may be temporarily overloaded, please try again later.\"}}` when the system message contains \"You are a personal assistant running inside OpenClaw\". This behavior is a **deterministic function of the system prompt content**, not a transient overload. Removing or altering that one line produces a 200 response.\n\nThe error classifier in `sanitize-user-facing-text.ts` matched the \"overloaded\" keyword in the response body and returned the generic overload message, which is incorrect for this scenario.\n\n## Real behavior proof\n\n**Behavior addressed**: Error message for z.ai code 1305 now mentions possible content restriction instead of generic overload\n\n**Real environment tested**: Node 24, macOS, tsx 4.19, vitest 4.1.9\n\n**Exact steps or command run after this patch**: Direct call to `formatRateLimitOrOverloadedErrorCopy` (production function) via tsx — covering canonical payload, backward-compatible format, and non-1305 fallthrough.\n\n**After-fix evidence**:\n```terminal\n$ node --import tsx zai-1305-evidence.ts\n=== Part 1: Canonical payload ===\nInput: {\"error\":{\"code\":\"1305\",\"message\":\"The service may be temporarily...\"}}\nOutput: ⚠️ Provider returned code 1305. This can be a transient overload\nor a provider-side content restriction — try again later or with a\ndifferent model.\n\n=== Part 2: Backward compatible ===\nInput: {\"code\":1305,\"message\":\"...\"}\nOutput: ⚠️ Provider returned code 1305. [same diagnostic]\n\n=== Part 3: Non-1305 fallthrough ===\nGeneric overload: \"The AI service is temporarily overloaded.\" ← unchanged\nRate limit with retry: \"⚠️ rate limit: service overloaded...\" ← preserved\nZhipu GLM [1305]: undefined ← not affected\nNon-z.ai 429: \"⚠️ API rate limit reached.\" ← passes through\n```\n\n**Observed result after the fix**: The diagnostic is more neutral — it covers both overload and content-rejection scenarios without misleading users toward \"system prompt\" guidance they cannot act on. Provider-scoping through the z.ai plugin's `classifyFailoverReason` hook prevents the generic rate-limit classifier from bypassing the diagnostic check.\n\n**What was not tested**: End-to-end with a real z.ai API key (L3 full gateway run). The original issue (#103529) provides curl-level reproduction. L2 real-module execution (tsx directly calling the exported function) covers all payload formats the formatter is designed to handle.\n\n## Tests and validation\n\n**Exact steps or command run**: vitest run (32 + 90 + 15 tests)\n\n**Test output**:\n```terminal\n✓ failover-matches.test.ts: 32 passed\n✓ formatassistanterrortext.test.ts: 90 passed\n✓ extensions/zai/index.test.ts: 15 passed\nTotal: 137 passed\n```\n\n## Risk checklist\n\nmerge-risk: Low\n\n- [x] Provider-scoped: z.ai plugin's classifyFailoverReason hook ensures code 1305 is only handled within z.ai provider context\n- [x] Neutral diagnostic: \"transient overload or content restriction\" handles both scenarios without speculation\n- [x] No change to failover/fallback behavior (rate_limit/overloaded classification preserved)\n- [x] All 137 unit tests pass\n- [x] 26 insertions, 8 deletions — within the Diamond Lobster 100-line limit\n",
-        "branch": "fix/issue-103529-zai-1305-content-rejection",
-        "head_sha": "dbc1d3a3a399451b647b7b43d787643c10010230",
-        "author": "sheyanmin",
-        "labels": [
-          "agents",
-          "size: S",
-          "extensions: zai",
-          "P0",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/zai/index.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers.formatassistanterrortext.test.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/failover-matches.test.ts",
-            "additions": 21,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/sanitize-user-facing-text.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 58,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104076",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104076.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 100,
-          "gatingTotal": 95,
-          "counts": {
-            "SUCCESS": 61,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 3,
-            "FAILURE": 3,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "pending": [
-            "checks-node-compact-large-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-prod-types:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-11T08:59:32.352Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5176,
+    "total_ms": 2292,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 614
+        "ms": 602
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1787
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5819
-      },
-      {
-        "name": "classify_repair_loop_sweeps",
-        "ms": 5
-      },
-      {
-        "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -218,15 +102,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2726
+        "ms": 1676
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
