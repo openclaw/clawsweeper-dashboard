@@ -94,7 +94,7 @@ test("ledger projections handle prototype-named statuses", (context) => {
 
 test("ledger current indexes replace stale projection files", (context) => {
   const root = tempRoot(context);
-  const output = path.join(root, "indexes", "current");
+  const output = path.join(root, "ledger", "v1", "indexes", "current");
   writeShard(root, [actionEvent()]);
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, "stale.json"), "{}\n", "utf8");
@@ -103,6 +103,19 @@ test("ledger current indexes replace stale projection files", (context) => {
 
   assert.deepEqual(fs.readdirSync(output).sort(), ["metrics.json", "source.json"]);
   assert.equal(JSON.parse(fs.readFileSync(path.join(output, "source.json"))).event_count, 1);
+});
+
+test("ledger index output cannot overlap immutable source data", (context) => {
+  const root = tempRoot(context);
+  const shard = writeShard(root, [actionEvent()]);
+
+  for (const output of [root, path.join(root, "ledger"), path.dirname(shard)]) {
+    assert.throws(
+      () => writeActionLedgerIndexes(root, output, { now: "2026-07-12T12:00:00.000Z" }),
+      /output overlaps source data/,
+    );
+    assert.equal(fs.existsSync(shard), true);
+  }
 });
 
 test("action ledger dashboard renders concise source and metric projections", (context) => {

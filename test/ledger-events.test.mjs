@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import {
   LedgerConflictError,
@@ -136,18 +137,46 @@ test("ledger loading rejects privacy-unsafe attributes", (context) => {
 });
 
 test("ledger loading rejects privacy-unsafe values outside attributes", () => {
-  assert.throws(
-    () =>
+  for (const status of [
+    "secret@example.com",
+    "https://internal.local",
+    "https://localhost",
+    "file:///var/lib/secret",
+    "fd00::1",
+    "169.254.169.254",
+  ]) {
+    assert.throws(
+      () =>
+        actionEvent({
+          action: {
+            name: "review",
+            status,
+            retryable: false,
+            mutation: false,
+          },
+        }),
+      /privacy-unsafe event data/,
+    );
+  }
+});
+
+test("ledger loading accepts ordinary repository-relative path segments", () => {
+  for (const recordPath of [
+    "records/home/report.md",
+    "docs/private/index.md",
+    "tmp/report.md",
+  ]) {
+    assert.doesNotThrow(() =>
       actionEvent({
-        action: {
-          name: "review",
-          status: "secret@example.com",
-          retryable: false,
-          mutation: false,
+        subject: {
+          repository: "openclaw/openclaw",
+          kind: "pull_request",
+          number: 42,
+          record_path: recordPath,
         },
       }),
-    /privacy-unsafe event data/,
-  );
+    );
+  }
 });
 
 test("ledger loading rejects mixed complete producer identities", (context) => {
@@ -314,6 +343,20 @@ test("shard paths use stable partition identity instead of event ordering", (con
   const loaded = loadActionLedger(root);
   assert.equal(loaded.source.shards[0].partition_date, "2026-07-12");
   assert.equal(loaded.events[0].occurred_at, "2026-07-11T23:59:00.000Z");
+});
+
+test("ledger loading rejects a symlinked source root segment", (context) => {
+  const root = tempRoot(context);
+  const external = tempRoot(context);
+  writeShard(external, [actionEvent()]);
+  fs.mkdirSync(path.join(root, "ledger", "v1"), { recursive: true });
+  fs.symlinkSync(
+    path.join(external, "ledger", "v1", "events"),
+    path.join(root, "ledger", "v1", "events"),
+    "dir",
+  );
+
+  assert.throws(() => loadActionLedger(root), /source contains symlink/);
 });
 
 test("shard paths reject invalid partition calendar dates", () => {

@@ -7,10 +7,12 @@ import { buildActionLedgerProjection } from "./ledger-projections.mjs";
 import { sortStable } from "./ledger-schema.mjs";
 
 export function writeActionLedgerIndexes(sourceRoot, output, options = {}) {
-  const projection = buildActionLedgerProjection(sourceRoot, options);
+  const resolvedSourceRoot = path.resolve(sourceRoot);
+  const projection = buildActionLedgerProjection(resolvedSourceRoot, options);
   const outputDir = path.resolve(
-    output ?? path.join(sourceRoot, "ledger", "v1", "indexes", "current"),
+    output ?? path.join(resolvedSourceRoot, "ledger", "v1", "indexes", "current"),
   );
+  assertSafeOutputDirectory(resolvedSourceRoot, outputDir);
   const temporaryDir = `${outputDir}.tmp-${process.pid}-${randomUUID()}`;
   fs.mkdirSync(temporaryDir, { recursive: true });
   try {
@@ -23,6 +25,23 @@ export function writeActionLedgerIndexes(sourceRoot, output, options = {}) {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
   return { output: outputDir, ...projection };
+}
+
+function assertSafeOutputDirectory(sourceRoot, outputDir) {
+  const indexesRoot = path.join(sourceRoot, "ledger", "v1", "indexes");
+  const eventsRoot = path.join(sourceRoot, "ledger", "v1", "events");
+  if (
+    pathContains(outputDir, sourceRoot) ||
+    pathContains(outputDir, eventsRoot) ||
+    (pathContains(sourceRoot, outputDir) && !pathContains(indexesRoot, outputDir))
+  ) {
+    throw new Error(`action ledger index output overlaps source data: ${outputDir}`);
+  }
+}
+
+function pathContains(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function writeJson(file, value) {

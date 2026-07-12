@@ -172,7 +172,7 @@ function actionEventSemanticValue(event, location) {
         .sort(),
     },
   });
-  if (containsPrivateData(stableJson(semantic))) {
+  if (containsPrivateData(semantic)) {
     throw new LedgerValidationError(`${location}: contains privacy-unsafe event data`);
   }
   return semantic;
@@ -306,33 +306,61 @@ function normalizeAttributeScalar(key, value, location) {
 }
 
 function containsPrivateData(value) {
+  if (Array.isArray(value)) return value.some(containsPrivateData);
+  if (value && typeof value === "object") {
+    return Object.values(value).some(containsPrivateData);
+  }
+  if (typeof value !== "string") return false;
   if (
-    /^(?:\/|[A-Za-z]:[\\/])/.test(value) ||
+    /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value) ||
     [
-      /\/(?:Users|home|private|tmp)\//,
-      /\\Users\\/,
       /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/,
       /(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]{16,}/,
-      /(?:127\.0\.0\.1|localhost):\d+/,
-      /\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/,
-      /\b192\.168\.\d{1,3}\.\d{1,3}\b/,
-      /\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/,
       /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
     ].some((pattern) => pattern.test(value))
   ) {
     return true;
   }
+  if (privateHost(value)) return true;
+  const embeddedUrls = value.match(/\b(?:file|https?):\/\/[^\s"'<>]+/gi) ?? [];
+  return embeddedUrls.some(privateUrl);
+}
+
+function privateUrl(value) {
   try {
     const parsed = new URL(value);
     return Boolean(
-      parsed.username ||
+      parsed.protocol === "file:" ||
+        parsed.username ||
         parsed.password ||
-        parsed.hostname === "localhost" ||
-        parsed.hostname.endsWith(".local"),
+        privateHost(parsed.hostname),
     );
   } catch {
     return false;
   }
+}
+
+function privateHost(value) {
+  const host = String(value).trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host) return false;
+  if (host === "localhost" || host.endsWith(".local")) return true;
+  if (host === "::1" || /^(?:fc|fd)[0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host)) {
+    return true;
+  }
+  const octets = host.split(".").map(Number);
+  if (
+    octets.length !== 4 ||
+    octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    return false;
+  }
+  return (
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 192 && octets[1] === 168) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+  );
 }
 
 function canonicalPublicUrl(value, location) {

@@ -18,7 +18,7 @@ export class LedgerConflictError extends Error {
 export function loadActionLedger(root) {
   const sourceRoot = path.resolve(root);
   const eventsRoot = path.join(sourceRoot, "ledger", "v1", "events");
-  const shardFiles = listShardFiles(eventsRoot);
+  const shardFiles = listShardFiles(eventsRoot, sourceRoot);
   const shards = [];
   const occurrences = [];
 
@@ -95,8 +95,9 @@ export function actionEventShardRelativePath(identity, events) {
   );
 }
 
-function listShardFiles(root) {
+function listShardFiles(root, sourceRoot) {
   if (!fs.existsSync(root)) return [];
+  assertNoSymlinkedSourcePath(root, sourceRoot);
   const files = [];
   const visit = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
@@ -115,6 +116,22 @@ function listShardFiles(root) {
   };
   visit(root);
   return files;
+}
+
+function assertNoSymlinkedSourcePath(root, sourceRoot) {
+  let current = path.resolve(root);
+  const boundary = path.resolve(sourceRoot);
+  while (true) {
+    if (fs.lstatSync(current).isSymbolicLink()) {
+      throw new LedgerValidationError(`action ledger source contains symlink: ${current}`);
+    }
+    if (current === boundary) return;
+    const parent = path.dirname(current);
+    if (parent === current || path.relative(boundary, current).startsWith("..")) {
+      throw new LedgerValidationError(`action ledger source escapes source root: ${root}`);
+    }
+    current = parent;
+  }
 }
 
 function parseShard(content, relativePath) {
