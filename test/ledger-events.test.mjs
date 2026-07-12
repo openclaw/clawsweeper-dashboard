@@ -19,6 +19,36 @@ test("ledger loading fails closed on malformed JSONL lines", (context) => {
   assert.throws(() => loadActionLedger(root), /:2: malformed JSON/);
 });
 
+test("ledger loading rejects duplicate JSON object members", (context) => {
+  const root = tempRoot(context);
+  const event = actionEvent();
+  const file = writeShard(root, [event]);
+  const statusMember = `"status":${JSON.stringify(event.action.status)}`;
+  const line = JSON.stringify(event).replace(
+    statusMember,
+    `${statusMember},"\\u0073tatus":${JSON.stringify(event.action.status)}`,
+  );
+  assert.notEqual(line, JSON.stringify(event));
+  fs.writeFileSync(file, `${line}\n`, "utf8");
+
+  assert.throws(() => loadActionLedger(root), /duplicate JSON member "status"/);
+});
+
+test("ledger loading rejects invalid UTF-8 before parsing", (context) => {
+  const root = tempRoot(context);
+  const event = actionEvent();
+  const file = writeShard(root, [event]);
+  fs.writeFileSync(
+    file,
+    Buffer.concat([
+      Buffer.from(JSON.stringify(event), "utf8"),
+      Buffer.from([0xff, 0x0a]),
+    ]),
+  );
+
+  assert.throws(() => loadActionLedger(root), /invalid UTF-8/);
+});
+
 test("ledger loading rejects semantic digest mismatches", (context) => {
   const root = tempRoot(context);
   const event = actionEvent();
@@ -153,6 +183,8 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
     "tcp:fe80::1",
     "host:localhost",
     "host:cache.internal.local:443",
+    ..."pousr".split("").map((kind) => `gh${kind}_${"a".repeat(36)}`),
+    `github_pat_${"a".repeat(36)}`,
   ]) {
     assert.throws(
       () =>

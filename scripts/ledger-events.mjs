@@ -25,14 +25,20 @@ export function loadActionLedger(root) {
 
   for (const file of shardFiles) {
     const relativePath = toPosixPath(path.relative(sourceRoot, file));
-    const content = fs.readFileSync(file, "utf8");
+    const rawContent = fs.readFileSync(file);
+    let content;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(rawContent);
+    } catch (error) {
+      throw new LedgerValidationError(`${relativePath}: invalid UTF-8`, { cause: error });
+    }
     const events = parseShard(content, relativePath);
     const partitionDate = validateShardIdentity(events, relativePath);
     shards.push({
       path: relativePath,
       partition_date: partitionDate,
-      sha256: sha256(content),
-      bytes: Buffer.byteLength(content),
+      sha256: sha256(rawContent),
+      bytes: rawContent.byteLength,
       event_count: events.length,
       first_occurred_at: events[0]?.occurred_at ?? null,
       last_occurred_at: events.at(-1)?.occurred_at ?? null,
@@ -157,6 +163,7 @@ function parseShard(content, relativePath) {
   return lines.map((line, index) => {
     const location = `${relativePath}:${index + 1}`;
     if (!line.trim()) throw new LedgerValidationError(`${location}: blank JSONL line`);
+    assertNoDuplicateJsonMembers(line, location);
     let parsed;
     try {
       parsed = JSON.parse(line);
@@ -165,6 +172,110 @@ function parseShard(content, relativePath) {
     }
     return validateActionLedgerEvent(parsed, location);
   });
+}
+
+function assertNoDuplicateJsonMembers(source, location) {
+  let offset = 0;
+
+  const skipWhitespace = () => {
+    while (offset < source.length && /\s/.test(source[offset])) offset += 1;
+  };
+
+  const scanString = () => {
+    const start = offset;
+    offset += 1;
+    while (offset < source.length) {
+      const character = source[offset];
+      if (character === '"') {
+        offset += 1;
+        try {
+          return { valid: true, value: JSON.parse(source.slice(start, offset)) };
+        } catch {
+          return { valid: false };
+        }
+      }
+      if (character === "\\") {
+        offset += 2;
+      } else {
+        offset += 1;
+      }
+    }
+    return { valid: false };
+  };
+
+  const scanPrimitive = () => {
+    const start = offset;
+    while (offset < source.length && !/[\s,\]}]/.test(source[offset])) offset += 1;
+    return offset > start;
+  };
+
+  const scanValue = (depth) => {
+    if (depth > 128) {
+      throw new LedgerValidationError(`${location}: JSON nesting exceeds 128 levels`);
+    }
+    skipWhitespace();
+    if (source[offset] === "{") return scanObject(depth + 1);
+    if (source[offset] === "[") return scanArray(depth + 1);
+    if (source[offset] === '"') return scanString().valid;
+    return scanPrimitive();
+  };
+
+  const scanObject = (depth) => {
+    offset += 1;
+    skipWhitespace();
+    if (source[offset] === "}") {
+      offset += 1;
+      return true;
+    }
+    const keys = new Set();
+    while (offset < source.length) {
+      if (source[offset] !== '"') return false;
+      const key = scanString();
+      if (!key.valid) return false;
+      if (keys.has(key.value)) {
+        throw new LedgerValidationError(
+          `${location}: duplicate JSON member ${JSON.stringify(key.value)}`,
+        );
+      }
+      keys.add(key.value);
+      skipWhitespace();
+      if (source[offset] !== ":") return false;
+      offset += 1;
+      if (!scanValue(depth)) return false;
+      skipWhitespace();
+      if (source[offset] === "}") {
+        offset += 1;
+        return true;
+      }
+      if (source[offset] !== ",") return false;
+      offset += 1;
+      skipWhitespace();
+    }
+    return false;
+  };
+
+  const scanArray = (depth) => {
+    offset += 1;
+    skipWhitespace();
+    if (source[offset] === "]") {
+      offset += 1;
+      return true;
+    }
+    while (offset < source.length) {
+      if (!scanValue(depth)) return false;
+      skipWhitespace();
+      if (source[offset] === "]") {
+        offset += 1;
+        return true;
+      }
+      if (source[offset] !== ",") return false;
+      offset += 1;
+      skipWhitespace();
+    }
+    return false;
+  };
+
+  scanValue(0);
 }
 
 function validateShardIdentity(events, relativePath) {

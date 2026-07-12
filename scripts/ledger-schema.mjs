@@ -330,7 +330,7 @@ function containsPrivateData(value) {
     /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value) ||
     [
       /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/,
-      /(?:ghp_|github_pat_|sk-)[A-Za-z0-9_-]{16,}/,
+      /(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{16,}/i,
       /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
     ].some((pattern) => pattern.test(value))
   ) {
