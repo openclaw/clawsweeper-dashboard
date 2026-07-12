@@ -336,15 +336,41 @@ function containsPrivateData(value) {
   ) {
     return true;
   }
-  if (privateHost(value)) return true;
-  const privateAddressCandidates = [
-    ...(value.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? []),
-    ...(value.match(/\[[0-9a-f:]+\]/gi) ?? []),
-  ];
-  if (privateAddressCandidates.some(privateHost)) return true;
   const embeddedUrls =
     value.match(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>]+/g) ?? [];
-  return embeddedUrls.some(privateUrl);
+  if (embeddedUrls.some(privateUrl)) return true;
+  const valueWithoutUrls = embeddedUrls.reduce(
+    (remaining, url) => remaining.replace(url, " "),
+    value,
+  );
+  if (privateDataCandidates(valueWithoutUrls).some(privateCandidate)) return true;
+  const privateAddressCandidates = [
+    ...(valueWithoutUrls.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? []),
+    ...(valueWithoutUrls.match(/\[[0-9a-f:]+\]/gi) ?? []),
+  ];
+  if (privateAddressCandidates.some(privateHost)) return true;
+  return false;
+}
+
+function privateDataCandidates(value) {
+  const candidates = new Set([value]);
+  for (const token of value.split(/[\s"'<>()[\]{},;=|]+/)) {
+    if (!token) continue;
+    candidates.add(token);
+    const parts = token.split(":");
+    for (const part of parts) {
+      if (part) candidates.add(part);
+    }
+    for (let index = 1; index < parts.length; index += 1) {
+      const suffix = parts.slice(index).join(":");
+      if (suffix) candidates.add(suffix);
+    }
+  }
+  return [...candidates];
+}
+
+function privateCandidate(value) {
+  return /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value) || privateHost(value);
 }
 
 function privateUrl(value) {

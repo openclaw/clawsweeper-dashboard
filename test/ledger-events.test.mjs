@@ -149,6 +149,10 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
     "prefix:169.254.169.254",
     "file+ssh://10.0.0.1",
     "error:/home/alice/project",
+    "endpoint:fd00::1",
+    "tcp:fe80::1",
+    "host:localhost",
+    "host:cache.internal.local:443",
   ]) {
     assert.throws(
       () =>
@@ -178,6 +182,25 @@ test("ledger loading accepts ordinary repository-relative path segments", () => 
           kind: "pull_request",
           number: 42,
           record_path: recordPath,
+        },
+      }),
+    );
+  }
+});
+
+test("ledger loading accepts embedded public hosts and IPv6-looking machine values", () => {
+  for (const status of [
+    "host:github.com",
+    "endpoint:2606:4700:4700::1111",
+    "https://github.com/openclaw/clawsweeper/actions/runs/123",
+  ]) {
+    assert.doesNotThrow(() =>
+      actionEvent({
+        action: {
+          name: "review",
+          status,
+          retryable: false,
+          mutation: false,
         },
       }),
     );
