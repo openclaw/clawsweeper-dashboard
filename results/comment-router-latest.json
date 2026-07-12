@@ -1,20 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T12:24:31.104Z",
+  "generated_at": "2026-07-12T12:24:41.531Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T09:24:29.291Z",
+  "since": "2026-07-12T09:24:39.238Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    499
+    105346
   ],
   "comment_ids": [
-    4951159174
+    4951159936
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4951160098,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -33,20 +33,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:102165:4951155178:2026-07-12T12:21:33Z:re_review",
-      "comment_id": "4951155178",
-      "comment_version_key": "4951155178:2026-07-12T12:21:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/102165#issuecomment-4951155178",
+      "idempotency_key": "comment-router:openclaw/openclaw:105346:4951159936:2026-07-12T12:23:16Z:re_review",
+      "comment_id": "4951159936",
+      "comment_version_key": "4951159936:2026-07-12T12:23:16Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105346#issuecomment-4951159936",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 102165,
-      "author": "litang9",
-      "author_id": 141409885,
+      "target_branch": "main",
+      "issue_number": 105346,
+      "author": "zw-xysk",
+      "author_id": 294457748,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T12:21:33Z",
-      "comment_updated_at": "2026-07-12T12:21:33Z",
-      "comment_body_sha256": "6b692f777992f28c66813859694dba9d0f23ca0414bbbe75138268228f12a5ad",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-12T12:23:16Z",
+      "comment_updated_at": "2026-07-12T12:23:16Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 4951160098,
       "trigger": "mention",
       "command": "stop",
       "intent": "stop",
@@ -71,9 +71,183 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 105346,
+          "dispatch_key": "router-0a11768beeaed0be",
+          "dispatched_at": "2026-07-12T12:24:42.395Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-12T12:24:43.349Z",
+          "response_comment_id": "4951160098",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): propagate parent abort signal to spawned ACP child sessions",
+        "body": "## What Problem This Solves\n\nWhen a parent session is cancelled (user presses Stop, session timeout), child ACP sessions spawned via `sessions_spawn(runtime=\"acp\")` continue running because the cancellation signal was never linked to the child runtime handle. The child subprocess becomes orphaned, consuming CPU and memory until its own timeout.\n\n## Why This Change Was Made\n\n`spawnAcpDirect` initializes a child ACP runtime handle (`runtimeCloseHandle`) but never links it to the parent session lifecycle. The `execute` handler in `sessions_spawn` already receives an `AbortSignal` from the agent execution framework — it was simply not forwarded.\n\nThe fix registers an abort listener that calls `cleanupFailedAcpSpawn` (runtime.close + session deletion) when the parent signal fires.\n\n## User Impact\n\n- Prevents orphaned ACP child processes when parent sessions are cancelled\n- Reduces CPU/memory waste on constrained hosts\n- No change to normal ACP spawn behavior (only activates on abort)\n\n## Merge-Risk Assessment\n\n### 🚨 session-state — No impact\nThe change does not touch session persistence, SQLite, config, or data models. `cleanupFailedAcpSpawn` already exists for error-path cleanup; this PR only wires it to the abort signal. The data path is: `parent abort → runtime.close() → session.delete()`. No new state is created, no existing state is modified in a new way.\n\n### 🚨 availability — No impact\nThe abort listener is guarded by `sessionCreated && initializedRuntime`: it only activates when the runtime handle actually exists. In the normal (no-abort) path, the listener is never called. Pre-abort checks return a clear `dispatch_failed` error. The listener itself is registered after the try-catch block and does not block the normal spawn flow — execution continues past it to `resolveAcpSpawnBootstrapDeliveryPlan` without delay.\n\n## Evidence — Real Behavior Proof\n\n```\n$ npx tsx proof/acp-abort-lifecycle.proof.ts\n\n─── 1. Exact diff scope ───\n  ✅ acp-spawn.ts: 8 relevant lines\n  ✅ sessions-spawn-tool.ts: 1 line (signal → abortSignal:)\n  ✅ Zero new imports, zero new types, zero new exports\n  ✅ No config, env, DB, or persistent state changes\n\n─── 2. Signal flow chain ───\n  ✅ Tool execute receives AbortSignal\n  ✅ Signal → SpawnAcpContext.abortSignal\n  ✅ spawnAcpDirect reads ctx.abortSignal\n  ✅ addEventListener(\"abort\", ...) registered\n  ✅ Pre-abort check for already-aborted signal\n\n─── 3. Guards (only fires when safe) ───\n  ✅ Guarded: parentAbortSignal && sessionCreated && initializedRuntime\n  ✅ Listener is after try-catch block\n  ✅ Normal flow continues after listener code\n\n─── 4. Pre-abort behavior ───\n  ✅ Returns dispatch_failed error\n  ✅ Calls cleanup immediately\n  ✅ Error message is clear\n\n─── 5. No persistent data model change ───\n  ✅ No SQLite/DB changes\n  ✅ No config changes\n  ✅ No schema changes\n  ✅ Only runtime abort propagation — zero persistence impact\n\n─── 6. Unit tests ───\n  ✅ acp-spawn.test.ts: 66 tests passed (no regressions)\n```\n\n## Unit Tests\n\n```\n$ node scripts/run-vitest.mjs src/agents/acp-spawn.test.ts\n\n Test Files  1 passed (1)\n      Tests  66 passed (66)\n```\n\n## Lint\n\n```\n$ npx oxlint -c .oxlintrc.json src/agents/acp-spawn.ts\n$ npx oxfmt --check src/agents/acp-spawn.ts\n✅ Both passed\n```\n\n## What Changed\n\n- `src/agents/acp-spawn.ts`: +32 lines (type field + abort listener + guard)\n- `src/agents/tools/sessions-spawn-tool.ts`: +1 line (forward signal)\n- `proof/acp-abort-lifecycle.proof.ts`: +158 lines (transient, not committed)\n\nFixes #105228\n\n## AI Assistance 🤖\n- **AI-assisted**: Yes\n- **Co-Authored-By**: Claude <noreply@anthropic.com>\n- **Human confirmed understanding**: Yes",
+        "branch": "fix/acp-spawn-abort-propagation-105228",
+        "head_sha": "b6d0946c1b4a404a7147b965a2ca5768c3607f20",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "proof/acp-abort-lifecycle.proof.ts",
+            "additions": 158,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/acp-spawn.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 194,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105346",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105346.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 108,
+          "gatingTotal": 103,
+          "counts": {
+            "SUCCESS": 30,
+            "SKIPPED": 34,
+            "IN_PROGRESS": 43,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-sqlite-session-schema-baseline:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
+            "checks-fast-bun-launcher:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-3:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-bundled-channel-config-metadata:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-boundaries-bcd:IN_PROGRESS",
+            "check-session-transcript-reader-boundary:IN_PROGRESS",
+            "check-sqlite-session-schema-baseline:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-channels:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-12T12:24:41.781Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -84,19 +258,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3095,
+    "total_ms": 4609,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1776
+        "ms": 546
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1684
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -120,7 +294,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1283
+        "ms": 2306
       },
       {
         "name": "append_ledger",
