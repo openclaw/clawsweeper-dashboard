@@ -21,17 +21,18 @@ export const FRESHNESS_BUCKETS = [
 export function buildActionLedgerProjection(root, options = {}) {
   const now = normalizeNow(options.now);
   const { events, source } = loadActionLedger(root);
+  const chronologicalEvents = [...events].sort(compareEventInstants);
   const metrics = {
     schema: "clawsweeper.state-ledger-metrics.v1",
     schema_version: 1,
     as_of: now.toISOString(),
     source_digest: source.source_digest,
     total_events: events.length,
-    oldest_occurred_at: events[0]?.occurred_at ?? null,
-    newest_occurred_at: events.at(-1)?.occurred_at ?? null,
+    oldest_occurred_at: chronologicalEvents[0]?.occurred_at ?? null,
+    newest_occurred_at: chronologicalEvents.at(-1)?.occurred_at ?? null,
     by_event_family: initializedMetrics(EVENT_FAMILIES),
-    by_repository: {},
-    by_action_status: {},
+    by_repository: Object.create(null),
+    by_action_status: Object.create(null),
     by_freshness: initializedMetrics(FRESHNESS_BUCKETS),
   };
 
@@ -77,12 +78,24 @@ function initializedMetrics(keys) {
 }
 
 function addMetric(metrics, key, occurredAt) {
-  const metric = metrics[key] ?? { count: 0, latest_occurred_at: null };
+  const metric = Object.hasOwn(metrics, key)
+    ? metrics[key]
+    : { count: 0, latest_occurred_at: null };
   metric.count += 1;
-  if (!metric.latest_occurred_at || occurredAt > metric.latest_occurred_at) {
+  if (
+    !metric.latest_occurred_at ||
+    Date.parse(occurredAt) > Date.parse(metric.latest_occurred_at)
+  ) {
     metric.latest_occurred_at = occurredAt;
   }
   metrics[key] = metric;
+}
+
+function compareEventInstants(left, right) {
+  return (
+    Date.parse(left.occurred_at) - Date.parse(right.occurred_at) ||
+    left.event_id.localeCompare(right.event_id)
+  );
 }
 
 function sortedMetrics(metrics, preferredOrder = []) {

@@ -6,7 +6,7 @@ import {
   actionEventShardRelativePath,
   loadActionLedger,
 } from "../scripts/ledger-events.mjs";
-import { actionEventId, actionEventKey } from "../scripts/ledger-schema.mjs";
+import { actionEventId, actionEventKey, stableJson } from "../scripts/ledger-schema.mjs";
 import { actionEvent, tempRoot, writeShard } from "./ledger-fixtures.mjs";
 
 test("ledger loading fails closed on malformed JSONL lines", (context) => {
@@ -133,6 +133,43 @@ test("ledger loading rejects privacy-unsafe attributes", (context) => {
     "utf8",
   );
   assert.throws(() => loadActionLedger(unsafeValueRoot), /privacy-unsafe attribute value/);
+});
+
+test("ledger loading rejects privacy-unsafe values outside attributes", () => {
+  assert.throws(
+    () =>
+      actionEvent({
+        action: {
+          name: "review",
+          status: "secret@example.com",
+          retryable: false,
+          mutation: false,
+        },
+      }),
+    /privacy-unsafe event data/,
+  );
+});
+
+test("ledger loading rejects mixed complete producer identities", (context) => {
+  const root = tempRoot(context);
+  const first = actionEvent();
+  const second = actionEvent({
+    event_key: actionEventKey("review.second", { number: 43 }),
+    occurred_at: "2026-07-12T10:02:00.000Z",
+    producer: {
+      ...first.producer,
+      repository: "openclaw/other",
+      sha: "def456",
+    },
+    subject: {
+      ...first.subject,
+      number: 43,
+    },
+  });
+  const file = writeShard(root, [first]);
+  fs.writeFileSync(file, `${stableJson(first)}\n${stableJson(second)}\n`, "utf8");
+
+  assert.throws(() => loadActionLedger(root), /complete shard producer identity/);
 });
 
 test("ledger loading enforces field-specific attribute contracts", (context) => {

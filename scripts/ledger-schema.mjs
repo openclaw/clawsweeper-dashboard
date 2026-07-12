@@ -118,7 +118,7 @@ function actionEventSemanticValue(event, location) {
       `${location}.privacy.fields_dropped: exceeds ${MAX_EVENT_COLLECTION_ITEMS} entries`,
     );
   }
-  return sortStable({
+  const semantic = sortStable({
     event_type: machineText(event.event_type, `${location}.event_type`),
     producer: {
       repository: requiredRepository(
@@ -172,6 +172,10 @@ function actionEventSemanticValue(event, location) {
         .sort(),
     },
   });
+  if (containsPrivateData(stableJson(semantic))) {
+    throw new LedgerValidationError(`${location}: contains privacy-unsafe event data`);
+  }
+  return semantic;
 }
 
 function normalizeSubject(subject, location) {

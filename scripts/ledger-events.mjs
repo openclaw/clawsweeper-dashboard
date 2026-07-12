@@ -144,7 +144,15 @@ function validateShardIdentity(events, relativePath) {
   }
   const partitionDate = partitionDateFromPath(relativePath);
   const identity = { ...shardIdentity(events[0]), partitionDate };
-  for (const event of events) assertSameShardIdentity(event, identity, relativePath);
+  const producerIdentity = stableJson(events[0].producer);
+  for (const event of events) {
+    assertSameShardIdentity(event, identity, relativePath);
+    if (stableJson(event.producer) !== producerIdentity) {
+      throw new LedgerValidationError(
+        `${relativePath}: event ${event.event_id} does not match complete shard producer identity`,
+      );
+    }
+  }
   const expected = actionEventShardRelativePath(identity, events);
   if (relativePath !== expected) {
     throw new LedgerValidationError(

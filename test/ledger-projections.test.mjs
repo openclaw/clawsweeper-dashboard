@@ -44,6 +44,54 @@ test("ledger projections expose source, family, repository, status, and freshnes
   assert.equal(projection.metrics.by_freshness.days_1_to_7.count, 1);
 });
 
+test("ledger projections compare timestamps as instants", (context) => {
+  const root = tempRoot(context);
+  writeShard(root, [
+    actionEvent({
+      event_key: actionEventKey("review.later", { number: 42 }),
+      occurred_at: "2026-07-12T10:00:00-05:00",
+    }),
+    actionEvent({
+      event_key: actionEventKey("review.earlier", { number: 43 }),
+      occurred_at: "2026-07-12T12:00:00+02:00",
+      subject: {
+        ...actionEvent().subject,
+        number: 43,
+      },
+    }),
+  ]);
+
+  const projection = buildActionLedgerProjection(root, {
+    now: "2026-07-12T16:00:00.000Z",
+  });
+  assert.equal(projection.metrics.oldest_occurred_at, "2026-07-12T12:00:00+02:00");
+  assert.equal(projection.metrics.newest_occurred_at, "2026-07-12T10:00:00-05:00");
+  assert.equal(
+    projection.metrics.by_event_family.review.latest_occurred_at,
+    "2026-07-12T10:00:00-05:00",
+  );
+});
+
+test("ledger projections handle prototype-named statuses", (context) => {
+  const root = tempRoot(context);
+  writeShard(root, [
+    actionEvent({
+      action: {
+        name: "review",
+        status: "constructor",
+        retryable: false,
+        mutation: false,
+      },
+    }),
+  ]);
+
+  const projection = buildActionLedgerProjection(root, {
+    now: "2026-07-12T12:00:00.000Z",
+  });
+  assert.equal(projection.metrics.by_action_status.constructor.count, 1);
+  assert.equal(Number.isFinite(projection.metrics.by_action_status.constructor.count), true);
+});
+
 test("ledger current indexes replace stale projection files", (context) => {
   const root = tempRoot(context);
   const output = path.join(root, "indexes", "current");
