@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T02:13:22.896Z",
+  "generated_at": "2026-07-12T02:14:26.424Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T23:13:20.897Z",
+  "since": "2026-07-11T23:14:24.048Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4949578290
   ],
-  "status_comment_id": 4949578379,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,15 +38,15 @@
       "comment_version_key": "4949578290:2026-07-12T02:11:57Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/104866#issuecomment-4949578290",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 104866,
-      "author": "obviyus",
-      "author_id": 22031114,
+      "target_branch": null,
+      "issue_number": 94050,
+      "author": "sunlit-deng",
+      "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
       "comment_created_at": "2026-07-12T02:11:57Z",
       "comment_updated_at": "2026-07-12T02:11:57Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 4949578379,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -71,202 +71,9 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 104866,
-          "dispatch_key": "router-7fcababb7f1a2709",
-          "dispatched_at": "2026-07-12T02:13:23.663Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-12T02:13:24.652Z",
-          "response_comment_id": "4949578379",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(auto-reply): adopt the target run slot when command turns continue into agent turns",
-        "body": "## What Problem This Solves\n\nFixes #104844.\n\n#104144 keys native command turns' reply operations to the slash SOURCE session so commands never dead-wait on the target's active run (#104142). But command turns that **continue into a full agent turn** — `/steer` fallback when no active run is found, `/goal`, `/learn`, or any body no handler claims — mutate the TARGET session while their run-slot reservation and session-lifecycle lease stay keyed to the slash source identity. Concurrent target inbounds miss the source-keyed operation in every target-keyed lookup, admit in parallel, and racing session init can rotate the target sessionId — splitting one chat into two conversation families (\"telegram desyncs sessions as well and does 2 sessions\"). Reset/delete on the target also never interlocked with such a run. A second latent break: continuing during an active target run made the pre-run `updateSessionId` reconciliation throw `Cannot rebind reply operation`, because the target sessionId is actively mapped to the target key.\n\n## Why This Change Was Made\n\nThe continuation seam is generic (four `shouldContinue: true` producers, plus the fast path funnels continuations back through the full pipeline), so the fix moves run ownership at that seam instead of patching individual commands:\n\n- `reply-run-registry.ts`: new `ReplyOperation.updateSessionKey` moves a still-queued reservation into another session's run slot — same operation object (dispatch closures own its abort/delivery lifecycle), indexes and wait registrations move with it, waiters on the vacated source slot wake, and an owned target slot throws `ReplyRunAlreadyActiveError`.\n- `reply-turn-admission.ts`: `admitReplyTurn` accepts `adoptOperation`, reusing the existing lifecycle-lease acquisition, stale-owner expiry, and busy handling; the target lease binds to the adopted operation so target reset/delete interlocks with the continuation run (the source lease still releases on operation clear; release is idempotent).\n- `get-reply-run.ts`: before the queue-busy decision, a native-command continuation (`CommandTargetSessionKey` set, operation key ≠ run session key) adopts the target slot with `waitForActive: false` — waiting would re-create the #104142 command-lane wedge. If the target slot is owned, adoption is skipped and the existing queue policy sees the target-keyed owner and steers/queues the turn. SessionId reconciliation for continuation turns now happens after adoption, fixing the `Cannot rebind` throw.\n- `agent-runner.ts`: the active-run steering block now steers against the operation registered under the run's session key instead of unconditionally preferring the provided reservation, so a skipped-adoption continuation steers into the live target run rather than its own stale reservation sessionId.\n\nPure command turns keep #104144's instant source-keyed admission unchanged.\n\n## User Impact\n\nAfter steering (or `/goal`, `/learn`) into an idle session, a message sent while the agent is answering no longer risks starting a second parallel run on the same chat, so sessions stop desyncing and splitting into two transcript families. Resetting or deleting a session now also correctly interrupts an in-flight run started from a command continuation.\n\n## Evidence\n\n- New regression tests: rekey slot move/wake/collision/phase-guard (`reply-run-registry.test.ts`), adoption + target lifecycle interlock and busy-skip keeping the source reservation (`reply-turn-admission.test.ts`), steering targets the registered run owner over a source-keyed reservation (`agent-runner.runreplyagent.e2e.test.ts`).\n- Blacksmith Testbox (`tbx_01kx9yjhn81br6x9qfdmefnrdh`):\n  - `pnpm test src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts src/auto-reply/reply/reply-run-registry.test.ts src/auto-reply/reply/reply-turn-admission.test.ts src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts` — all passed (includes the #104144 contract tests).\n  - `pnpm test src/auto-reply` — 156 files / 3526 tests passed.\n  - `pnpm tsgo:core && pnpm tsgo:core:test && pnpm check:import-cycles` — clean (0 runtime cycles).\n- Structured review (Codex/gpt-5.5): first pass found the steering-precedence gap (fixed above); final pass clean — \"patch is correct\", no actionable findings.\n- **Live gateway proof** (real `openclaw gateway` built from this branch + mock Telegram Bot API + mock OpenAI provider, per-scenario fresh state dir): [full verdicts and logs](https://github.com/openclaw/openclaw/pull/104866#issuecomment-4949577365).\n  - Concurrency: `/steer` fallback continuation + concurrent group inbound mid-run → `maxConcurrentStreams: 1`, second message steered into the live run (request #2 transcript carries both user messages), session store ends with exactly one session family for the chat key.\n  - Reset interlock: `/new` mid-continuation → in-flight completion stream client-aborted within ~30ms, `reason=reply_operation_aborted` on the continuation turn, target lane `AbortError: agent run aborted for restart`, old family `killed`, fresh sessionId routed, no stale final delivered; the `/new` command itself ran instantly (no #104142 wedge).\n",
-        "branch": "fix/command-turn-continuation-admission",
-        "head_sha": "62395480bd04da4b1d72a2a69e5ffc8bb532db61",
-        "author": "obviyus",
-        "labels": [
-          "maintainer",
-          "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-memory.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
-            "additions": 43,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/get-reply-run.ts",
-            "additions": 49,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.test.ts",
-            "additions": 63,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-run-registry.ts",
-            "additions": 69,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-turn-admission.test.ts",
-            "additions": 107,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/reply-turn-admission.ts",
-            "additions": 26,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-host-gateway.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-host-node-phases.ts",
-            "additions": 33,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-runtime.ts",
-            "additions": 5,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bash-tools.exec-types.ts",
-            "additions": 23,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-loop-detection.exec-foreground.test.ts",
-            "additions": 287,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/tool-loop-detection.test.ts",
-            "additions": 214,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-loop-detection.ts",
-            "additions": 75,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 10,
-        "additions": 368,
-        "deletions": 31,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104866",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104866.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "gatingTotal": 102,
-          "counts": {
-            "SUCCESS": 60,
-            "SKIPPED": 35,
-            "FAILURE": 11,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-compact-small-1:FAILURE",
-            "checks-node-compact-small-whole-1:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "checks-node-compact-small-1:FAILURE",
-            "checks-node-compact-small-whole-1:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-channels:FAILURE",
-            "check-additional-extension-bundled:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "check-additional-runtime-topology-architecture:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "processed_at": "2026-07-12T02:13:23.122Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -277,15 +84,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4344,
+    "total_ms": 4042,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 553
+        "ms": 2345
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1391
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
@@ -293,15 +100,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5068
-      },
-      {
-        "name": "classify_repair_loop_sweeps",
-        "ms": 5
-      },
-      {
-        "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -313,11 +112,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2297
+        "ms": 1666
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
