@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T15:26:19.881Z",
+  "generated_at": "2026-07-12T15:27:58.378Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T12:26:17.665Z",
+  "since": "2026-07-12T12:27:57.867Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -14,7 +14,7 @@
   "comment_ids": [
     4951713096
   ],
-  "status_comment_id": 4951713228,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -38,7 +38,7 @@
       "comment_version_key": "4951713096:2026-07-12T15:24:49Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/104973#issuecomment-4951713096",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 104973,
       "author": "xialonglee",
       "author_id": 22994703,
@@ -46,7 +46,7 @@
       "comment_created_at": "2026-07-12T15:24:49Z",
       "comment_updated_at": "2026-07-12T15:24:49Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 4951713228,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -71,86 +71,9 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 104973,
-          "dispatch_key": "router-38921f91e65e4cbe",
-          "dispatched_at": "2026-07-12T15:26:20.818Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-12T15:26:21.988Z",
-          "response_comment_id": "4951713228",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): preserve interrupted turn outcome when pending commands outlive the turn",
-        "body": "## What Problem This Solves\n\nWhen a Codex turn is interrupted (steer, interrupt signal, client teardown) with a native command still in-progress (e.g. `npm run dev`, long-running scripts), the event projector synthesizes a missing-tool-result error and promotes it to the run-level `promptError`. This masks the real terminal reason — the turn was interrupted — and causes the run to surface as `UNAVAILABLE` instead of aborted, losing any assistant output the turn had already produced.\n\nThe reporter recorded **23 occurrences over 5 days** on two agents (gpt-5.5 / gpt-5.4 via `openai-chatgpt-responses`), all `toolName=bash`, all correlated with long-running inline commands.\n\nThe fix keys the suppression gate on `this.aborted` instead of `turn.status === \"interrupted\"`:\n\n- **`this.aborted = true`** — OpenClaw-observed cancellation (steer, interrupt signal via `markAborted()`) → suppress `promptError`, abort flag is authoritative\n- **`this.aborted = false`** with interrupted turn — Codex v2 only exposes `interrupted` status; it does not expose the underlying reason → `promptError` survives → run is classified as error, not success\n\nThis is a one-line change (`event-projector.ts:839`): `this.aborted ? null : this.synthesizedMissingToolResultError`. The synthesized tool.result records are preserved for transcript/trajectory integrity in all paths.\n\nFixes #104898\n\n## User Impact\n\n- User-interrupted turns correctly surface as \"aborted\" (via the existing `markAborted()` path) instead of `UNAVAILABLE`\n- Assistant output produced before the interrupt is no longer silently lost\n- Non-cancellation interrupted turns remain classified as error — no false-success regression\n\n## Evidence\n\n### Unit Tests\n\n- `node scripts/run-vitest.mjs extensions/codex/src/app-server/event-projector.test.ts` — **150 passed** (covers cancelled turn with in-progress command + non-aborted interrupted turn)\n- `node_modules/.bin/oxlint --tsconfig config/tsconfig/oxlint.json --quiet extensions/codex/src/app-server/event-projector.ts extensions/codex/src/app-server/event-projector.test.ts` — clean\n- `git diff --check` — clean\n\n### Live Real-Behavior Proof\n\n**Setup**: Codex app-server routed through local model-mapper (port 4448, `gpt-5.5` → `deepseek-v4-pro`) → codex-relay (port 4446) → DeepSeek API. Gateway on port 18789 with codex plugin enabled, `codex-home/config.toml` setting `openai_base_url = \"http://127.0.0.1:4448/v1\"`. Auth via `OPENCLAW_GATEWAY_TOKEN`.\n\n**1. Normal completion** (via gateway, `pnpm openclaw agent --agent main_assistant --model codex/gpt-5.5 --json`):\n\n```\npnpm openclaw agent --agent main_assistant --model codex/gpt-5.5 --json \\\n  --message \"Reply with just the word: hello\"\n```\n\nKey output fields:\n```json\n{\n  \"status\": \"ok\",\n  \"summary\": \"completed\",\n  \"result\": {\n    \"meta\": {\n      \"aborted\": false,\n      \"agentMeta\": {\n        \"provider\": \"codex\",\n        \"model\": \"gpt-5.5\",\n        \"sessionId\": \"7c774644-b814-4b3f-b5ee-efe2d0ab3d9e\",\n        \"usage\": { \"input\": 86, \"output\": 22, \"cacheRead\": 11264, \"total\": 11372 }\n      }\n    }\n  },\n  \"finalAssistantVisibleText\": \"hello\"\n}\n```\n\n**2. Normal completion with bash tool execution:**\n\n```\npnpm openclaw agent --agent main_assistant --model codex/gpt-5.5 --json \\\n  --message \"Run this bash command and tell me the output: sleep 60 && echo 'ALL DONE'\"\n```\n\nKey output:\n```json\n{\n  \"status\": \"ok\",\n  \"summary\": \"completed\",\n  \"result\": {\n    \"meta\": {\n      \"aborted\": false,\n      \"agentMeta\": {\n        \"provider\": \"codex\",\n        \"model\": \"gpt-5.5\",\n        \"usage\": { \"input\": 107, \"output\": 52, \"cacheRead\": 11648, \"total\": 11807 }\n      }\n    },\n    \"toolSummary\": { \"calls\": 1, \"tools\": [\"bash\"], \"failures\": 0 },\n    \"replayInvalid\": true\n  }\n}\n```\n\n**3. Abort pathway — interrupted turn with in-progress command:**\n\nAgent started with `sleep 60 && echo DONE`, then received SIGTERM at ~30s. The signal bridge (`src/commands/agent-via-gateway.ts:422-428`) catches SIGTERM → `controller.abort()` → `markAborted()` in run-attempt → `this.aborted = true` → projector suppresses `promptError`.\n\nGateway diagnostic log confirms the abort path:\n```\nlane task error: lane=main durationMs=102949 error=\"AbortError: This operation was aborted\"\nlane task error: lane=session:agent:main_assistant:main durationMs=102958 error=\"AbortError: This operation was aborted\"\n```\n\nSession state transitions to \"killed\" on abort:\n```\nagent:main_assistant:main | killed | cb6bd88b-f37c-4d5a-b0c5-f4c49485fbe8\nagent:main_assistant:main | killed | 22c43355-b973-40c1-934e-103144a18d0c\n```\n\n**4. chat.abort RPC confirmed:**\n```\nOPENCLAW_GATEWAY_TOKEN=\"...\" pnpm openclaw gateway call chat.abort --json \\\n  --params '{\"sessionKey\":\"agent:main_assistant:main\"}'\n→ {\"ok\": true, \"aborted\": false, \"runIds\": []}\n```\n(No active run at call time; prior runs completed before abort call arrived.)\n\n### Code-level evidence\n\nUpstream Codex protocol: `TurnAbortedEvent` is projected into v2 as `TurnStatus::Interrupted` with `error: None`; the underlying reason is discarded (`../codex/codex-rs/app-server/src/bespoke_event_handling.rs:1438`).\n\n**What was not tested**: Full interactive TUI steering/interrupt requires a real Codex TUI session. The unit tests comprehensively cover this path:\n- Cancelled turn with in-progress command → `aborted=true`, `promptError` null, tool metas preserved\n- Non-aborted interrupted turn → `aborted=false`, `promptError` not null (fail-closed)\n\n## Revision Summary\n\n| Item | Resolution |\n|---|---|\n| Keep non-local Codex interruptions from producing successful outcomes | ✅ Changed gate from `turnInterrupted` to `this.aborted` |\n| Correct wording to match Codex v2 protocol facts | ✅ Removed Replaced/ReviewEnded/BudgetLimited enumeration; stated Codex v2 only exposes interrupted status |\n| Live Codex behavior proof | ✅ Gateway + relay E2E: normal completion with bash tool, SIGTERM abort path with AbortError in gateway logs, session killed state, chat.abort RPC confirmed |\n",
-        "branch": "fix/issue-104898-codex-interrupted-turn-prompt-error",
-        "head_sha": "c9bd71abd5c24a2e0a5815ba3563dc6e998809ee",
-        "author": "xialonglee",
-        "labels": [
-          "size: S",
-          "extensions: codex",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/event-projector.test.ts",
-            "additions": 117,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/event-projector.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 125,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104973",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104973.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 93,
-          "gatingTotal": 88,
-          "counts": {
-            "SUCCESS": 64,
-            "SKIPPED": 29
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-12T15:26:20.183Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -161,19 +84,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5087,
+    "total_ms": 2270,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 494
+        "ms": 472
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1657
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 3
+        "ms": 1
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -189,7 +112,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2860
+        "ms": 1759
       },
       {
         "name": "append_ledger",
