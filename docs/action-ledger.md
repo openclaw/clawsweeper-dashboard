@@ -15,9 +15,20 @@ ledger/v1/events/YYYY/MM/DD/<producer>/<run-id>-<attempt>-<job>-<digest>.jsonl
 
 Every render validates every line, the event schema, semantic digest, event
 identity, producer identity, canonical ordering, and shard path. One malformed
-or conflicting event fails the whole projection. Valid duplicate replays are
-collapsed deterministically; a reused event identity with different semantic
-content is a hard conflict.
+or conflicting event fails the whole projection. Event keys contain only a
+machine-readable scope plus a SHA-256 identity digest. Valid duplicate replays
+are collapsed deterministically only when all event metadata is identical; a
+reused event identity with different semantic content or occurrence metadata is
+a hard conflict.
+
+Shard partition dates are stable workflow-run identity. They are read from and
+validated against the shard path and identity digest; event ordering never
+chooses or changes a partition.
+
+Attributes use field-specific contracts: machine-readable strings, booleans,
+positive or non-negative integers, or unit-interval values. Evidence URLs are
+limited to exact public GitHub Actions run URLs, timestamps must be real
+calendar dates, and bounded collections contain at most 64 entries.
 
 `ledger/v1/indexes/current/` is generated output. `source.json` records the
 input shard snapshot and digests; `metrics.json` records counts by event family,
