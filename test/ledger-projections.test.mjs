@@ -181,10 +181,26 @@ test("ledger index output cannot overlap immutable source data", (context) => {
   for (const output of [root, path.join(root, "ledger"), path.dirname(shard)]) {
     assert.throws(
       () => writeActionLedgerIndexes(root, output, { now: "2026-07-12T12:00:00.000Z" }),
-      /output overlaps source data/,
+      /dedicated index directory/,
     );
     assert.equal(fs.existsSync(shard), true);
   }
+});
+
+test("ledger index output cannot replace an external directory", (context) => {
+  const root = tempRoot(context);
+  const external = tempRoot(context);
+  const output = path.join(external, "existing-output");
+  const sentinel = path.join(output, "sentinel.txt");
+  writeShard(root, [actionEvent()]);
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(sentinel, "keep\n", "utf8");
+
+  assert.throws(
+    () => writeActionLedgerIndexes(root, output, { now: "2026-07-12T12:00:00.000Z" }),
+    /dedicated index directory/,
+  );
+  assert.equal(fs.readFileSync(sentinel, "utf8"), "keep\n");
 });
 
 test("ledger index output cannot enter source data through a symlink alias", (context) => {

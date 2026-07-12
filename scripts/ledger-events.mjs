@@ -22,6 +22,7 @@ export function loadActionLedger(root) {
   const shardFiles = listShardFiles(eventsRoot, sourceRoot);
   const shards = [];
   const occurrences = [];
+  const partitionByProducer = new Map();
 
   for (const file of shardFiles) {
     const relativePath = toPosixPath(path.relative(sourceRoot, file));
@@ -34,6 +35,14 @@ export function loadActionLedger(root) {
     }
     const events = parseShard(content, relativePath);
     const partitionDate = validateShardIdentity(events, relativePath);
+    const producerIdentity = stableJson(events[0].producer);
+    const existingPartition = partitionByProducer.get(producerIdentity);
+    if (existingPartition && existingPartition.date !== partitionDate) {
+      throw new LedgerValidationError(
+        `${relativePath}: producer identity already uses partition ${existingPartition.date} in ${existingPartition.path}`,
+      );
+    }
+    partitionByProducer.set(producerIdentity, { date: partitionDate, path: relativePath });
     shards.push({
       path: relativePath,
       partition_date: partitionDate,

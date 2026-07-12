@@ -182,7 +182,15 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
     "endpoint:fd00::1",
     "tcp:fe80::1",
     "host:localhost",
+    "host:localhost.",
     "host:cache.internal.local:443",
+    "host:0:0:0:0:0:0:0:1",
+    "host:127.1",
+    "host:2130706433",
+    "host:0x7f000001",
+    "host:100.64.0.1",
+    "host:0.0.0.0",
+    "host:::ffff:127.0.0.1",
     ..."pousr".split("").map((kind) => `gh${kind}_${"a".repeat(36)}`),
     `github_pat_${"a".repeat(36)}`,
   ]) {
@@ -259,6 +267,23 @@ test("ledger loading rejects mixed complete producer identities", (context) => {
   fs.writeFileSync(file, `${stableJson(first)}\n${stableJson(second)}\n`, "utf8");
 
   assert.throws(() => loadActionLedger(root), /complete shard producer identity/);
+});
+
+test("ledger loading rejects one producer identity across partition dates", (context) => {
+  const root = tempRoot(context);
+  const first = actionEvent();
+  const second = actionEvent({
+    event_key: actionEventKey("review.second", { number: 43 }),
+    occurred_at: "2026-07-13T10:00:00.000Z",
+    subject: {
+      ...first.subject,
+      number: 43,
+    },
+  });
+  writeShard(root, [first], { partitionDate: "2026-07-12" });
+  writeShard(root, [second], { partitionDate: "2026-07-13" });
+
+  assert.throws(() => loadActionLedger(root), /producer identity already uses partition/);
 });
 
 test("ledger loading enforces field-specific attribute contracts", (context) => {

@@ -34,12 +34,13 @@ function assertSafeOutputDirectory(sourceRoot, outputDir) {
   const indexesRoot = physicalPath(path.join(sourceRoot, "ledger", "v1", "indexes"));
   const eventsRoot = physicalPath(path.join(sourceRoot, "ledger", "v1", "events"));
   if (
+    physicalOutputDir === indexesRoot ||
+    !pathContains(indexesRoot, physicalOutputDir) ||
     pathContains(physicalOutputDir, physicalSourceRoot) ||
     pathContains(physicalOutputDir, eventsRoot) ||
-    (pathContains(physicalSourceRoot, physicalOutputDir) &&
-      !pathContains(indexesRoot, physicalOutputDir))
+    !pathContains(physicalSourceRoot, physicalOutputDir)
   ) {
-    throw new Error(`action ledger index output overlaps source data: ${outputDir}`);
+    throw new Error(`action ledger output must be a dedicated index directory: ${outputDir}`);
   }
 }
 

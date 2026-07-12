@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -388,26 +389,80 @@ function privateUrl(value) {
 }
 
 function privateHost(value) {
-  const host = String(value).trim().replace(/^\[|\]$/g, "").toLowerCase();
+  const candidate = String(value).trim();
+  const labeledHost = /^(?:host|endpoint|tcp):(.+)$/i.exec(candidate);
+  const host = normalizedHost(labeledHost?.[1] ?? candidate, {
+    allowSingleLegacyIpv4: Boolean(labeledHost),
+  });
   if (!host) return false;
   if (host === "localhost" || host.endsWith(".local")) return true;
-  if (host === "::1" || /^(?:fc|fd)[0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host)) {
-    return true;
+  if (isIP(host) === 6) {
+    const mapped = ipv4MappedAddress(host);
+    if (mapped) return privateIpv4(mapped);
+    return (
+      host === "::" ||
+      host === "::1" ||
+      /^(?:fc|fd)[0-9a-f]{2}:/.test(host) ||
+      /^fe[89ab][0-9a-f]:/.test(host)
+    );
   }
   const octets = host.split(".").map(Number);
+  return privateIpv4(octets);
+}
+
+function normalizedHost(value, options = {}) {
+  let host = String(value).trim().toLowerCase();
+  if (!host) return "";
+  host = host.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  const addressFamily = isIP(host);
+  const legacyIpv4 =
+    /^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){1,3}$/i.test(host) ||
+    (options.allowSingleLegacyIpv4 && /^(?:0x[0-9a-f]+|\d+)$/i.test(host));
+  const hostWithPort = /^[a-z0-9.-]+:\d+$/i.test(host);
+  if (!addressFamily && !legacyIpv4 && !host.includes(".") && !hostWithPort) {
+    return host;
+  }
+  try {
+    const parsed =
+      addressFamily === 6 ? new URL(`http://[${host}]/`) : new URL(`http://${host}/`);
+    host = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
+  } catch {
+    // Keep the original candidate so exact hostname checks can still reject it.
+  }
+  return host;
+}
+
+function ipv4MappedAddress(host) {
+  const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (!match) return null;
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff];
+}
+
+function privateIpv4(octets) {
   if (
     octets.length !== 4 ||
     octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
   ) {
     return false;
   }
-  return (
-    octets[0] === 10 ||
-    octets[0] === 127 ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 192 && octets[1] === 168) ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
-  );
+  const [first, second] = octets;
+  if (first === undefined || second === undefined) return false;
+  if (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    first >= 224 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 198 && (second === 18 || second === 19))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function canonicalPublicUrl(value, location) {
