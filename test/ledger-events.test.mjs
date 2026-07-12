@@ -148,6 +148,7 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
     "ssh://alice:secret@10.0.0.1",
     "prefix:169.254.169.254",
     "file+ssh://10.0.0.1",
+    "error:/home/alice/project",
   ]) {
     assert.throws(
       () =>
@@ -159,7 +160,7 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
             mutation: false,
           },
         }),
-      /privacy-unsafe event data/,
+      /privacy-unsafe/,
     );
   }
 });

@@ -113,10 +113,19 @@ function sortedMetrics(metrics, preferredOrder = []) {
 }
 
 function freshnessBucket(occurredAt, now) {
-  const age = now.getTime() - Date.parse(occurredAt);
-  if (age < 0) return "future";
-  if (age < DAY_MS) return "last_24_hours";
-  if (age < 8 * DAY_MS) return "days_1_to_7";
-  if (age < 31 * DAY_MS) return "days_8_to_30";
+  const nowTimestamp = now.toISOString();
+  if (compareCanonicalTimestamps(occurredAt, nowTimestamp) > 0) return "future";
+  if (afterThreshold(occurredAt, now, DAY_MS)) return "last_24_hours";
+  if (afterThreshold(occurredAt, now, 8 * DAY_MS)) return "days_1_to_7";
+  if (afterThreshold(occurredAt, now, 31 * DAY_MS)) return "days_8_to_30";
   return "older_than_30_days";
+}
+
+function afterThreshold(occurredAt, now, ageMs) {
+  return (
+    compareCanonicalTimestamps(
+      occurredAt,
+      new Date(now.getTime() - ageMs).toISOString(),
+    ) > 0
+  );
 }

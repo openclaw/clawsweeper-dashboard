@@ -121,6 +121,26 @@ test("ledger freshness labels include their stated day boundaries", (context) =>
   assert.equal(projection.metrics.by_freshness.older_than_30_days.count, 0);
 });
 
+test("ledger freshness preserves sub-millisecond boundary precision", (context) => {
+  const root = tempRoot(context);
+  const now = "2026-07-13T10:00:00.000Z";
+  writeShard(root, [
+    actionEvent({
+      event_key: actionEventKey("review.inside-day", { number: 42 }),
+      occurred_at: "2026-07-12T10:00:00.0009Z",
+    }),
+    actionEvent({
+      event_key: actionEventKey("review.at-day", { number: 43 }),
+      occurred_at: "2026-07-12T10:00:00.0000Z",
+      subject: { ...actionEvent().subject, number: 43 },
+    }),
+  ]);
+
+  const projection = buildActionLedgerProjection(root, { now });
+  assert.equal(projection.metrics.by_freshness.last_24_hours.count, 1);
+  assert.equal(projection.metrics.by_freshness.days_1_to_7.count, 1);
+});
+
 test("ledger projections handle prototype-named statuses", (context) => {
   const root = tempRoot(context);
   writeShard(root, [

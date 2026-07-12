@@ -449,6 +449,9 @@ function machineText(value, location, maxLength = 256) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:/@+-]*$/.test(normalized)) {
     throw new LedgerValidationError(`${location}: must be machine-readable text`);
   }
+  if (/\/(?:Users|home|private|tmp)\//.test(normalized) || /\\Users\\/.test(normalized)) {
+    throw new LedgerValidationError(`${location}: contains privacy-unsafe machine text`);
+  }
   return normalized;
 }
 
