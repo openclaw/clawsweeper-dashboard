@@ -4,6 +4,7 @@ import path from "node:path";
 import { actionEventShardRelativePath } from "../scripts/ledger-events.mjs";
 import {
   actionEventId,
+  actionEventKey,
   actionEventSemanticSha256,
 } from "../scripts/ledger-schema.mjs";
 
@@ -18,7 +19,11 @@ export function actionEvent(overrides = {}, seal = true) {
     schema: "clawsweeper.state-ledger-event.v1",
     schema_version: 1,
     event_id: "",
-    event_key: "review.completed:openclaw/openclaw:42:abc123",
+    event_key: actionEventKey("review.completed", {
+      repository: "openclaw/openclaw",
+      number: 42,
+      source_revision: "abc123",
+    }),
     semantic_sha256: "",
     occurred_at: "2026-07-12T10:00:00.000Z",
     recorded_at: "2026-07-12T10:01:00.000Z",
@@ -72,13 +77,21 @@ export function actionEvent(overrides = {}, seal = true) {
   return event;
 }
 
-export function writeShard(root, events) {
+export function writeShard(root, events, options = {}) {
   const ordered = [...events].sort(
     (left, right) =>
       left.occurred_at.localeCompare(right.occurred_at) ||
       left.event_id.localeCompare(right.event_id),
   );
-  const relative = actionEventShardRelativePath(ordered);
+  const identity = {
+    producer: ordered[0].producer.component,
+    workflow: ordered[0].producer.workflow,
+    job: ordered[0].producer.job,
+    runId: ordered[0].producer.run_id,
+    runAttempt: ordered[0].producer.run_attempt,
+    partitionDate: options.partitionDate ?? "2026-07-12",
+  };
+  const relative = actionEventShardRelativePath(identity, ordered);
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(

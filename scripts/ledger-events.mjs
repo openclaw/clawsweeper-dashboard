@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   LedgerValidationError,
+  requiredCalendarDate,
   stableJson,
   validateActionLedgerEvent,
 } from "./ledger-schema.mjs";
@@ -25,9 +26,10 @@ export function loadActionLedger(root) {
     const relativePath = toPosixPath(path.relative(sourceRoot, file));
     const content = fs.readFileSync(file, "utf8");
     const events = parseShard(content, relativePath);
-    validateShardIdentity(events, relativePath);
+    const partitionDate = validateShardIdentity(events, relativePath);
     shards.push({
       path: relativePath,
+      partition_date: partitionDate,
       sha256: sha256(content),
       bytes: Buffer.byteLength(content),
       event_count: events.length,
@@ -54,29 +56,31 @@ export function loadActionLedger(root) {
   return { events: deduped.events, source };
 }
 
-export function actionEventShardRelativePath(events) {
+export function actionEventShardRelativePath(identity, events) {
   if (!events.length) throw new LedgerValidationError("action event shard requires events");
+  const normalizedIdentity = normalizeShardIdentity(identity);
   const normalized = dedupeEvents(
     events.map((event, index) => ({ event, path: "candidate", line: index + 1 })),
   ).events;
   const ordered = [...normalized].sort(compareEvents);
-  const first = ordered[0];
-  const identity = shardIdentity(first);
-  for (const event of ordered) assertSameShardIdentity(event, identity, "candidate shard");
-  const day = first.occurred_at.slice(0, 10).split("-");
+  for (const event of ordered) {
+    assertSameShardIdentity(event, normalizedIdentity, "candidate shard");
+  }
+  const day = normalizedIdentity.partitionDate.split("-");
   const identityDigest = sha256(
     stableJson({
-      producer: identity.producer,
-      workflow: identity.workflow,
-      job: identity.job,
-      runId: identity.runId,
-      runAttempt: identity.runAttempt,
+      producer: normalizedIdentity.producer,
+      workflow: normalizedIdentity.workflow,
+      job: normalizedIdentity.job,
+      runId: normalizedIdentity.runId,
+      runAttempt: normalizedIdentity.runAttempt,
+      partitionDate: normalizedIdentity.partitionDate,
     }),
   ).slice(0, 12);
   const filename = [
-    safePathSegment(identity.runId),
-    String(identity.runAttempt),
-    safePathSegment(identity.job),
+    safePathSegment(normalizedIdentity.runId),
+    String(normalizedIdentity.runAttempt),
+    safePathSegment(normalizedIdentity.job),
     identityDigest,
   ].join("-");
   return path.posix.join(
@@ -86,7 +90,7 @@ export function actionEventShardRelativePath(events) {
     day[0],
     day[1],
     day[2],
-    safePathSegment(identity.producer),
+    safePathSegment(normalizedIdentity.producer),
     `${filename}.jsonl`,
   );
 }
@@ -138,14 +142,16 @@ function validateShardIdentity(events, relativePath) {
       throw new LedgerValidationError(`${relativePath}: events are not in canonical order`);
     }
   }
-  const identity = shardIdentity(events[0]);
+  const partitionDate = partitionDateFromPath(relativePath);
+  const identity = { ...shardIdentity(events[0]), partitionDate };
   for (const event of events) assertSameShardIdentity(event, identity, relativePath);
-  const expected = actionEventShardRelativePath(events);
+  const expected = actionEventShardRelativePath(identity, events);
   if (relativePath !== expected) {
     throw new LedgerValidationError(
       `${relativePath}: shard path does not match producer identity; expected ${expected}`,
     );
   }
+  return partitionDate;
 }
 
 function shardIdentity(event) {
@@ -156,6 +162,28 @@ function shardIdentity(event) {
     runId: event.producer.run_id,
     runAttempt: event.producer.run_attempt,
   };
+}
+
+function normalizeShardIdentity(identity) {
+  return {
+    producer: machineText(identity.producer, "shard producer"),
+    workflow: machineText(identity.workflow, "shard workflow", 128),
+    job: machineText(identity.job, "shard job", 128),
+    runId: machineText(identity.runId, "shard run ID"),
+    runAttempt: positiveInteger(identity.runAttempt, "shard run attempt"),
+    partitionDate: requiredCalendarDate(identity.partitionDate, "shard partition date"),
+  };
+}
+
+function partitionDateFromPath(relativePath) {
+  const match =
+    /^ledger\/v1\/events\/(\d{4})\/(\d{2})\/(\d{2})\/[^/]+\/[^/]+\.jsonl$/.exec(
+      relativePath,
+    );
+  if (!match) {
+    throw new LedgerValidationError(`${relativePath}: invalid action ledger shard path`);
+  }
+  return requiredCalendarDate(`${match[1]}-${match[2]}-${match[3]}`, `${relativePath}: partition`);
 }
 
 function assertSameShardIdentity(event, identity, location) {
@@ -195,8 +223,13 @@ function dedupeEvents(occurrences) {
           `${previous.path}:${previous.line} != ${occurrence.path}:${occurrence.line}`,
       );
     }
+    if (stableJson(previous.event) !== stableJson(event)) {
+      throw new LedgerConflictError(
+        `action ledger event ${event.event_id} has conflicting duplicate metadata: ` +
+          `${previous.path}:${previous.line} != ${occurrence.path}:${occurrence.line}`,
+      );
+    }
     duplicateCount += 1;
-    if (compareRepresentatives(candidate, previous) < 0) byId.set(event.event_id, candidate);
   }
   return {
     events: [...byId.values()].map(({ event }) => event).sort(compareEvents),
@@ -208,15 +241,6 @@ function compareOccurrences(left, right) {
   return left.path.localeCompare(right.path) || left.line - right.line;
 }
 
-function compareRepresentatives(left, right) {
-  return (
-    left.event.recorded_at.localeCompare(right.event.recorded_at) ||
-    left.event.occurred_at.localeCompare(right.event.occurred_at) ||
-    stableJson(left.event).localeCompare(stableJson(right.event)) ||
-    compareOccurrences(left, right)
-  );
-}
-
 function compareEvents(left, right) {
   return (
     left.occurred_at.localeCompare(right.occurred_at) ||
@@ -226,6 +250,25 @@ function compareEvents(left, right) {
 
 function safePathSegment(value) {
   return value.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+}
+
+function machineText(value, location, maxLength = 256) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > maxLength ||
+    !/^[A-Za-z0-9][A-Za-z0-9_.:/@+-]*$/.test(value)
+  ) {
+    throw new LedgerValidationError(`${location}: must be machine-readable text`);
+  }
+  return value;
+}
+
+function positiveInteger(value, location) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new LedgerValidationError(`${location}: must be a positive integer`);
+  }
+  return value;
 }
 
 function toPosixPath(value) {

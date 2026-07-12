@@ -8,6 +8,37 @@ export const ACTION_LEDGER_SCHEMA = JSON.parse(
   fs.readFileSync(path.join(scriptDir, "..", "schema", "state-ledger-event.schema.json"), "utf8"),
 );
 
+const POSITIVE_INTEGER_ATTRIBUTE_KEYS = new Set(["attempt", "shard_count"]);
+const NON_NEGATIVE_INTEGER_ATTRIBUTE_KEYS = new Set([
+  "candidate_count",
+  "closed_count",
+  "cost_usd_micros",
+  "duration_ms",
+  "failed_count",
+  "finding_count",
+  "input_tokens",
+  "item_count",
+  "output_tokens",
+  "result_count",
+  "shard_index",
+  "skipped_count",
+]);
+const BOOLEAN_ATTRIBUTE_KEYS = new Set(["cached", "coverage_complete"]);
+const UNIT_INTERVAL_ATTRIBUTE_KEYS = new Set(["coverage_ratio"]);
+const MACHINE_TEXT_ATTRIBUTE_KEYS = new Set([
+  "cache_mode",
+  "completion_reason",
+  "dispatch_kind",
+  "model",
+  "phase",
+  "query_version",
+  "reasoning_effort",
+  "review_mode",
+  "state",
+  "work_kind",
+]);
+const MAX_EVENT_COLLECTION_ITEMS = 64;
+
 export class LedgerValidationError extends Error {
   constructor(message, options) {
     super(message, options);
@@ -30,7 +61,7 @@ export function validateActionLedgerEvent(value, location = "action ledger event
     schema: "clawsweeper.state-ledger-event.v1",
     schema_version: 1,
     event_id: value.event_id,
-    event_key: canonicalText(value.event_key, `${location}.event_key`),
+    event_key: requiredEventKey(value.event_key, `${location}.event_key`),
     semantic_sha256: value.semantic_sha256,
     occurred_at: canonicalTimestamp(value.occurred_at, `${location}.occurred_at`),
     recorded_at: canonicalTimestamp(value.recorded_at, `${location}.recorded_at`),
@@ -43,7 +74,19 @@ export function validateActionLedgerEvent(value, location = "action ledger event
 }
 
 export function actionEventId(repository, eventKey) {
-  return sha256(`${canonicalText(repository, "repository")}\n${canonicalText(eventKey, "event_key")}`);
+  const normalizedRepository = canonicalText(repository, "repository").toLowerCase();
+  return sha256(
+    `${requiredRepository(normalizedRepository, "repository")}\n${requiredEventKey(eventKey)}`,
+  );
+}
+
+export function actionEventKey(scope, identity) {
+  const normalizedScope = eventScope(scope);
+  const canonicalIdentity = stableJson(identity);
+  if (typeof canonicalIdentity !== "string") {
+    throw new LedgerValidationError("action event identity must be JSON serializable");
+  }
+  return `${normalizedScope}:${sha256(canonicalIdentity)}`;
 }
 
 export function actionEventSemanticSha256(event, location = "action ledger event") {
@@ -65,27 +108,40 @@ export function sortStable(value) {
 }
 
 function actionEventSemanticValue(event, location) {
+  if (event.evidence?.length > MAX_EVENT_COLLECTION_ITEMS) {
+    throw new LedgerValidationError(
+      `${location}.evidence: exceeds ${MAX_EVENT_COLLECTION_ITEMS} entries`,
+    );
+  }
+  if (event.privacy.fields_dropped.length > MAX_EVENT_COLLECTION_ITEMS) {
+    throw new LedgerValidationError(
+      `${location}.privacy.fields_dropped: exceeds ${MAX_EVENT_COLLECTION_ITEMS} entries`,
+    );
+  }
   return sortStable({
-    event_type: canonicalText(event.event_type, `${location}.event_type`),
+    event_type: machineText(event.event_type, `${location}.event_type`),
     producer: {
-      repository: canonicalText(event.producer.repository, `${location}.producer.repository`),
-      sha: canonicalText(event.producer.sha, `${location}.producer.sha`),
-      workflow: canonicalText(event.producer.workflow, `${location}.producer.workflow`),
-      job: canonicalText(event.producer.job, `${location}.producer.job`),
-      run_id: canonicalText(event.producer.run_id, `${location}.producer.run_id`),
+      repository: requiredRepository(
+        event.producer.repository,
+        `${location}.producer.repository`,
+      ),
+      sha: machineText(event.producer.sha, `${location}.producer.sha`),
+      workflow: machineText(event.producer.workflow, `${location}.producer.workflow`, 128),
+      job: machineText(event.producer.job, `${location}.producer.job`, 128),
+      run_id: machineText(event.producer.run_id, `${location}.producer.run_id`),
       run_attempt: safePositiveInteger(
         event.producer.run_attempt,
         `${location}.producer.run_attempt`,
       ),
-      component: canonicalText(event.producer.component, `${location}.producer.component`),
+      component: machineText(event.producer.component, `${location}.producer.component`),
     },
     subject: normalizeSubject(event.subject, location),
     action: {
-      name: canonicalText(event.action.name, `${location}.action.name`),
-      status: canonicalText(event.action.status, `${location}.action.status`),
+      name: machineText(event.action.name, `${location}.action.name`),
+      status: machineText(event.action.status, `${location}.action.status`),
       ...(event.action.reason_code
         ? {
-            reason_code: canonicalText(
+            reason_code: machineText(
               event.action.reason_code,
               `${location}.action.reason_code`,
             ),
@@ -107,12 +163,12 @@ function actionEventSemanticValue(event, location) {
       : {}),
     privacy: {
       classification: event.privacy.classification,
-      redaction_version: canonicalText(
+      redaction_version: machineText(
         event.privacy.redaction_version,
         `${location}.privacy.redaction_version`,
       ),
       fields_dropped: event.privacy.fields_dropped
-        .map((field) => canonicalText(field, `${location}.privacy.fields_dropped`))
+        .map((field) => machineText(field, `${location}.privacy.fields_dropped`))
         .sort(),
     },
   });
@@ -120,19 +176,19 @@ function actionEventSemanticValue(event, location) {
 
 function normalizeSubject(subject, location) {
   return {
-    repository: canonicalText(subject.repository, `${location}.subject.repository`),
+    repository: requiredRepository(subject.repository, `${location}.subject.repository`),
     kind: subject.kind,
     ...(subject.number !== undefined
       ? { number: safePositiveInteger(subject.number, `${location}.subject.number`) }
       : {}),
     ...(subject.cluster_id
       ? {
-          cluster_id: canonicalText(subject.cluster_id, `${location}.subject.cluster_id`),
+          cluster_id: machineText(subject.cluster_id, `${location}.subject.cluster_id`),
         }
       : {}),
     ...(subject.source_revision
       ? {
-          source_revision: canonicalText(
+          source_revision: machineText(
             subject.source_revision,
             `${location}.subject.source_revision`,
           ),
@@ -151,10 +207,10 @@ function normalizeSubject(subject, location) {
 
 function normalizeLearning(learning, location) {
   return {
-    category: canonicalText(learning.category, `${location}.learning.category`),
-    signal: canonicalText(learning.signal, `${location}.learning.signal`),
+    category: machineText(learning.category, `${location}.learning.category`),
+    signal: machineText(learning.signal, `${location}.learning.signal`),
     ...(learning.rule_id
-      ? { rule_id: canonicalText(learning.rule_id, `${location}.learning.rule_id`) }
+      ? { rule_id: machineText(learning.rule_id, `${location}.learning.rule_id`) }
       : {}),
     ...(learning.confidence !== undefined ? { confidence: learning.confidence } : {}),
   };
@@ -162,8 +218,10 @@ function normalizeLearning(learning, location) {
 
 function normalizeEvidence(evidence, location) {
   return {
-    kind: canonicalText(evidence.kind, `${location}.kind`),
-    ...(evidence.sha256 ? { sha256: evidence.sha256 } : {}),
+    kind: machineText(evidence.kind, `${location}.kind`),
+    ...(evidence.sha256
+      ? { sha256: requiredSha256(evidence.sha256, `${location}.sha256`) }
+      : {}),
     ...(evidence.report_path
       ? {
           report_path: canonicalRelativePath(evidence.report_path, `${location}.report_path`),
@@ -173,7 +231,7 @@ function normalizeEvidence(evidence, location) {
       ? { run_url: canonicalPublicUrl(evidence.run_url, `${location}.run_url`) }
       : {}),
     ...(evidence.snapshot_id
-      ? { snapshot_id: canonicalText(evidence.snapshot_id, `${location}.snapshot_id`) }
+      ? { snapshot_id: machineText(evidence.snapshot_id, `${location}.snapshot_id`) }
       : {}),
   };
 }
@@ -184,23 +242,63 @@ function normalizeAttributes(attributes, location) {
     left.localeCompare(right),
   )) {
     const attributeLocation = `${location}.attributes.${key}`;
-    if (/(?:body|comment|diff|patch|prompt|raw|stderr|stdout|log|text)/i.test(key)) {
-      throw new LedgerValidationError(`${attributeLocation}: privacy-unsafe attribute name`);
+    const normalizedKey = machineText(key, `${location}.attributes key`);
+    if (
+      !POSITIVE_INTEGER_ATTRIBUTE_KEYS.has(normalizedKey) &&
+      !NON_NEGATIVE_INTEGER_ATTRIBUTE_KEYS.has(normalizedKey) &&
+      !BOOLEAN_ATTRIBUTE_KEYS.has(normalizedKey) &&
+      !UNIT_INTERVAL_ATTRIBUTE_KEYS.has(normalizedKey) &&
+      !MACHINE_TEXT_ATTRIBUTE_KEYS.has(normalizedKey)
+    ) {
+      throw new LedgerValidationError(`${attributeLocation}: attribute is not allowlisted`);
     }
-    normalized[key] = Array.isArray(raw)
-      ? raw.map((value) => normalizeAttributeScalar(value, attributeLocation))
-      : normalizeAttributeScalar(raw, attributeLocation);
+    const values = Array.isArray(raw) ? raw : [raw];
+    if (values.length > MAX_EVENT_COLLECTION_ITEMS) {
+      throw new LedgerValidationError(
+        `${attributeLocation}: exceeds ${MAX_EVENT_COLLECTION_ITEMS} values`,
+      );
+    }
+    const normalizedValues = values.map((value) =>
+      normalizeAttributeScalar(normalizedKey, value, attributeLocation),
+    );
+    normalized[normalizedKey] = Array.isArray(raw) ? normalizedValues : normalizedValues[0];
   }
   return normalized;
 }
 
-function normalizeAttributeScalar(value, location) {
-  if (typeof value !== "string") return value;
-  const normalized = canonicalText(value, location);
-  if (containsPrivateData(normalized)) {
-    throw new LedgerValidationError(`${location}: privacy-unsafe attribute value`);
+function normalizeAttributeScalar(key, value, location) {
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    throw new LedgerValidationError(`${location}: must be a scalar`);
   }
-  return normalized;
+  if (POSITIVE_INTEGER_ATTRIBUTE_KEYS.has(key)) {
+    return safePositiveInteger(value, location);
+  }
+  if (NON_NEGATIVE_INTEGER_ATTRIBUTE_KEYS.has(key)) {
+    return safeNonNegativeInteger(value, location);
+  }
+  if (BOOLEAN_ATTRIBUTE_KEYS.has(key)) {
+    if (typeof value !== "boolean") {
+      throw new LedgerValidationError(`${location}: must be a boolean`);
+    }
+    return value;
+  }
+  if (UNIT_INTERVAL_ATTRIBUTE_KEYS.has(key)) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+      throw new LedgerValidationError(`${location}: must be between 0 and 1`);
+    }
+    return value;
+  }
+  if (MACHINE_TEXT_ATTRIBUTE_KEYS.has(key)) {
+    if (typeof value !== "string") {
+      throw new LedgerValidationError(`${location}: must be machine-readable text`);
+    }
+    const normalized = machineText(value, location);
+    if (containsPrivateData(normalized)) {
+      throw new LedgerValidationError(`${location}: privacy-unsafe attribute value`);
+    }
+    return normalized;
+  }
+  throw new LedgerValidationError(`${location}: attribute has no value contract`);
 }
 
 function containsPrivateData(value) {
@@ -240,9 +338,17 @@ function canonicalPublicUrl(value, location) {
     parsed.protocol !== "https:" ||
     parsed.username ||
     parsed.password ||
-    parsed.hostname !== "github.com"
+    parsed.port ||
+    parsed.search ||
+    parsed.hash
   ) {
-    throw new LedgerValidationError(`${location}: run URL must use the public github.com host`);
+    throw new LedgerValidationError(`${location}: run URL must be credential-free HTTPS`);
+  }
+  if (
+    parsed.hostname !== "github.com" ||
+    !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[0-9]+$/.test(parsed.pathname)
+  ) {
+    throw new LedgerValidationError(`${location}: run URL must identify a GitHub Actions run`);
   }
   const canonical = parsed.toString();
   if (canonical !== value) {
@@ -252,7 +358,14 @@ function canonicalPublicUrl(value, location) {
 }
 
 function canonicalRelativePath(value, location) {
-  const normalized = canonicalText(value, location).replaceAll("\\", "/").replace(/^\.\//, "");
+  const normalized = boundedText(value, location, 512).replaceAll("\\", "/").replace(/^\.\//, "");
+  if (
+    path.posix.isAbsolute(normalized) ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split("/").includes("..")
+  ) {
+    throw new LedgerValidationError(`${location}: path must be repository-relative`);
+  }
   if (normalized !== value) {
     throw new LedgerValidationError(`${location}: path is not canonical`);
   }
@@ -270,15 +383,69 @@ function canonicalText(value, location) {
   return normalized;
 }
 
+function boundedText(value, location, maxLength) {
+  const normalized = canonicalText(value, location);
+  if (normalized.length > maxLength) {
+    throw new LedgerValidationError(`${location}: exceeds ${maxLength} characters`);
+  }
+  return normalized;
+}
+
+function machineText(value, location, maxLength = 256) {
+  const normalized = boundedText(value, location, maxLength);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:/@+-]*$/.test(normalized)) {
+    throw new LedgerValidationError(`${location}: must be machine-readable text`);
+  }
+  return normalized;
+}
+
+function eventScope(value) {
+  const normalized = boundedText(value, "action event scope", 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.+-]*$/.test(normalized)) {
+    throw new LedgerValidationError("action event scope must be machine-readable text");
+  }
+  return normalized;
+}
+
+function requiredEventKey(value, location = "action event key") {
+  const normalized = boundedText(value, location, 193);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}:[a-f0-9]{64}$/.test(normalized)) {
+    throw new LedgerValidationError(
+      `${location}: must be generated from a machine-readable scope and digest`,
+    );
+  }
+  return normalized;
+}
+
+function requiredRepository(value, location) {
+  const normalized = canonicalText(value, location);
+  if (!/^[a-z0-9_][a-z0-9_.-]*\/[a-z0-9_][a-z0-9_.-]*$/.test(normalized)) {
+    throw new LedgerValidationError(`${location}: invalid repository`);
+  }
+  return normalized;
+}
+
+function requiredSha256(value, location) {
+  const normalized = canonicalText(value, location);
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new LedgerValidationError(`${location}: must be a lowercase SHA-256 digest`);
+  }
+  return normalized;
+}
+
 function canonicalTimestamp(value, location) {
   const normalized = canonicalText(value, location);
-  if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
-      normalized,
-    ) ||
-    !Number.isFinite(Date.parse(normalized))
-  ) {
+  if (!isStrictTimestamp(normalized)) {
     throw new LedgerValidationError(`${location}: invalid canonical date-time`);
+  }
+  return normalized;
+}
+
+export function requiredCalendarDate(value, location = "partition date") {
+  const normalized = canonicalText(value, location);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match || !isCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))) {
+    throw new LedgerValidationError(`${location}: must be an ISO calendar date`);
   }
   return normalized;
 }
@@ -286,6 +453,13 @@ function canonicalTimestamp(value, location) {
 function safePositiveInteger(value, location) {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new LedgerValidationError(`${location}: expected a positive safe integer`);
+  }
+  return value;
+}
+
+function safeNonNegativeInteger(value, location) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new LedgerValidationError(`${location}: expected a non-negative safe integer`);
   }
   return value;
 }
@@ -427,20 +601,41 @@ function hasJsonType(value, type) {
 }
 
 function isDateTime(value) {
-  const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/,
-  );
-  if (!match || !Number.isFinite(Date.parse(value))) return false;
-  const [, year, month, day, hour, minute, second] = match.map(Number);
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return isStrictTimestamp(value);
+}
+
+function isStrictTimestamp(value) {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/.exec(
+      value,
+    );
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[8];
+  const offsetMinute = match[9];
   return (
-    month >= 1 &&
-    month <= 12 &&
-    day >= 1 &&
-    day <= daysInMonth &&
+    isCalendarDate(year, month, day) &&
     hour <= 23 &&
     minute <= 59 &&
-    second <= 59
+    second <= 59 &&
+    (offsetHour === undefined || Number(offsetHour) <= 23) &&
+    (offsetMinute === undefined || Number(offsetMinute) <= 59) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function isCalendarDate(year, month, day) {
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  return (
+    year >= 1 &&
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
   );
 }
 

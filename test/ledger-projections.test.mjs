@@ -5,6 +5,7 @@ import test from "node:test";
 import { renderActionLedgerDashboard } from "../scripts/ledger-dashboard.mjs";
 import { writeActionLedgerIndexes } from "../scripts/ledger-project.mjs";
 import { buildActionLedgerProjection } from "../scripts/ledger-projections.mjs";
+import { actionEventKey } from "../scripts/ledger-schema.mjs";
 import { actionEvent, tempRoot, writeShard } from "./ledger-fixtures.mjs";
 
 test("ledger projections expose source, family, repository, status, and freshness metrics", (context) => {
@@ -12,7 +13,11 @@ test("ledger projections expose source, family, repository, status, and freshnes
   writeShard(root, [
     actionEvent(),
     actionEvent({
-      event_key: "apply.executed:openclaw/openclaw:42:abc123",
+      event_key: actionEventKey("apply.executed", {
+        repository: "openclaw/openclaw",
+        number: 42,
+        source_revision: "abc123",
+      }),
       event_type: "apply.executed",
       action: {
         name: "close",
