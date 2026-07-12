@@ -144,6 +144,10 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
     "file:///var/lib/secret",
     "fd00::1",
     "169.254.169.254",
+    "10.0.0.1:22",
+    "ssh://alice:secret@10.0.0.1",
+    "prefix:169.254.169.254",
+    "file+ssh://10.0.0.1",
   ]) {
     assert.throws(
       () =>
@@ -374,6 +378,18 @@ test("ledger loading rejects a symlinked source root segment", (context) => {
   fs.mkdirSync(path.join(root, "ledger", "v1"), { recursive: true });
   fs.symlinkSync(
     path.join(external, "ledger", "v1", "events"),
+    path.join(root, "ledger", "v1", "events"),
+    "dir",
+  );
+
+  assert.throws(() => loadActionLedger(root), /source contains symlink/);
+});
+
+test("ledger loading rejects a dangling symlinked events root", (context) => {
+  const root = tempRoot(context);
+  fs.mkdirSync(path.join(root, "ledger", "v1"), { recursive: true });
+  fs.symlinkSync(
+    path.join(root, "missing-events"),
     path.join(root, "ledger", "v1", "events"),
     "dir",
   );

@@ -97,8 +97,8 @@ export function actionEventShardRelativePath(identity, events) {
 }
 
 function listShardFiles(root, sourceRoot) {
-  if (!fs.existsSync(root)) return [];
   assertNoSymlinkedSourcePath(root, sourceRoot);
+  if (!pathEntryExists(root)) return [];
   const files = [];
   const visit = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
@@ -123,8 +123,12 @@ function assertNoSymlinkedSourcePath(root, sourceRoot) {
   let current = path.resolve(root);
   const boundary = path.resolve(sourceRoot);
   while (true) {
-    if (fs.lstatSync(current).isSymbolicLink()) {
-      throw new LedgerValidationError(`action ledger source contains symlink: ${current}`);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        throw new LedgerValidationError(`action ledger source contains symlink: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
     }
     if (current === boundary) return;
     const parent = path.dirname(current);
@@ -132,6 +136,16 @@ function assertNoSymlinkedSourcePath(root, sourceRoot) {
       throw new LedgerValidationError(`action ledger source escapes source root: ${root}`);
     }
     current = parent;
+  }
+}
+
+function pathEntryExists(value) {
+  try {
+    fs.lstatSync(value);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
   }
 }
 

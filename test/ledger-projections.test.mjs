@@ -179,10 +179,28 @@ test("ledger index output cannot enter source data through a symlink alias", (co
       writeActionLedgerIndexes(root, path.join(aliasRoot, "events-alias", "projection"), {
         now: "2026-07-12T12:00:00.000Z",
       }),
-    /output overlaps source data/,
+    /output contains symlink/,
   );
   assert.equal(fs.existsSync(shard), true);
 });
+
+test("ledger index output rejects a symlinked index root before replacement", (context) => {
+  const root = tempRoot(context);
+  const external = tempRoot(context);
+  writeShard(root, [actionEvent()]);
+  fs.mkdirSync(path.join(root, "ledger", "v1"), { recursive: true });
+  fs.symlinkSync(external, path.join(root, "ledger", "v1", "indexes"), "dir");
+  const sentinel = path.join(external, "current", "sentinel.txt");
+  fs.mkdirSync(path.dirname(sentinel), { recursive: true });
+  fs.writeFileSync(sentinel, "keep\n", "utf8");
+
+  assert.throws(
+    () => writeActionLedgerIndexes(root, undefined, { now: "2026-07-12T12:00:00.000Z" }),
+    /output contains symlink/,
+  );
+  assert.equal(fs.readFileSync(sentinel, "utf8"), "keep\n");
+});
+
 test("action ledger dashboard renders concise source and metric projections", (context) => {
   const root = tempRoot(context);
   writeShard(root, [actionEvent()]);

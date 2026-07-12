@@ -28,6 +28,7 @@ export function writeActionLedgerIndexes(sourceRoot, output, options = {}) {
 }
 
 function assertSafeOutputDirectory(sourceRoot, outputDir) {
+  assertNoSymlinkedOutputPath(sourceRoot, outputDir);
   const physicalSourceRoot = physicalPath(sourceRoot);
   const physicalOutputDir = physicalPath(outputDir);
   const indexesRoot = physicalPath(path.join(sourceRoot, "ledger", "v1", "indexes"));
@@ -40,6 +41,33 @@ function assertSafeOutputDirectory(sourceRoot, outputDir) {
   ) {
     throw new Error(`action ledger index output overlaps source data: ${outputDir}`);
   }
+}
+
+function assertNoSymlinkedOutputPath(sourceRoot, outputDir) {
+  const boundary = commonAncestor(path.resolve(sourceRoot), path.resolve(outputDir));
+  let current = path.resolve(outputDir);
+  while (current !== boundary) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        throw new Error(`action ledger index output contains symlink: ${current}`);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+}
+
+function commonAncestor(left, right) {
+  let candidate = left;
+  while (!pathContains(candidate, right)) {
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return parent;
+    candidate = parent;
+  }
+  return candidate;
 }
 
 function physicalPath(value) {

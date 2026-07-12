@@ -337,7 +337,13 @@ function containsPrivateData(value) {
     return true;
   }
   if (privateHost(value)) return true;
-  const embeddedUrls = value.match(/\b(?:file|https?):\/\/[^\s"'<>]+/gi) ?? [];
+  const privateAddressCandidates = [
+    ...(value.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? []),
+    ...(value.match(/\[[0-9a-f:]+\]/gi) ?? []),
+  ];
+  if (privateAddressCandidates.some(privateHost)) return true;
+  const embeddedUrls =
+    value.match(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>]+/g) ?? [];
   return embeddedUrls.some(privateUrl);
 }
 
