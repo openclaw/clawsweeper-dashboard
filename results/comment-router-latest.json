@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T01:33:28.815Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-12T01:34:45.981Z",
+  "repo": "steipete/CodexBar",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-11T22:33:26.516Z",
+  "since": "2026-07-11T22:34:44.620Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
   "item_numbers": [
-    93100
+    2012
   ],
   "comment_ids": [
-    4949478603
+    4949486169
   ],
-  "status_comment_id": null,
+  "status_comment_id": 4949486267,
   "max_autoclose_targets": 8,
-  "scanned_comments": 5,
+  "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -33,21 +33,21 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93100:4949478603:2026-07-12T01:30:28Z:re_review",
-      "comment_id": "4949478603",
-      "comment_version_key": "4949478603:2026-07-12T01:30:28Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93100#issuecomment-4949478603",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 93100,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T01:30:28Z",
-      "comment_updated_at": "2026-07-12T01:30:28Z",
-      "status_comment_id": null,
+      "idempotency_key": "comment-router:steipete/CodexBar:2012:4949486169:2026-07-12T01:33:17Z:re_review",
+      "comment_id": "4949486169",
+      "comment_version_key": "4949486169:2026-07-12T01:33:17Z",
+      "comment_url": "https://github.com/steipete/CodexBar/pull/2012#issuecomment-4949486169",
+      "repo": "steipete/CodexBar",
+      "target_branch": "main",
+      "issue_number": 2012,
+      "author": "steipete",
+      "author_id": 58493,
+      "author_association": "OWNER",
+      "comment_created_at": "2026-07-12T01:33:17Z",
+      "comment_updated_at": "2026-07-12T01:33:17Z",
+      "status_comment_id": 4949486267,
       "trigger": "mention",
-      "command": "re-review please",
+      "command": "re-review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -58,7 +58,7 @@
       "repair_reason": null,
       "review_summary": null,
       "review_followup": null,
-      "freeform_prompt": "please.",
+      "freeform_prompt": null,
       "visual_lens": null,
       "expected_head_sha": null,
       "close_reason": null,
@@ -70,243 +70,127 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 2012,
+          "dispatch_key": "router-5ed80b3b6ade17a9",
+          "dispatched_at": "2026-07-12T01:34:46.775Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-12T01:34:47.766Z",
+          "response_comment_id": "4949486267",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "fix(compaction): emit after_compaction on no-op and use JSON-safe validator delimiters (#81925)",
-        "body": "## Summary\n\nOpenClaw issue #81925 documents two coupled defects that surface as HTTP 500s on voice channels when the context engine runs under memory pressure, especially for open-weight tool-calling models:\n\n1. `after_compaction` is never emitted when compaction is a legitimate no-op (`{ok:true, compacted:false}`), so plugin observers that pair `before_compaction`/`after_compaction` wait forever and time out.\n2. Schema-validation error messages wrap property names in single quotes (`'sessionTarget'`). Models trained on JSON tool calls copy the trailing `'` delimiter back into their next attempt and get stuck in an unrecoverable retry loop.\n\nThis change fixes both, on every surface where they occur, and updates the internal callers that pattern-match those validator messages so the delimiter change does not break cross-version behavior.\n\n## Root cause\n\n### Bug 1: after_compaction not emitted on no-op compaction\n\n`before_compaction` fires unconditionally once the engine owns compaction, but `after_compaction` was gated on `result.compacted === true` on **three** independent compaction surfaces:\n\n- `compact.queued.ts` (engine-owned queued path): the after-hook block required `result.ok && result.compacted`.\n- `compact.ts` `compactEmbeddedAgentSessionDirect` (native direct path): the `!containsRealConversationMessages(...)` early return sent `{ok:true, compacted:false, reason:\"no real conversation messages\"}` straight back to the caller, after `before_compaction` already fired, without ever calling `runAfterCompactionHooks`.\n- `run.ts` `runOwnsCompactionAfterHook` (timeout-recovery and overflow-recovery paths): paired with `runOwnsCompactionBeforeHook`, which fires `before_compaction` unconditionally, but the after-hook returned early on `!compactResult.compacted`.\n\nSo a paired observer sees `before` with no matching `after`. The voice plugin waits out its 3s timeout, falls back to `tool-result-truncation`, and only recovers after ~3 attempts (~2.5 min), long after the client has already 500'd.\n\n### Bug 2: validator delimiters trip tool callers\n\nValidation error formatting wrapped property names in single quotes in two places:\n\n- `packages/gateway-protocol/src/validation-errors.ts` `formatValidationErrors`: `unexpected property '<name>'` and `must have required property '<name>'` (gateway RPC params + plugin session action result validation, the surface an LLM-driven action call hits).\n- `src/plugins/schema-validator.ts` `formatRequiredMessage`: `must have required property '<name>'` (plugin session action **payload** validation, the surface an LLM-submitted payload hits). Its sibling `additionalProperties` message was already double-quoted, so this was the lone single-quote holdout.\n\nA model that parses the error and copies the property token captures `<name>'` (with the stray quote), re-emits the same malformed key, and re-triggers the identical error.\n\n### Bug 2 follow-through: version-fallback detectors keyed on the old wording\n\nSeveral internal callers strip an additive request field and retry when an **older** gateway rejects it, and they recognize that rejection by matching the validator's `unexpected property '<name>'` text. Switching the producer to `JSON.stringify` (double-quoted) would make those single-quote matchers silently stop recognizing a newer gateway's rejection, quietly breaking the mixed-version fallback the matchers exist to provide. Five such detectors match this wording: `cron-tool.ts` (`cron.list` compact), `gateway.ts` (`connect` identity-token and `node.invoke` turn-source), `sessions-resolution.ts` (`sessions.resolve` allowMissing), and `ui/src/lib/sessions/usage.ts` (`sessions.usage` timeZone).\n\n## Fix\n\n- **Bug 1, all three surfaces:** emit `after_compaction` whenever compaction completes (`result.ok`), with `compactedCount: 0` and a `reason` discriminator on the no-op path. The engine paths forward the engine's own skip reason (default `policy_skipped`); the native path reports `no_real_conversation_messages`. Added an optional `reason?: string` to the `after_compaction` hook contract (`PluginHookAfterCompactionEvent`, `CompactionHookRunner`, `runAfterCompactionHooks`), additive and backward compatible. The `!compactResult.ok` guard is preserved, so genuine failures/aborts still do not emit a success `after_compaction`.\n- **Bug 2, all four property-name branches:** format every property name through `JSON.stringify(name)` rather than interpolating it into hand-written quotes. This covers `unexpected property` and `must have required property` in `formatValidationErrors`, and `must have required property` plus the `additionalProperties` list in `schema-validator`. `JSON.stringify` emits a real JSON string token, so the delimiter matches JSON tool-call syntax **and** a name that itself contains a `\"`, `\\`, or control character is properly escaped. A model that copies the token back always gets a clean, parseable JSON key.\n- **Detectors, all five surfaces:** add one shared `messageReportsUnexpectedProperty(message, name)` helper co-located with the producer in `validation-errors.ts` that accepts both the legacy single-quoted and the new `JSON.stringify` wording, and route every version-fallback detector through it. The mirror of `JSON.stringify` on both the producer and the matcher keeps the escaping symmetric. `context-engine/registry.ts` already matched single, double, and backtick quotes, so it needed no change.\n\n## Why this covers the whole issue (not one surface)\n\n- The no-op `after_compaction` gap existed on **three** independent compaction code paths (engine-owned queued, native direct, and timeout/overflow recovery). Fixing only one would still hang on the others. All three are fixed and all three have regression coverage.\n- The delimiter/escaping issue existed across **four** property-name branches on **two** independent validator paths. All four now route through `JSON.stringify`.\n- The delimiter change would otherwise regress **five** version-fallback detectors that recognize an older gateway by the old wording. All five now accept both wordings through one shared matcher, so mixed-version `cron.list`, `connect`, `node.invoke`, `sessions.resolve`, and `sessions.usage` fallbacks keep firing, and each has both-wording retry coverage.\n\n## Verification\n\n- `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/compact.hooks.test.ts src/agents/embedded-agent-runner/run.timeout-triggered-compaction.test.ts src/agents/embedded-agent-runner/run.overflow-compaction.test.ts` -> compaction regression coverage passing (engine-skip no-op, engine default reason, native-skip paired-observer, timeout-recovery no-op, overflow-recovery no-op).\n- `node scripts/run-vitest.mjs packages/gateway-protocol/src/index.test.ts` -> 56 passed (adds the `messageReportsUnexpectedProperty` unit coverage plus the JSON-token validator assertions).\n- `node scripts/run-vitest.mjs src/agents/tools/cron-tool.test.ts src/agents/tools/gateway.test.ts src/agents/tools/sessions-resolution.test.ts` -> 223 passed (each version-fallback detector now parametrized over both wordings).\n- `node scripts/run-vitest.mjs ui/src/lib/sessions/usage.test.ts` -> 5 passed (`sessions.usage` retry parametrized over both wordings).\n\n## Real behavior proof\n\nBehavior or issue addressed: a no-op compaction now emits `after_compaction` (so a paired voice observer is not left waiting); both validators now format property names through `JSON.stringify` (so a tool-calling model always copies back a valid, parseable JSON key even when the property name contains a `\"` or `\\`); and every version-fallback detector that recognizes an older gateway rejecting an additive field now accepts both the legacy single-quoted and the new JSON-quoted wording, so the delimiter change does not silently break mixed-version fallbacks.\n\nReal environment tested: the actual built-from-source OpenClaw runtime functions in this branch, driven directly through `node` (via the `tsx` ESM loader) outside any harness. Bug 1 drives the real `containsRealConversationMessages`, `runBeforeCompactionHooks`, and `runAfterCompactionHooks` from `src/agents/embedded-agent-runner/`, with a real `registerInternalHook` voice-style observer. Bug 2 drives the real `formatValidationErrors` from `packages/gateway-protocol/` and the real `validateJsonSchemaValue` from `src/plugins/schema-validator.ts`. The detector proof drives the real shared `messageReportsUnexpectedProperty` and the real `requestSessionsUsage` retry path from `ui/src/lib/sessions/usage.ts`.\n\nExact steps or command run after this patch: register a paired `session:compact:before` / `session:compact:after` observer, feed a heartbeat-only transcript (so `containsRealConversationMessages` returns false, the real no-op trigger), then run the real before/after emission the patched no-op branch performs; feed a hostile property name containing an embedded quote and backslash into the real gateway-protocol formatter and the real plugin schema-validator, read back each formatted message, and parse the token a JSON model would copy back; then take the patched formatter's own JSON-quoted rejection, run it through both the old single-quoted matching form and the new shared matcher, and drive the real `requestSessionsUsage` against a gateway that rejects the additive `timeZone` field in each wording to observe whether the additive field is stripped and the call retried.\n\nEvidence after fix (live console output from `node` driving the real runtime functions):\n\n```\n$ node --import tsx proof-bug1.mts   # drives real compaction hook emission\ncontainsRealConversationMessages(heartbeat) = false\n\n# BEFORE the fix (no-op fires before_compaction only):\n  observer pending balance = 1 <- stuck, after_compaction never arrives (hang)\n  observer received after  = null\n\n# AFTER the fix (no-op also fires after_compaction):\n  observer pending balance = 0 <- balanced\n  observer received after  = {\"compactedCount\":0,\"reason\":\"no_real_conversation_messages\"}\n\n$ node --import tsx proof-validator-escape.mts   # drives real validators\nproperty name a hostile schema/model supplies: \"evil\\\"key\\\\path\"\n\n# BEFORE (raw interpolation into hand-written double quotes):\n  message = \"at root: unexpected property \\\"evil\\\"key\\\\path\\\"\"\n  token a model copies = \"\\\"evil\\\"key\\\\path\\\"\"\n  copies as a clean JSON key? = false\n\n# AFTER (real gateway-protocol formatValidationErrors):\n  message = \"at root: unexpected property \\\"evil\\\\\\\"key\\\\\\\\path\\\"\"\n  copies as a clean JSON key? = true\n\n# AFTER (real plugin schema-validator required-property miss):\n  message = \"must have required property \\\"evil\\\\\\\"key\\\\\\\\path\\\"\"\n  contains a valid JSON string token? = true\n\n$ node --import tsx proof-detector.mts   # drives real matcher + requestSessionsUsage retry\npatched producer message = \"invalid sessions.usage params: at root: unexpected property \\\"timeZone\\\"\"\n\n# BEFORE (shipped detector: single-quoted includes only):\n  matches patched producer output? = false  <- version fallback silently stops firing\n\n# AFTER (shared messageReportsUnexpectedProperty, both wordings):\n  matches legacy single-quoted rejection? = true\n  matches JSON-quoted rejection?          = true\n\n# real requestSessionsUsage retry against an older gateway:\n  legacy single-quoted rejection -> stripped timeZone, retried (calls=2)\n  JSON-quoted rejection          -> stripped timeZone, retried (calls=2)\n  unrelated invalid-usage error   -> rethrown, not retried\n```\n\nObserved result after fix: the real no-op path now delivers `after_compaction` with `{compactedCount:0, reason:\"no_real_conversation_messages\"}` to the paired observer, returning its pending balance to 0 instead of hanging at 1; for a property name carrying an embedded quote and backslash, both the real gateway-protocol formatter and the real plugin schema-validator now emit a `JSON.stringify`-escaped token that round-trips through `JSON.parse` back to the original name; and the version-fallback detectors now recognize the patched validator's JSON-quoted rejection that the shipped single-quoted matcher missed, so the real `requestSessionsUsage` strips the additive `timeZone` field and retries against an older gateway in both wordings, while an unrelated invalid-usage error is still rethrown without a retry.\n\nWhat was not tested: a live end-to-end voice-channel session against a real 7B-14B llama-server under memory pressure. This change is at the compaction-hook, validation-formatter, and version-fallback-detector layers, exercised above by driving the real runtime functions plus the regression coverage; a full hardware voice loop was out of scope for this environment.\n\nFixes #81925\n",
-        "branch": "fix/compaction-noop-after-hook-and-validator-delimiters",
-        "head_sha": "ab0eb73fd089230a75cb8c92e4a78c5b93debb01",
-        "author": "yetval",
+        "title": "fix: restore Kiro usage refresh across CLI transports",
+        "body": "## Summary\n\n- Prefer semantically validated pipe-backed Kiro CLI probes for current releases.\n- Retain a same-deadline PTY fallback for older or terminal-required Kiro CLIs.\n- Make stdout/stderr, cancellation, process cleanup, and app-shutdown ownership deterministic.\n- Add focused regressions for pipe, PTY, partial output, auth, deadlines, cancellation, and process cleanup.\n\nCloses #1883.\n\n## Root cause\n\nCurrent Kiro CLI releases can return normally through pipes but stall when launched directly under a PTY. Older releases had the inverse behavior and required a terminal. The original candidate retried PTY only after a thrown pipe timeout, so incomplete or noisy pipe output could bypass the fallback, and each transport could consume a fresh timeout budget.\n\n## Implementation\n\n- Validate pipe results per command before accepting them; incomplete output falls through to PTY.\n- Keep authentication failures and parseable nonzero failures authoritative instead of masking them with a retry.\n- Use one monotonic deadline across pipe execution, cleanup, and PTY fallback.\n- Combine stdout and stderr deterministically and drain both concurrently.\n- Fully terminate and reap pipe roots, descendants, and output holders before starting PTY.\n- Register pipe PIDs and process groups with the app-shutdown registry.\n- Preserve cancellation before launch, between transports, during cleanup, and before return.\n\n## Validation\n\n- Exact head: `86d3f2e1ff2b0e5ce642ddaedcddf8314ae83da6`, rebased onto current `main` after #2074.\n- Exact-head focused `KiroStatusProbeTests`: 54/54 passed, including pipe-only current CLI, PTY-only legacy CLI, semantic fallback, authentication rejection, shared deadlines, process cleanup, app shutdown, and cancellation.\n- Exact-head `make check`: SwiftFormat and SwiftLint clean.\n- Full local suite: 613 selections in 52 groups; every group passed first attempt, with zero retries, recoveries, or timeouts.\n- Final autoreview: clean, no accepted/actionable findings; 0.90 correctness confidence.\n- Controlled live-process fixtures exercised actual pipes, PTYs, child processes, cancellation, signals, and deadline cleanup. No fixture process survived its test.\n- No dependency changes.\n\n## Live-provider limitation\n\nThis machine does not have `kiro-cli` installed or an approved logged-in Kiro account, so a real authenticated provider request was intentionally not attempted. The transport state machine and OS-process behavior are covered by the exact-head integration matrix; contributor and maintainer authorization to land this repair waives the unavailable account-dependent proof.\n",
+        "branch": "agent/fix-kiro-pty-timeout",
+        "head_sha": "86d3f2e1ff2b0e5ce642ddaedcddf8314ae83da6",
+        "author": "txarly89",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "agents",
-          "size: L",
-          "proof: supplied",
-          "proof: sufficient",
+          "status: 📣 needs proof",
+          "rating: 🦪 silver shellfish",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "status: ⏳ waiting on author"
+          "merge-risk: 🚨 compatibility"
         ],
         "files": [
           {
-            "path": "packages/gateway-protocol/src/index.test.ts",
-            "additions": 69,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/index.ts",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/validation-errors.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
-            "additions": 95,
+            "path": "CHANGELOG.md",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compact.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/compaction-hooks.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
-            "additions": 27,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.timeout-triggered-compaction.test.ts",
-            "additions": 37,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run.ts",
-            "additions": 23,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/cron-tool.test.ts",
-            "additions": 35,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/cron-tool.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/gateway.test.ts",
-            "additions": 71,
-            "deletions": 57,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/gateway.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/sessions-resolution.test.ts",
-            "additions": 70,
+            "path": "Sources/CodexBarCore/Providers/Kiro/KiroStatusProbe.swift",
+            "additions": 359,
             "deletions": 61,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/tools/sessions-resolution.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
+            "path": "Tests/CodexBarTests/KiroStatusProbeTestSupport.swift",
+            "additions": 83,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "src/channels/plugins/config-schema.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/client.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.auth.default-token.suite.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/config-schema.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/session-actions.contract.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/hook-types.ts",
-            "additions": 1,
+            "path": "Tests/CodexBarTests/KiroStatusProbeTests.swift",
+            "additions": 509,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/schema-validator.test.ts",
-            "additions": 35,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/schema-validator.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/lib/sessions/usage.test.ts",
-            "additions": 34,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "ui/src/lib/sessions/usage.ts",
-            "additions": 2,
+            "path": "docs/kiro.md",
+            "additions": 3,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 26,
-        "additions": 571,
-        "deletions": 214,
+        "changedFiles": 5,
+        "additions": 955,
+        "deletions": 62,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93100",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93100.md",
+        "automerge_cluster_id": "automerge-steipete-codexbar-2012",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-codexbar-2012.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 105,
-          "gatingTotal": 100,
+          "total": 7,
+          "gatingTotal": 7,
           "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 28,
-            "FAILURE": 2,
-            "IN_PROGRESS": 1,
-            "NEUTRAL": 1
+            "SUCCESS": 3,
+            "IN_PROGRESS": 3,
+            "QUEUED": 1
           },
           "blockers": [
-            "checks-node-compact-large-1:FAILURE",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:FAILURE"
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
+            "swift-test-macos (0, 2):IN_PROGRESS",
+            "swift-test-macos (1, 2):QUEUED"
           ],
           "pending": [
-            "checks-node-compact-large-2:IN_PROGRESS"
+            "build-linux-cli (linux-x64, ubuntu-24.04):IN_PROGRESS",
+            "build-linux-cli (linux-arm64, ubuntu-24.04-arm):IN_PROGRESS",
+            "swift-test-macos (0, 2):IN_PROGRESS",
+            "swift-test-macos (1, 2):QUEUED"
           ],
-          "terminalBlockers": [
-            "checks-node-compact-large-1:FAILURE",
-            "checks-node-compact-small-whole-1:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "processed_at": "2026-07-12T01:34:46.229Z"
     }
   ],
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2477,
+    "total_ms": 3666,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 515
+        "ms": 476
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1770
+        "ms": 869
       },
       {
         "name": "classify_comment_commands",
@@ -322,11 +206,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 179
+        "ms": 2292
       },
       {
         "name": "append_ledger",
