@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-969"
 mode: "autonomous"
-run_id: "29172420001"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29172420001"
+run_id: "29173264896"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29173264896"
 head_sha: "7b2b88c900c1f4cf5b82aa1ff2f2e3de8b498cc8"
 workflow_conclusion: "failure"
 result_status: "blocked"
-published_at: "2026-07-11T23:41:12.407Z"
+published_at: "2026-07-12T00:14:35.672Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/969"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/969"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29172420001](https://github.com/openclaw/clawsweeper/actions/runs/29172420001)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29173264896](https://github.com/openclaw/clawsweeper/actions/runs/29173264896)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/969
 
 ## Summary
 
-Current main at 622c0e27c6b0473c57d087f595581cb9eb29c03b still lacks typed agents.workspace.list/get support; Workspace uses sessions.files and then agents.files. The narrow non-security fix remains viable, but implementation, validation, and current-head WinUI proof are blocked because the checkout is read-only.
+Current main at 622c0e27c6b0473c57d087f595581cb9eb29c03b still lacks typed agents.workspace.list/get support and routes Workspace through sessions.files then agents.files. The narrow non-security fix remains viable, but implementation, validation, and current-head WinUI proof are blocked because the checkout is read-only.
 
 ## Impact
 
