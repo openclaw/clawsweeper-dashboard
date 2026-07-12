@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-970"
 mode: "autonomous"
-run_id: "29172420688"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29172420688"
+run_id: "29173264273"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29173264273"
 head_sha: "7b2b88c900c1f4cf5b82aa1ff2f2e3de8b498cc8"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-11T23:42:31.882Z"
+published_at: "2026-07-12T00:13:13.740Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/970"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/970"
 canonical_pr: null
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29172420688](https://github.com/openclaw/clawsweeper/actions/runs/29172420688)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29173264273](https://github.com/openclaw/clawsweeper/actions/runs/29173264273)
 
 Workflow conclusion: failure
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/openclaw-windows-node/issues/970
 
 ## Summary
 
-Issue #970 remains valid on current main SHA 622c0e27c6b0473c57d087f595581cb9eb29c03b. The native chat composer still constructs and attaches a new session ComboBox during each snapshot-driven render, replacing an open picker during thinking/status updates. No implementation branch or regression coverage exists in the checkout. Plan a narrow new fix PR that preserves picker identity, reconciles grouped items and selection only when needed, and completes mandatory Windows validation and isolated WinUI proof.
+Issue #970 remains valid on current main SHA 622c0e27c6b0473c57d087f595581cb9eb29c03b. The composer still constructs and attaches a new native session ComboBox on every snapshot-driven render, replacing an open picker during thinking/status updates. No implementation branch or stable-picker regression exists. A narrow new fix PR should retain the picker identity, reconcile grouped items and selection only when necessary, and complete mandatory Windows validation and isolated WinUI proof.
 
 ## Impact
 
@@ -66,8 +66,8 @@ Issue #970 remains valid on current main SHA 622c0e27c6b0473c57d087f595581cb9eb2
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #970 | fix_needed | planned | canonical | The focused UX bug is current and narrowly implementable, but no viable candidate PR exists. |
-| cluster:issue-openclaw-openclaw-windows-node-970 | build_fix_artifact | planned |  | The deterministic executor must implement the repair on clawsweeper/issue-openclaw-openclaw-windows-node-970, validate it on Windows, collect current-head UI proof, and open the PR. |
+| #970 | fix_needed | planned | canonical | The focused UX defect is current and narrowly implementable, but no viable candidate PR exists. |
+| cluster:issue-openclaw-openclaw-windows-node-970 | build_fix_artifact | planned |  | The deterministic executor must implement the repair on clawsweeper/issue-openclaw-openclaw-windows-node-970, validate it on Windows, collect current-head proof, and open the PR. |
 
 ## Needs Human
 
