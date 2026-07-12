@@ -28,14 +28,48 @@ export function writeActionLedgerIndexes(sourceRoot, output, options = {}) {
 }
 
 function assertSafeOutputDirectory(sourceRoot, outputDir) {
-  const indexesRoot = path.join(sourceRoot, "ledger", "v1", "indexes");
-  const eventsRoot = path.join(sourceRoot, "ledger", "v1", "events");
+  const physicalSourceRoot = physicalPath(sourceRoot);
+  const physicalOutputDir = physicalPath(outputDir);
+  const indexesRoot = physicalPath(path.join(sourceRoot, "ledger", "v1", "indexes"));
+  const eventsRoot = physicalPath(path.join(sourceRoot, "ledger", "v1", "events"));
   if (
-    pathContains(outputDir, sourceRoot) ||
-    pathContains(outputDir, eventsRoot) ||
-    (pathContains(sourceRoot, outputDir) && !pathContains(indexesRoot, outputDir))
+    pathContains(physicalOutputDir, physicalSourceRoot) ||
+    pathContains(physicalOutputDir, eventsRoot) ||
+    (pathContains(physicalSourceRoot, physicalOutputDir) &&
+      !pathContains(indexesRoot, physicalOutputDir))
   ) {
     throw new Error(`action ledger index output overlaps source data: ${outputDir}`);
+  }
+}
+
+function physicalPath(value) {
+  const resolved = path.resolve(value);
+  const missingSegments = [];
+  let existing = resolved;
+  while (!pathEntryExists(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) {
+      throw new Error(`cannot resolve action ledger path: ${resolved}`);
+    }
+    missingSegments.unshift(path.basename(existing));
+    existing = parent;
+  }
+  let physical;
+  try {
+    physical = fs.realpathSync.native(existing);
+  } catch (error) {
+    throw new Error(`cannot resolve action ledger path: ${resolved}`, { cause: error });
+  }
+  return path.join(physical, ...missingSegments);
+}
+
+function pathEntryExists(value) {
+  try {
+    fs.lstatSync(value);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
   }
 }
 

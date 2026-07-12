@@ -1,4 +1,5 @@
 import { loadActionLedger } from "./ledger-events.mjs";
+import { compareCanonicalTimestamps } from "./ledger-schema.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const EVENT_FAMILIES = [
@@ -84,7 +85,7 @@ function addMetric(metrics, key, occurredAt) {
   metric.count += 1;
   if (
     !metric.latest_occurred_at ||
-    Date.parse(occurredAt) > Date.parse(metric.latest_occurred_at)
+    compareCanonicalTimestamps(occurredAt, metric.latest_occurred_at) > 0
   ) {
     metric.latest_occurred_at = occurredAt;
   }
@@ -93,7 +94,7 @@ function addMetric(metrics, key, occurredAt) {
 
 function compareEventInstants(left, right) {
   return (
-    Date.parse(left.occurred_at) - Date.parse(right.occurred_at) ||
+    compareCanonicalTimestamps(left.occurred_at, right.occurred_at) ||
     left.event_id.localeCompare(right.event_id)
   );
 }
@@ -115,7 +116,7 @@ function freshnessBucket(occurredAt, now) {
   const age = now.getTime() - Date.parse(occurredAt);
   if (age < 0) return "future";
   if (age < DAY_MS) return "last_24_hours";
-  if (age < 7 * DAY_MS) return "days_1_to_7";
-  if (age < 30 * DAY_MS) return "days_8_to_30";
+  if (age < 8 * DAY_MS) return "days_1_to_7";
+  if (age < 31 * DAY_MS) return "days_8_to_30";
   return "older_than_30_days";
 }

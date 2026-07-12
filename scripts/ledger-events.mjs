@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  compareCanonicalTimestamps,
   LedgerValidationError,
   requiredCalendarDate,
   stableJson,
@@ -268,7 +269,7 @@ function compareOccurrences(left, right) {
 
 function compareEvents(left, right) {
   return (
-    left.occurred_at.localeCompare(right.occurred_at) ||
+    compareCanonicalTimestamps(left.occurred_at, right.occurred_at) ||
     left.event_id.localeCompare(right.event_id)
   );
 }

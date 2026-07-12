@@ -6,6 +6,7 @@ import {
   actionEventId,
   actionEventKey,
   actionEventSemanticSha256,
+  compareCanonicalTimestamps,
 } from "../scripts/ledger-schema.mjs";
 
 export function tempRoot(context) {
@@ -80,7 +81,7 @@ export function actionEvent(overrides = {}, seal = true) {
 export function writeShard(root, events, options = {}) {
   const ordered = [...events].sort(
     (left, right) =>
-      left.occurred_at.localeCompare(right.occurred_at) ||
+      compareCanonicalTimestamps(left.occurred_at, right.occurred_at) ||
       left.event_id.localeCompare(right.event_id),
   );
   const identity = {

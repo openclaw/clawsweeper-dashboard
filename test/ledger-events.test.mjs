@@ -345,6 +345,28 @@ test("shard paths use stable partition identity instead of event ordering", (con
   assert.equal(loaded.events[0].occurred_at, "2026-07-11T23:59:00.000Z");
 });
 
+test("shard metadata follows exact timestamp order across offsets and fractions", (context) => {
+  const root = tempRoot(context);
+  const later = actionEvent({
+    event_key: actionEventKey("review.later", { number: 42 }),
+    occurred_at: "2026-07-12T10:00:00.0009Z",
+  });
+  const earlier = actionEvent({
+    event_key: actionEventKey("review.earlier", { number: 43 }),
+    occurred_at: "2026-07-12T12:00:00.0001+02:00",
+    subject: { ...actionEvent().subject, number: 43 },
+  });
+  writeShard(root, [later, earlier]);
+
+  const loaded = loadActionLedger(root);
+  assert.equal(loaded.source.shards[0].first_occurred_at, earlier.occurred_at);
+  assert.equal(loaded.source.shards[0].last_occurred_at, later.occurred_at);
+  assert.deepEqual(
+    loaded.events.map((event) => event.occurred_at),
+    [earlier.occurred_at, later.occurred_at],
+  );
+});
+
 test("ledger loading rejects a symlinked source root segment", (context) => {
   const root = tempRoot(context);
   const external = tempRoot(context);

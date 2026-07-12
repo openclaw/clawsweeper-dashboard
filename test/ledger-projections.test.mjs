@@ -72,6 +72,55 @@ test("ledger projections compare timestamps as instants", (context) => {
   );
 });
 
+test("ledger projections preserve sub-millisecond ordering", (context) => {
+  const root = tempRoot(context);
+  writeShard(root, [
+    actionEvent({
+      event_key: actionEventKey("review.earlier-fraction", { number: 42 }),
+      occurred_at: "2026-07-12T10:00:00.0001Z",
+    }),
+    actionEvent({
+      event_key: actionEventKey("review.later-fraction", { number: 43 }),
+      occurred_at: "2026-07-12T10:00:00.0009Z",
+      subject: {
+        ...actionEvent().subject,
+        number: 43,
+      },
+    }),
+  ]);
+
+  const projection = buildActionLedgerProjection(root, {
+    now: "2026-07-12T12:00:00.000Z",
+  });
+  assert.equal(projection.metrics.oldest_occurred_at, "2026-07-12T10:00:00.0001Z");
+  assert.equal(projection.metrics.newest_occurred_at, "2026-07-12T10:00:00.0009Z");
+  assert.equal(
+    projection.metrics.by_event_family.review.latest_occurred_at,
+    "2026-07-12T10:00:00.0009Z",
+  );
+});
+
+test("ledger freshness labels include their stated day boundaries", (context) => {
+  const root = tempRoot(context);
+  const now = "2026-07-31T12:00:00.000Z";
+  writeShard(root, [
+    actionEvent({
+      event_key: actionEventKey("review.seven-days", { number: 42 }),
+      occurred_at: "2026-07-24T12:00:00.000Z",
+    }),
+    actionEvent({
+      event_key: actionEventKey("review.thirty-days", { number: 43 }),
+      occurred_at: "2026-07-01T12:00:00.000Z",
+      subject: { ...actionEvent().subject, number: 43 },
+    }),
+  ]);
+
+  const projection = buildActionLedgerProjection(root, { now });
+  assert.equal(projection.metrics.by_freshness.days_1_to_7.count, 1);
+  assert.equal(projection.metrics.by_freshness.days_8_to_30.count, 1);
+  assert.equal(projection.metrics.by_freshness.older_than_30_days.count, 0);
+});
+
 test("ledger projections handle prototype-named statuses", (context) => {
   const root = tempRoot(context);
   writeShard(root, [
@@ -118,6 +167,22 @@ test("ledger index output cannot overlap immutable source data", (context) => {
   }
 });
 
+test("ledger index output cannot enter source data through a symlink alias", (context) => {
+  const root = tempRoot(context);
+  const aliasRoot = tempRoot(context);
+  const shard = writeShard(root, [actionEvent()]);
+  const eventsRoot = path.join(root, "ledger", "v1", "events");
+  fs.symlinkSync(eventsRoot, path.join(aliasRoot, "events-alias"), "dir");
+
+  assert.throws(
+    () =>
+      writeActionLedgerIndexes(root, path.join(aliasRoot, "events-alias", "projection"), {
+        now: "2026-07-12T12:00:00.000Z",
+      }),
+    /output overlaps source data/,
+  );
+  assert.equal(fs.existsSync(shard), true);
+});
 test("action ledger dashboard renders concise source and metric projections", (context) => {
   const root = tempRoot(context);
   writeShard(root, [actionEvent()]);

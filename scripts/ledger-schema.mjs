@@ -97,6 +97,21 @@ export function stableJson(value) {
   return JSON.stringify(sortStable(value));
 }
 
+export function compareCanonicalTimestamps(left, right) {
+  const leftInstant = timestampInstant(left);
+  const rightInstant = timestampInstant(right);
+  if (leftInstant.epochSecond !== rightInstant.epochSecond) {
+    return leftInstant.epochSecond < rightInstant.epochSecond ? -1 : 1;
+  }
+  const length = Math.max(leftInstant.fraction.length, rightInstant.fraction.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftDigit = leftInstant.fraction.charCodeAt(index) || 48;
+    const rightDigit = rightInstant.fraction.charCodeAt(index) || 48;
+    if (leftDigit !== rightDigit) return leftDigit < rightDigit ? -1 : 1;
+  }
+  return 0;
+}
+
 export function sortStable(value) {
   if (Array.isArray(value)) return value.map(sortStable);
   if (!value || typeof value !== "object") return value;
@@ -471,6 +486,22 @@ function canonicalTimestamp(value, location) {
     throw new LedgerValidationError(`${location}: invalid canonical date-time`);
   }
   return normalized;
+}
+
+function timestampInstant(value) {
+  const match =
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/.exec(
+      value,
+    );
+  if (!match) throw new LedgerValidationError(`invalid canonical timestamp: ${value}`);
+  const epochMilliseconds = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isFinite(epochMilliseconds)) {
+    throw new LedgerValidationError(`invalid canonical timestamp: ${value}`);
+  }
+  return {
+    epochSecond: BigInt(epochMilliseconds / 1000),
+    fraction: match[2] ?? "",
+  };
 }
 
 export function requiredCalendarDate(value, location = "partition date") {
