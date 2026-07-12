@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-12T13:05:46.803Z
+Generated: 2026-07-12T14:08:47.851Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#105379](https://github.com/openclaw/openclaw/pull/105379) | fix(gateway): keep terminal scrollback tails UTF-16 safe | automerge-openclaw-openclaw-105139 | MERGEABLE | BEHIND | CANCELLED:4 IN_PROGRESS:42 SKIPPED:59 SUCCESS:28 NEUTRAL:1; blockers:45 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#105379](https://github.com/openclaw/openclaw/pull/105379) | fix(gateway): keep terminal scrollback tails UTF-16 safe | automerge-openclaw-openclaw-105139 | MERGEABLE | BEHIND | CANCELLED:8 SKIPPED:88 SUCCESS:73 NEUTRAL:1; blockers:5 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
