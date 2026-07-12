@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T15:02:44.061Z",
+  "generated_at": "2026-07-12T15:02:52.379Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T12:02:42.001Z",
+  "since": "2026-07-12T12:02:51.760Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -39,7 +39,7 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/101777#issuecomment-4951632657",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 101777,
+      "issue_number": 93865,
       "author": "sunlit-deng",
       "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
@@ -73,74 +73,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): suppress stdout/stderr stream errors in sandbox subprocesses",
-        "body": "## What Problem This Solves\n\nFixes an issue where stdout/stderr pipe errors from Codex sandbox exec-server subprocesses (both the process RPC path and the streaming HTTP helper) could surface as unhandled Node stream `error` events, crashing the exec-server WebSocket bridge.\n\n## Why This Change Was Made\n\nWhen a Codex sandbox child process exits or its pipes break, the Node stream layer emits `error` on the child's stdout/stderr `Readable` streams. With no `error` listener attached, Node re-throws the event, which bubbles into a process-fatal unhandled error and terminates the exec-server bridge. Both subprocess owners — `processes.ts` (process RPC) and `http.ts` (streaming HTTP) — had this gap.\n\nThe fix attaches a no-op `error` listener on `child.stdout`/`child.stderr` at each spawn point, mirroring the repo-standard pattern already used in `src/agents/sessions/exec.ts`. The process `close` handler stays authoritative for lifecycle and finalization.\n\nRebased onto current `main`; resolved a conflict with #103617 (defer sandbox cleanup until process close), which restructured both spawn sites into a `try/catch`. The no-op listeners are now attached after the guarded spawn, preserving that ownership.\n\n## User Impact\n\nThe Codex sandbox exec-server no longer crashes when a subprocess output pipe breaks in either the process RPC or streaming HTTP path. Output collection and close signalling continue to work normally.\n\n## Evidence\n\n**Production change (both subprocess owners):** after the guarded `spawn`, before the `data` listeners, each spawn site attaches no-op `error` listeners on `child.stdout`/`child.stderr` (`processes.ts`, `http.ts`), mirroring `src/agents/sessions/exec.ts`. The `close` handler stays authoritative for lifecycle/finalization.\n\n**Real integration proof — executes the patched code outside Vitest over a real WebSocket bridge.** A standalone `tsx` harness imports and calls the real exported entry points — `startProcess()` → `runProcess()` (process-RPC owner) and `httpRequest({streamResponse:true})` → `runStreamingSandboxHttpRequest()` (HTTP owner) — over a real `ws` bridge. Only the sandbox backend seam is stubbed; the `spawn`, stdout/stderr listeners, close lifecycle, JSON-RPC notifications, and ws bridge are all real. No `spawn` module mock, no Vitest.\n\nProcess-RPC owner — real `runProcess`, real streaming child, induced real stdout/stderr pipe error; the bridge survives and stays usable:\n\n```text\n[host] real bridge streamed 10 process/output notifications over the ws\n[host] inducing a real stdout/stderr pipe error on the real child ...\n[host] bridge still usable after error: readProcess ok (chunks=10, exited=true)\n[host] ws bridge socket.readyState = 1 (1=OPEN)\n[host] child close after the error emitted process/closed = true\n[host] PASS: real patched runProcess survived the induced pipe error; bridge stayed OPEN\n```\n\nNegative control on the same real path — removing the fix's real stdout error listener from the live child reproduces the pre-fix crash, proving the listener is load-bearing:\n\n```text\n[host] stripped the fix's real stdout error listener (pre-fix state)\n[host] inducing a real stdout/stderr pipe error on the real child ...\n[host] UNCAUGHT EPIPE: induced sandbox stdout pipe failure -> exec-server bridge host crashed\n[shell] exit=1\n```\n\nHTTP owner — real `runStreamingSandboxHttpRequest` executes end-to-end with the same guards attached:\n\n```text\n[host] real httpRequest(streaming) executed end-to-end: status=200, bodyDeltas=1\n[host] ws bridge socket.readyState = 1 (1=OPEN)\n[host] PASS: real patched runStreamingSandboxHttpRequest executed over the real bridge with the stdout/stderr guards attached\n```\n\n<details>\n<summary>Integration harness (executes the real exec-server entry points; backend seam stubbed, spawn/streams/bridge real)</summary>\n\n```ts\nimport { WebSocket, WebSocketServer } from \"ws\";\nimport { startProcess, readProcess, terminateProcess } from \"./sandbox-exec-server/processes.js\";\nimport { httpRequest } from \"./sandbox-exec-server/http.js\";\n\nlet hostCrashed = false;\nprocess.on(\"uncaughtException\", (e) => {\n  hostCrashed = true;\n  console.log(`[host] UNCAUGHT ${e.message} -> exec-server bridge host crashed`);\n  process.exit(1);\n});\n\nasync function socketPair() {\n  const wss = new WebSocketServer({ host: \"127.0.0.1\", port: 0 });\n  await new Promise((r) => wss.once(\"listening\", r));\n  const client = new WebSocket(`ws://127.0.0.1:${wss.address().port}`);\n  const server = await new Promise((res) => wss.once(\"connection\", res));\n  await new Promise((r) => client.once(\"open\", r));\n  return { wss, client, server };\n}\n\n// Stub ONLY the backend seam; buildExecSpec spawns a REAL child.\nconst makeExecServer = (argv) => ({\n  sandbox: {\n    containerWorkdir: \"/tmp\",\n    backend: {\n      buildExecSpec: async () => ({ argv, env: process.env, finalizeToken: \"tok\" }),\n      finalizeExec: async () => {},\n    },\n  },\n});\n\n// mode \"process-survive\": run real startProcess, induce a real stdout/stderr error, assert bridge OPEN.\n// mode \"process-strip\":   same, but managed.child.stdout.removeAllListeners(\"error\") first -> host crashes.\n// mode \"http-execute\":    run real httpRequest({streamResponse:true}) end-to-end over the real ws bridge.\n// (full runnable harness kept in the contributor outputs)\n```\n\n</details>\n\n**Mutation-sensitive regression test** (`sandbox-exec-server.pipe-survival.test.ts`): captures the real spawned child and emits `error` on the real `child.stdout`/`child.stderr` for both the process RPC and streaming HTTP paths, asserting each stream carries an `error` listener, that emitting the error does not throw, that the WebSocket bridge stays `OPEN`, and (process path) that the bridge still runs follow-up work. Removing either production listener makes the test fail.\n\n```text\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/sandbox-exec-server.pipe-survival.test.ts\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n```\n\nThe same no-op `error` listener pattern already ships in `src/agents/sessions/exec.ts`, confirming this is the repo-standard approach.\n\nAI-assisted: built with Codex\n",
-        "branch": "sunlit/fix/codex-processes-stream-errors-v2",
-        "head_sha": "3c00fdf0d4792b6ecbaabc8342b72348ad19d26e",
-        "author": "sunlit-deng",
-        "labels": [
-          "size: M",
-          "extensions: codex",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/sandbox-exec-server.pipe-survival.test.ts",
-            "additions": 212,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/sandbox-exec-server/http.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/sandbox-exec-server/processes.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 232,
-        "deletions": 0,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-101777",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101777.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 30,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -151,19 +84,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2275,
+    "total_ms": 1815,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 344
+        "ms": 590
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1683
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 4
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -171,7 +104,7 @@
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "claim_dispatch_commands",
@@ -179,7 +112,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 215
+        "ms": 1196
       },
       {
         "name": "append_ledger",
