@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T12:42:54.215Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-12T12:44:15.472Z",
+  "repo": "openclaw/clawsweeper",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T09:42:15.441Z",
+  "since": "2026-07-12T09:44:12.987Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
@@ -43,9 +43,9 @@
       "comment_updated_at": "2026-07-12T12:42:06Z",
       "comment_body_sha256": "1a774a272d3b55bfc8b7d6cc52260874cebb7a03b96543aacf63c09da0b959f2",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -69,821 +69,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(feishu): cancel agent runs when source messages are recalled",
-        "body": "Related: #55691\nRelated: #81997\n\n## What Problem This Solves\n\nFixes an issue where Feishu users could recall or withdraw a message but OpenClaw would still continue processing that source message and run the agent/tools. This could happen when the recall event arrived while the original message was already debounced, queued, or inside an agent dispatch.\n\n## Why This Change Was Made\n\nFeishu recall handling previously only showed up indirectly at reply delivery time, when sending a reply to a missing/recalled message could fail. This change handles the inbound `im.message.recalled_v1` event at the channel boundary, records the recalled source message in a Feishu-local runtime context, skips recalled messages before dispatch, and binds active dispatches to an abort signal so in-flight runs stop instead of producing replies.\n\nLive testing also showed that some Feishu app configurations may not deliver `im.message.recalled_v1` to the plugin, while Feishu's message reaction API still returns code `231003` (`message not found / maybe deleted`) when the typing target is the recalled source message. The Feishu dispatcher now treats that specific channel-local signal as a conservative fallback only when the missing typing target is the inbound source message, then reuses the same recall registry, abort signal, and reply-suppression path.\n\nThe state is process-local and bounded because it only needs to coordinate nearby receive/debounce/dispatch timing within one gateway process. It does not add a core API or persistent storage surface.\n\n## User Impact\n\nWhen a Feishu user withdraws a message, OpenClaw now treats that source message as cancelled. Pending debounced messages are dropped when the recall event is delivered, active single-agent and broadcast dispatches receive an abort signal, and final replies are suppressed if the recall or missing-source fallback lands before delivery.\n\n## Evidence\n\nAI-assisted change.\n\n- `node scripts/run-vitest.mjs extensions/feishu/src/typing.test.ts extensions/feishu/src/reply-dispatcher.test.ts extensions/feishu/src/bot.test.ts extensions/feishu/src/monitor.message-handler.test.ts extensions/feishu/src/monitor.reaction.test.ts`\n  - 5 files passed, 243 tests passed.\n- `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/feishu/src/typing.ts extensions/feishu/src/typing.test.ts extensions/feishu/src/reply-dispatcher.ts extensions/feishu/src/reply-dispatcher.test.ts extensions/feishu/src/bot.ts extensions/feishu/src/bot.test.ts`\n- `pnpm tsgo:extensions`\n- `node scripts/check-plugin-npm-runtime-builds.mjs --package extensions/feishu`\n- `git diff --check`\n\nLive Feishu proof, local gateway with this branch's Feishu plugin dist, 2026-07-08 22:24-22:25 CST:\n\n- `22:24:51 feishu[feishu2]: received message ... (p2p)`\n- `22:24:51 feishu[feishu2]: dispatching to agent (session=agent:yuantai:main)`\n- User recalled the source message while the agent run was active.\n- `22:25:02 Feishu API returned code 231003: message not found / maybe deleted` (message id redacted)\n- `22:25:02 feishu[feishu2]: source message missing during typing <redacted> (abortedRuns=1, alreadyRecalled=false)`\n- `22:25:02 visible channel turn dispatched with no queued reply payloads ...`\n- `22:25:02 feishu[feishu2]: dispatch complete (queuedFinal=false, replies=0)`\n\nUnit coverage also exercises the recall-event path for messages recalled before receive handling, messages recalled during inbound debounce, active dispatch abort, and late reply delivery suppression after a missing/recalled source message.\n\n### Shipped baseline live repro (2026-07-12)\n\nThis is a live repro against the installed OpenClaw 2026.6.11 runtime, not this PR branch. A benign marker file was created at `/tmp/openclaw-recall-p1-proof.txt`, the bot was asked to delete it, and the source Feishu message was recalled while the run was still active.\n\n- `18:57:26.158`: Feishu source message created (message id redacted).\n- `18:57:30.932`: the agent's first read-only `ls` tool call completed and confirmed the marker still existed.\n- `18:57:31.807`: a live Feishu `im.message.get` query reported `deleted=true`, `updated=false`; this is the server-side withdrawal timestamp.\n- `18:57:33.553`: OpenClaw emitted the destructive `rm /tmp/openclaw-recall-p1-proof.txt` tool call.\n- `18:57:33.590`: the tool returned `已删除`; the marker was subsequently confirmed absent. The withdrawal preceded the destructive side effect by 1.783 seconds.\n- `18:57:35.623`: the agent still produced a final success reply.\n- `18:57:36.126`: Feishu returned code `231003` (message not found or deleted) when OpenClaw attempted post-recall delivery.\n- `18:57:36.344`: dispatch completed with `queuedFinal=true, replies=1`.\n- The trajectory finished with `finalStatus=success`, `aborted=false`, and `externalAbort=false`.\n\nThis demonstrates a real destructive side effect occurring after Feishu had already withdrawn the source message. It provides a shipped-behavior baseline for the cancellation and reply-suppression paths covered by this PR.\n\n\n### Current-main port validation (2026-07-12)\n\n- Ported the recall-cancellation implementation onto current `main` at `91175d0662af39f8bd0c2f33757cfc5172a40ec5`; port commit: `1359953d333ca3b448936fccdf59947623a85419`.\n- Replaced the branch-local runtime-context access and abort-signal compatibility path with the public `openclaw/plugin-sdk/channel-runtime-context` helpers and the current dispatcher lifecycle.\n- `node scripts/run-vitest.mjs extensions/feishu/src/typing.test.ts extensions/feishu/src/reply-dispatcher.test.ts extensions/feishu/src/bot.test.ts extensions/feishu/src/monitor.message-handler.test.ts extensions/feishu/src/monitor.reaction.test.ts extensions/feishu/src/channel.test.ts`\n  - 6 files passed, 343 tests passed.\n- Targeted `oxfmt` and `node scripts/run-oxlint.mjs` completed without findings.\n- `node scripts/docs-list.js`, `node scripts/generate-docs-map.mjs`, and `git diff --check` completed successfully.\n- The existing live Feishu proof above remains the behavior proof for this implementation. Exact-head live proof was not rerun because the sanitized AWS Crabbox lane could not obtain local AWS credentials; CI is running on the refreshed head.\n- The mandatory local autoreview was explicitly skipped for this push after the Codex CLI reported `Not logged in` / `401 Unauthorized`.\n\n\n### Broadcast recall follow-up validation (2026-07-12)\n\n- Exact PR head: `9d9d8763fb28e34481fb3ae1076c177148f1c006`.\n- Added focused parallel-broadcast coverage proving one source-message recall aborts both the active and observer agent dispatches bound to that message.\n- `node scripts/run-vitest.mjs extensions/feishu/src/bot.broadcast.test.ts`\n  - 1 file passed, 10 tests passed.\n- Combined focused validation including the broadcast suite:\n  - 7 files passed, 353 tests passed.\n- Targeted `oxfmt`, `node scripts/run-oxlint.mjs`, and `git diff --check` completed successfully.\n",
-        "branch": "fix/feishu-recall-abort",
-        "head_sha": "9d9d8763fb28e34481fb3ae1076c177148f1c006",
-        "author": "litang9",
-        "labels": [
-          "docs",
-          "channel: feishu",
-          "size: XL",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "docs/channels/feishu.md",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/docs_map.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/bot.broadcast.test.ts",
-            "additions": 61,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/bot.test.ts",
-            "additions": 235,
-            "deletions": 31,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/bot.ts",
-            "additions": 307,
-            "deletions": 131,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.account.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.message-handler.test.ts",
-            "additions": 77,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.message-handler.ts",
-            "additions": 42,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/monitor.reaction.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/reply-dispatcher.test.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/reply-dispatcher.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/source-message-recall.ts",
-            "additions": 163,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/feishu/src/typing.test.ts",
-            "additions": 33,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/feishu/src/typing.ts",
-            "additions": 62,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 14,
-        "additions": 1108,
-        "deletions": 171,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-102165",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102165.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 94,
-          "gatingTotal": 89,
-          "counts": {
-            "SUCCESS": 65,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:79702:4411845078:2026-07-12T12:41:39Z:clawsweeper_auto_repair",
-      "comment_id": "4411845078",
-      "comment_version_key": "4411845078:2026-07-12T12:41:39Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/79702#issuecomment-4411845078",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 79702,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-09T07:17:55Z",
-      "comment_updated_at": "2026-07-12T12:41:39Z",
-      "comment_body_sha256": "732c1dd264d60237775e89734c90eebe5c6d6bf46a8e7c199923e34fdc26ef7a",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=ce36bc96555858999156c6194aaf7604afb974c9)",
-      "review_summary": "The PR adds an opt-in memory-search query-instruction setting, propagates it through memory and plugin/provider contracts, applies model-family query prefixes in OpenAI and generic OpenAI-compatible embedding providers, and adds documentation and regression coverage.\n\nPR surface: Source +88, Tests +282, Docs +8, Other 0. Total +378 across 23 files.\n\nReproducibility: yes. from source. Current-head code deterministically shows Nomic queries receive `search_query:` while document batches remain raw, contrary to the official paired-prefix contract.",
-      "review_followup": "- [P2] Removing the incomplete Nomic mapping is a narrow mechanical repair; owner review of the remaining public API is still required afterward.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "ce36bc96555858999156c6194aaf7604afb974c9",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-12T12:40:16.114Z",
-      "review_lease_owner": "github-run-29192861993-1",
-      "review_lease_comment_id": "4951195652",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "8c8f7104dd28ac80eb0855983680cb29e209be52dfeef007a4509a028dc5d8a4",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "[AI-assisted] fix(openai): prefix instruction-aware embedding queries",
-        "body": "## Summary\n\nAI-assisted PR.\n\n- Problem: OpenAI-compatible embedding providers passed raw query text to instruction-aware embedding models such as Qwen3, Nomic, and mxbai.\n- Why it matters: Raw queries produced lower-quality retrieval for instruction-aware embedding models because query embeddings did not match the model's expected retrieval-query format.\n- What changed: OpenAI embeddings now apply model-specific query instruction prefixes for query embeddings, while document batch embeddings remain unchanged.\n- What did NOT change (scope boundary): No embedding defaults, credentials handling, base URL behavior, document embedding inputs, or non-OpenAI providers were changed.\n\n## Change Type (select all)\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope (select all touched areas)\n\n- [ ] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [x] Memory / storage\n- [x] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Closes #\n- Related #\n- [x] This PR fixes a bug or regression\n\n## Real behavior proof\n\n**Behavior or issue addressed:** OpenAI-compatible embedding providers now apply model-specific query instruction prefixes for instruction-aware Qwen3, Nomic, and Mixedbread embedding model families on query embeddings, while document/batch embeddings remain raw.\n\n**Real environment tested:** Local OpenClaw development checkout at PR head `65a5ce21910de9a43be7bed4ff1d22ab3f757b4b`, using configured model `Qwen/Qwen3-Embedding-4B` against an OpenAI-compatible vLLM endpoint on coedo. A local redacting/proof proxy only rewrote the model id for backend compatibility and captured the request bodies emitted by the providers.\n\n**Exact steps or command run after this patch:** Ran `tmp/pr-79702-current-head-proof.mts` from the PR worktree after the current-head rebase. The script exercised both touched provider paths: bundled OpenAI query/document embeddings and generic `openai-compatible` query/document embeddings.\n\n**Evidence after fix:** Copied live terminal/request-capture output from the current-head proof run:\n\n```text\nCurrent head: 65a5ce21910de9a43be7bed4ff1d22ab3f757b4b\nGenerated at: 2026-06-02T19:18:56.751Z\nConfigured model: Qwen/Qwen3-Embedding-4B\nbundled OpenAI query vector dimensions: 2560\nbundled OpenAI document vector dimensions: 2560\ngeneric openai-compatible query vector dimensions: 2560\ngeneric openai-compatible document vector dimensions: 2560\n```\n\nCaptured redacted request bodies:\n\n```json\n[\n  {\n    \"providerPath\": \"bundled-openai\",\n    \"path\": \"/v1/embeddings\",\n    \"requestBody\": {\n      \"model\": \"Qwen/Qwen3-Embedding-4B\",\n      \"input\": [\n        \"Instruct: Given a user query, retrieve relevant memory notes and documents\\nQuery:where is the local OpenClaw fork for PR 79702?\"\n      ]\n    }\n  },\n  {\n    \"providerPath\": \"bundled-openai\",\n    \"path\": \"/v1/embeddings\",\n    \"requestBody\": {\n      \"model\": \"Qwen/Qwen3-Embedding-4B\",\n      \"input\": [\n        \"PR 79702 local fork is under ~/.openclaw/tmp/openclaw-pr/openclaw.\"\n      ]\n    }\n  },\n  {\n    \"providerPath\": \"generic-openai-compatible\",\n    \"path\": \"/v1/embeddings\",\n    \"requestBody\": {\n      \"model\": \"Qwen/Qwen3-Embedding-4B\",\n      \"input\": [\n        \"Instruct: Given a user query, retrieve relevant memory notes and documents\\nQuery:where is the local OpenClaw fork for PR 79702?\"\n      ]\n    }\n  },\n  {\n    \"providerPath\": \"generic-openai-compatible\",\n    \"path\": \"/v1/embeddings\",\n    \"requestBody\": {\n      \"model\": \"Qwen/Qwen3-Embedding-4B\",\n      \"input\": [\n        \"PR 79702 local fork is under ~/.openclaw/tmp/openclaw-pr/openclaw.\"\n      ]\n    }\n  }\n]\n```\n\n**Observed result after fix:** Both touched provider paths returned 2560-dimensional vectors from live calls. Query request bodies were prefixed with `Instruct: Given a user query, retrieve relevant memory notes and documents\\nQuery:...`; document request bodies stayed raw for the same configured model.\n\n**What was not tested:** Every OpenAI-compatible embedding server and additional instruction-aware model families beyond the covered Qwen3, Nomic, and Mixedbread matchers were not tested.\n\n## Root Cause (if applicable)\n\n- Root cause: The OpenAI embedding adapter did not mirror the instruction-aware query-prefix handling already used by the Ollama adapter.\n- Missing detection / guardrail: Unit tests did not verify provider-specific query payloads for instruction-aware models.\n- Contributing context (if known): Some OpenAI-compatible servers expose embedding models that expect different query and document input formatting even when they use an OpenAI-style `/embeddings` API.\n\n## Regression Test Plan (if applicable)\n\n- Coverage level that should have caught this:\n - [x] Unit test\n - [ ] Seam / integration test\n - [ ] End-to-end test\n - [ ] Existing coverage already sufficient\n- Target test or file: `extensions/openai/embedding-provider.test.ts`\n- Scenario the test should lock in: Query embeddings for Qwen3, Nomic, and mxbai models include the expected query instruction prefix; document batch embeddings remain raw.\n- Why this is the smallest reliable guardrail: The behavior is local to the OpenAI embedding adapter request payload construction.\n- Existing test that already covers this (if any): N/A\n- If no new test is added, why not: N/A\n\n## User-visible / Behavior Changes\n\nOpenAI-compatible embedding providers now format query embeddings with instruction prefixes for known instruction-aware embedding models. Document embeddings and default OpenAI embedding models are unchanged.\n\n## Diagram (if applicable)\n\n```text\nBefore:\n[memory search query] -> [raw query embedding input] -> [lower-quality retrieval for instruction-aware models]\n\nAfter:\n[memory search query] -> [model-specific query instruction prefix] -> [embedding input] -> [improved retrieval in tested setup]\n```\n\n## Security Impact (required)\n\n- New permissions/capabilities? (`Yes/No`) No\n- Secrets/tokens handling changed? (`Yes/No`) No\n- New/changed network calls? (`Yes/No`) No\n- Command/tool execution surface changed? (`Yes/No`) No\n- Data access scope changed? (`Yes/No`) No\n- If any `Yes`, explain risk + mitigation: N/A\n\n## Repro + Verification\n\n### Environment\n\n- OS: Linux\n- Runtime/container: Local OpenClaw development checkout\n- Model/provider: qwen3-embedding-4b through an OpenAI-compatible vLLM endpoint\n- Integration/channel (if any): OpenClaw memorySearch\n- Relevant config (redacted): OpenAI-compatible embedding provider pointed at a local vLLM endpoint; endpoint details redacted.\n\n### Steps\n\n1. Configure OpenClaw memory search to use `qwen3-embedding-4b` via an OpenAI-compatible endpoint.\n2. Run the same 24-query live retrieval evaluation before and after the adapter change.\n3. Compare top-3 recall and observed query latency in that setup.\n\n### Expected\n\n- Query embeddings for known instruction-aware models include the model-specific query prefix.\n- Document embeddings are not query-prefixed.\n\n### Actual\n\n- Query embeddings for Qwen3, Nomic, and mxbai model IDs are prefixed as expected.\n- Document embedding payloads remain raw.\n\n## Evidence\n\nAttach at least one:\n\n- [x] Failing test/log before + passing after\n- [ ] Trace/log snippets\n- [ ] Screenshot/recording\n- [x] Perf numbers (if relevant)\n\nVerification run:\n\n- `PATH=\"/tmp/openclaw-corepack-bin:$PATH\" pnpm test:extension openai` - 22 files, 241 tests passed\n- `PATH=\"/tmp/openclaw-corepack-bin:$PATH\" pnpm exec oxfmt --check --threads=1 CHANGELOG.md extensions/openai/embedding-provider.ts extensions/openai/embedding-provider.test.ts` - passed\n- `git diff --check` - passed\n\n## Human Verification (required)\n\nWhat you personally verified (not just CI), and how:\n\n- Verified scenarios: Live memorySearch evaluation before and after the query-prefix change; unit tests for prefixed query embeddings and raw document embeddings.\n- Edge cases checked: Empty input still returns an empty result; unknown models continue using raw queries; blank configured models still fall back to the default embedding model.\n- What you did **not** verify: Every OpenAI-compatible embedding server or additional instruction-aware model family beyond the covered prefixes.\n\n## Review Conversations\n\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\n- [x] I left unresolved only the conversations that still need reviewer or maintainer judgment.\n\n## Compatibility / Migration\n\n- Backward compatible? (`Yes/No`) Yes\n- Config/env changes? (`Yes/No`) No\n- Migration needed? (`Yes/No`) No\n- If yes, exact upgrade steps: N/A\n\n## Risks and Mitigations\n\n- Risk: A provider could expose a model ID with one of these prefixes but expect raw query input.\n - Mitigation: Prefix matching is limited to known instruction-aware model families and only applies to query embeddings; document embeddings remain unchanged.",
-        "branch": "add-query-instruction-prefix-openai-embedding",
-        "head_sha": "ce36bc96555858999156c6194aaf7604afb974c9",
-        "author": "kreucher",
-        "labels": [
-          "docs",
-          "gateway",
-          "extensions: memory-core",
-          "scripts",
-          "agents",
-          "size: M",
-          "extensions: openai",
-          "proof: supplied",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "docs/providers/openai.md",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/reference/memory-config.md",
-            "additions": 9,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-provider-state.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/embedding-provider.test.ts",
-            "additions": 150,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openai/embedding-provider.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/engine-embeddings.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/embeddings.types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/memory-host-sdk/src/host/query-instruction-templates.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/plugin-sdk-surface-report.mjs",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/memory-search.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.quality.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.tools.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-runtime.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/embeddings-http.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/memory-core-host-engine-embeddings.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/embedding-provider-types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/memory-embedding-providers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/openai-compatible-embedding-provider.test.ts",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/openai-compatible-embedding-provider.ts",
-            "additions": 8,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/types.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 23,
-        "additions": 391,
-        "deletions": 13,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-79702",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-79702.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 108,
-          "gatingTotal": 103,
-          "counts": {
-            "SUCCESS": 76,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:82023:4457095546:2026-07-12T12:41:32Z:clawsweeper_needs_human",
-      "comment_id": "4457095546",
-      "comment_version_key": "4457095546:2026-07-12T12:41:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/82023#issuecomment-4457095546",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 82023,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-05-15T05:17:16Z",
-      "comment_updated_at": "2026-07-12T12:41:32Z",
-      "comment_body_sha256": "0f186489be03fe8c83d782952b385132a49a496a4620eaf5b4638621e537db35",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] Needs human maintainer API, owner-boundary, security-visibility, and rebase decisions; the remaining work is not a single safe automated repair.; Needs attention: Needs attention because the new Telegram topic mirror can expose assistant commentary or thinking text that existing channel policy hides by default.; Review finding: [P1] Move Telegram mirroring behind a channel seam — src/gateway/agent-event-chann... (sha=987388309d6897b9ae0a827a0a7934dc4b3cfda3)",
-      "review_summary": "Adds Telegram thread-bound subagent forum-topic spawning, per-kind thread-spawn capability exposure, topic progress mirroring, docs, prompt snapshots, and regression tests.\n\nPR surface: Source +1134, Tests +854, Docs +13. Total +2001 across 33 files.\n\nReproducibility: yes. source-level. Current main keeps Telegram as current placement while sessions_spawn only exposes thread/session fields when automatic child-thread spawn is supported, so the requested Telegram child-topic subagent path remains unavailable.",
-      "review_followup": "- [P2] Needs human maintainer API, owner-boundary, security-visibility, and rebase decisions; the remaining work is not a single safe automated repair.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "987388309d6897b9ae0a827a0a7934dc4b3cfda3",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-01T00:23:49.009Z",
-      "review_lease_owner": "unknown",
-      "review_lease_comment_id": "unknown",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "38cf8cc41dcd69aa7ac304e6f365a91f08468638ec78527bd399aa8917d22419",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "feat(telegram): bind spawned subagents to forum topics",
-        "body": "## Summary\n\n- Adds an explicit `supportsAutomaticThreadBindingSpawn` channel capability so automatic thread-bound session spawn support is not overloaded onto `defaultTopLevelPlacement`.\n- Wires Telegram `subagent_spawning`, `subagent_delivery_target`, and `subagent_ended` hooks so `sessions_spawn(thread:true)` for subagents can create and bind a child forum topic while keeping Telegram's normal top-level binding placement as `current`.\n- Makes the spawn capability per-kind (`subagent` vs `acp`) so Telegram advertises subagent forum-topic spawn support without incorrectly exposing ACP child-topic spawn.\n- Documents the new capability seam and adds Telegram/core regression coverage for schema exposure, runtime capabilities, hook registration, binding, completion routing, cleanup, and boundary invariants.\n\n## Context\n\nTelegram already had forum-topic primitives and session binding infrastructure, but it lacked the subagent lifecycle hook wiring and an explicit capability to say: \"explicit subagent thread spawns can create child topics, while ordinary top-level binding should stay in the current conversation.\" Discord and Matrix naturally expose automatic thread spawns through `defaultTopLevelPlacement: \"child\"`; Feishu keeps `current` placement and does not advertise child-thread session spawn. Telegram now follows the narrower model: keep normal Telegram `/focus` and top-level binding behavior current, while allowing explicit `sessions_spawn(thread:true)` for subagents to create a child forum topic when the Telegram adapter can do so.\n\n## Real behavior proof\n\n- Behavior or issue addressed: Telegram `sessions_spawn(thread:true, mode:\"session\")` from a channel-bound CodeClaw triage session creates and binds a real Telegram forum topic for the spawned subagent session, so follow-up work routes to that topic instead of becoming invisible or falling back to the parent topic.\n- Real environment tested: Live `codeclaw-triage` Docker container after installing a custom OpenClaw package built from combined proof branch `codeclaw-proof-82023-82275` (https://github.com/efpiva/openclaw/tree/codeclaw-proof-82023-82275) at `OpenClaw 2026.5.17 (db1c53a)`. The container was connected to the real CodeClaw Telegram forum supergroup and used the real CodeClaw triage cron job.\n- Exact steps or command run after this patch:\n\n  ```bash\n  docker exec --user codeclaw codeclaw-triage     HOME=/home/codeclaw openclaw cron run cc373f35-b483-4c7f-9253-2f6c9c94a595       --wait --wait-timeout 15m --timeout 30000\n  ```\n\n- Evidence after fix:\n\n  The triage transcript for run `1d6d77dd-c23b-4b02-9831-e990fb11a7fc` shows the initial PR action for private CodeClaw PR #1223 was spawned with `thread:true` and `mode:\"session\"`:\n\n  ```json\n  {\n    \"type\": \"toolCall\",\n    \"name\": \"sessions_spawn\",\n    \"arguments\": {\n      \"agentId\": \"main\",\n      \"label\": \"codeclaw-pr:external:microsoft.ghe.com:bic/lobster:1223\",\n      \"mode\": \"session\",\n      \"context\": \"isolated\",\n      \"thread\": true\n    }\n  }\n  ```\n\n  The tool result accepted the spawn and returned a thread-bound child session:\n\n  ```json\n  {\n    \"toolName\": \"sessions_spawn\",\n    \"isError\": false,\n    \"details\": {\n      \"status\": \"accepted\",\n      \"childSessionKey\": \"agent:main:subagent:c89515e3-1a1e-4465-8fe9-8b25e85c7819\",\n      \"runId\": \"23538111-3540-4645-a66b-cc0568f96de0\",\n      \"mode\": \"session\",\n      \"note\": \"thread-bound session stays active after this task; continue in-thread for follow-ups.\",\n      \"modelApplied\": true\n    }\n  }\n  ```\n\n  Live Telegram/OpenClaw logs show the forum topic was created and bound to that child session. The Telegram supergroup id is redacted, but the topic id and session key are unchanged:\n\n  ```text\n  2026-05-17T15:07:57.282-07:00 telegram: bound conversation <telegram-supergroup-id>:topic:1167 -> agent:main:subagent:c89515e3-1a1e-4465-8fe9-8b25e85c7819 (idle=24h maxAge=disabled)\n  2026-05-17T15:07:57.406-07:00 [telegram] update: {\"message\":{\"message_id\":1167,\"chat\":{\"title\":\"CodeClaw Activity\",\"is_forum\":true,\"type\":\"supergroup\"},\"message_thread_id\":1167,\"forum_topic_created\":{\"name\":\"🤖 codeclaw-pr:external:microsoft.ghe.com:bic/lobster:1223\"},\"is_topic_message\":true}}\n  2026-05-17T15:07:57.923-07:00 [agent/embedded] embedded run start: runId=23538111-3540-4645-a66b-cc0568f96de0 sessionId=ada5b4d0-65b5-48ff-8c81-76c2ab477ab8 provider=github-copilot model=gpt-5.5 thinking=medium messageChannel=telegram\n  2026-05-17T15:07:58.444-07:00 [agent/embedded] [context-diag] pre-prompt: sessionKey=agent:main:subagent:c89515e3-1a1e-4465-8fe9-8b25e85c7819 ... sessionFile=/home/codeclaw/.openclaw/agents/main/sessions/ada5b4d0-65b5-48ff-8c81-76c2ab477ab8-topic-1167.jsonl\n  ```\n\n  The persisted Telegram binding file contains the same mapping:\n\n  ```json\n  {\n    \"conversationId\": \"<telegram-supergroup-id>:topic:1167\",\n    \"targetKind\": \"subagent\",\n    \"targetSessionKey\": \"agent:main:subagent:c89515e3-1a1e-4465-8fe9-8b25e85c7819\",\n    \"agentId\": \"main\",\n    \"label\": \"codeclaw-pr:external:microsoft.ghe.com:bic/lobster:1223\",\n    \"metadata\": {\n      \"threadName\": \"🤖 codeclaw-pr:external:microsoft.ghe.com:bic/lobster:1223\"\n    }\n  }\n  ```\n\n  The CodeClaw poller state also persisted the spawned native session key for that PR:\n\n  ```json\n  {\n    \"source\": \"pr_reviews\",\n    \"id\": \"microsoft.ghe.com|bic/lobster#1223\",\n    \"lastKind\": \"initial\",\n    \"nativeSessionKey\": \"agent:main:subagent:c89515e3-1a1e-4465-8fe9-8b25e85c7819\"\n  }\n  ```\n\n- Observed result after fix: The live Telegram Bot API created forum topic `1167`, OpenClaw bound it to the spawned `main` subagent session, the child session ran with `messageChannel=telegram`, and all child/specialist session transcript files for the spawned review used the `topic-1167` suffix. CodeClaw recorded `nativeSessionKey` for future follow-ups.\n- What was not tested: Telegram permission-denied and non-forum failure paths in the live container; those remain covered by local mocked tests. The live proof used one real forum supergroup and one real CodeClaw triage run.\n\n## Supplemental validation\n\n\nBehavior addressed: Telegram subagent `sessions_spawn(thread:true)` now has an explicit per-kind automatic-spawn capability and lifecycle hooks that bind spawned subagents to child forum topics without enabling Telegram ACP child-topic spawns.\n\nReal environment tested: Local OpenClaw source checkout with mocked Telegram forum topic creation and session binding adapters; no live Telegram Bot API/forum supergroup was used.\n\nExact steps or command run after this patch:\n\n```bash\nnode scripts/run-vitest.mjs \\\n  extensions/telegram/src/subagent-hooks.test.ts \\\n  extensions/telegram/index.test.ts \\\n  extensions/telegram/src/thread-bindings.test.ts \\\n  src/channels/plugins/thread-binding-api.test.ts \\\n  src/channels/thread-bindings-policy.test.ts \\\n  src/agents/runtime-capabilities.test.ts \\\n  src/agents/tools/sessions-spawn-tool.test.ts \\\n  src/agents/acp-spawn.test.ts \\\n  src/plugins/contracts/boundary-invariants.test.ts\npnpm docs:check-mdx docs/plugins/sdk-channel-plugins.md\ngit diff --check\npnpm build\ncodex review --uncommitted\n```\n\nEvidence after fix: Targeted Vitest proof passed with 12 files and 245 tests; docs MDX check passed; whitespace check passed; `pnpm build` completed including plugin SDK export verification; final Codex CLI review reported no actionable correctness issues.\n\nObserved result after fix: Telegram advertises `thread` for subagent session spawn through the new explicit per-kind capability, returns a routable Telegram delivery origin for created forum topics, routes completion to the bound topic, cleans up Telegram subagent bindings, and does not advertise/recommend ACP thread-bound spawns when ACP support is disabled for Telegram.\n\nWhat was not tested: Live Telegram Bot API behavior in a real forum supergroup with `can_manage_topics`; non-forum group and permission failure behavior were covered only through local unit paths/mocked failures.\n\n",
-        "branch": "codeclaw-telegram-thread-binding",
-        "head_sha": "987388309d6897b9ae0a827a0a7934dc4b3cfda3",
-        "author": "efpiva",
-        "labels": [
-          "docs",
-          "channel: telegram",
-          "gateway",
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "CHANGELOG.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "docs/plugins/sdk-channel-plugins.md",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/index.test.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/index.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/channel.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/subagent-hooks.test.ts",
-            "additions": 227,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/telegram/src/subagent-hooks.ts",
-            "additions": 312,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/telegram/subagent-hooks-api.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/telegram/thread-binding-api.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/runtime-capabilities.test.ts",
-            "additions": 41,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/runtime-capabilities.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.test.ts",
-            "additions": 54,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/subagent-announce-delivery.ts",
-            "additions": 44,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/sessions-spawn-tool.test.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/sessions-spawn-tool.ts",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/commands-acp/shared.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/thread-binding-api.test.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/thread-binding-api.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/types.adapters.ts",
-            "additions": 16,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/thread-bindings-policy.test.ts",
-            "additions": 39,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/thread-bindings-policy.ts",
-            "additions": 53,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-executor.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-session-state.test.ts",
-            "additions": 34,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run-session-state.ts",
-            "additions": 48,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/isolated-agent/run.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/agent-event-channel-mirror.test.ts",
-            "additions": 322,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/agent-event-channel-mirror.ts",
-            "additions": 574,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/server-runtime-subscriptions.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/contracts/boundary-invariants.test.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
-            "additions": 6,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 33,
-        "additions": 2030,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-82023",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-82023.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 15,
-          "gatingTotal": 10,
-          "counts": {
-            "SUCCESS": 6,
-            "SKIPPED": 8,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105365:4951212624:2026-07-12T12:41:23Z:clawsweeper_needs_human",
-      "comment_id": "4951212624",
-      "comment_version_key": "4951212624:2026-07-12T12:41:23Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105365#issuecomment-4951212624",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 105365,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T12:41:23Z",
-      "comment_updated_at": "2026-07-12T12:41:23Z",
-      "comment_body_sha256": "22b4a38a198527beacbd65b91995efce899a7ec2c90b177ca192065c723ed49c",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] A maintainer must choose the durable completion contract, and the contributor must provide exact-head live behavior proof before merge.; Cleared: The patch introduces no concrete dependency, workflow, permission, secret, supply-chain, or new code-execution concern. (sha=7d54c417f65d99f4da5cd8dbe0ad4a3338160805)",
-      "review_summary": "Adds a Codex-only `final` message-tool parameter for `message_tool_only` delivery and requires confirmed final sends before terminating the turn.\n\nPR surface: Source +55, Tests +83. Total +138 across 8 files.\n\nReproducibility: yes. at source level. The canonical report and related live evidence show a confirmed progress send releasing a Codex `message_tool_only` turn before promised work, and current main contains the matching terminal path; this review did not run a new live reproduction.",
-      "review_followup": "- [P1] A maintainer must choose the durable completion contract, and the contributor must provide exact-head live behavior proof before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "7d54c417f65d99f4da5cd8dbe0ad4a3338160805",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-12T12:39:37.591Z",
-      "review_lease_owner": "github-run-29192868159-1",
-      "review_lease_comment_id": "4951196734",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "d4dac508b1c2652bc348dab292b498891538cd0d6467e572146baf0b6e721cba",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): require explicit final source delivery",
-        "body": "## Summary\n\nThis is a current-`main` successor to #105290 that fixes its review blocker without expanding the `message` contract globally.\n\n- Exposes `final: boolean` only in the **Codex** projected `message` schema when `sourceReplyDeliveryMode === \"message_tool_only\"`; ordinary runtimes and automatic delivery do not see it.\n- Keeps confirmed progress sends non-terminal. A turn terminates only when Codex passes `final: true` **and** the message is confirmed as delivered to the current source conversation.\n- Keeps explicit terminal/yield tool results unchanged, and prevents `final` from reaching channel providers or changing message idempotency keys.\n- Adds Codex-specific prompt guidance plus positive/negative schema, delivery, and idempotency coverage.\n\n## Relationship to open work\n\n#105290 established the right runtime direction, but its reviewer correctly found that it advertised `final` in the shared message schema where no other runtime implements it. This PR carries the explicit-final contract with that scope repaired, on current `main`.\n\n#100156 remains the prompt-only alternative. This PR is intentionally independent rather than dependent on either branch: maintainers can choose the explicit-final contract here, or choose the prompt-only contract instead.\n\n## Validation\n\n- `extensions/codex/src/app-server/dynamic-tool-build.test.ts`\n- `extensions/codex/src/app-server/dynamic-tools.test.ts`\n- `extensions/codex/src/app-server/thread-lifecycle.test.ts` — 265 passing\n- `src/agents/tools/message-tool.test.ts` — 123 passing\n- `pnpm tsgo:core`\n- `pnpm tsgo:extensions`\n\nThe existing redacted behavior proof is in #105290; this patch narrows its schema surface and preserves its explicit delivery-evidence requirement.",
-        "branch": "fix/codex-explicit-final-delivery",
-        "head_sha": "7d54c417f65d99f4da5cd8dbe0ad4a3338160805",
-        "author": "glucksberg",
-        "labels": [
-          "agents",
-          "size: S",
-          "extensions: codex",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
-            "additions": 36,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tool-build.ts",
-            "additions": 50,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.test.ts",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/thread-lifecycle.test.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/thread-lifecycle.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.test.ts",
-            "additions": 9,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 144,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105365",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105365.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "gatingTotal": 102,
-          "counts": {
-            "FAILURE": 2,
-            "SUCCESS": 69,
-            "SKIPPED": 35,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "check-additional-boundaries-a:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "check-additional-boundaries-a:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105335:4951048891:2026-07-12T12:41:11Z:clawsweeper_auto_repair",
@@ -926,503 +112,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): skip model-override repair and visibility gate for locked sessions",
-        "body": "## What Problem This Solves\n\nWhen a session is model-selection-locked (e.g. Claude Code catalog adoption via the anthropic extension, or durable harness-owned sessions), multiple code paths could reject the locked model override as unrecognized, reset it to the agent's default model, or normalize it away — all of which tripped `ModelSelectionLockedError`.\n\n**Result:** Users who adopted a Claude Code session in the Control UI could see and preview the session, but sending any message would fail with \"Model selection is locked for this session.\"\n\n## Solution\n\nSix guard additions across two files:\n\n**`src/agents/agent-command.ts`:**\n\n1. Skip the repair block for locked sessions (line 1610)\n2. Allow locked overrides through the visibility-policy gate (line 1740)\n3. Skip resolveSelection normalization for locked sessions (line 1799)\n4. Clear legacy auto-fallback flags for locked sessions so the stored override is applied (line 1677)\n\n**`src/auto-reply/reply/model-selection.ts`:**\n\n5. Skip stale/disallowed override reset for locked sessions (line 325)\n6. Allow locked overrides through the visibility-policy gate (line 408)\n7. Skip resolveSelection normalization for locked sessions (line 414)\n\n**`src/agents/agent-command.live-model-switch.test.ts` / `src/commands/agent.test.ts` / `src/auto-reply/reply/model-selection.test.ts`:**\n\nUpdated three test expectations to reflect the new behavior where locked sessions proceed with their locked model instead of throwing.\n\n### Why `isModelSelectionLocked` (not `isValidAgentHarnessSessionStoreEntry`)\n\nThe repair block at line 1610 already guards with `!isValidAgentHarnessSessionStoreEntry(...)`, which covers durable harness-owned sessions (codex, etc.) but does _not_ cover CLI-backend-owned locked sessions (e.g. `plugin:anthropic:catalog-adopt:claude:...`). CLI-backend sessions carry `modelSelectionLocked: true` without an `agentHarnessId` or harness-shaped session key, so `isValidAgentHarnessSessionStoreEntry` returns `false` for them.\n\nUsing `isModelSelectionLocked(sessionEntry)` directly is correct because:\n\n- `modelSelectionLocked` can only be set by a plugin via the `createSessionEntry` API. Ordinary user or UI sessions never carry this flag.\n- Every session that has this flag — harness-owned, CLI-backend-owned, or otherwise — was intentionally locked by its owning plugin and should not have its model overrides repaired, reset, or visibility-filtered by generic runtime paths.\n- The existing guard (`isValidAgentHarnessSessionStoreEntry`) already implies `modelSelectionLocked === true`; our change widens the exemption from \"harness locks only\" to \"all durable locks,\" which is the correct invariant.\n\n## User Impact\n\n- Users running Claude Code v2.x can adopt and continue Claude Code sessions from the OpenClaw Control UI without hitting a model-selection-locked error\n- The fix applies to all model-selection-locked sessions, not just Claude Code catalog adoption\n- No change to non-locked sessions\n\n## Evidence\n\n- `pnpm build` — passed\n- `pnpm vitest run src/agents/agent-command.live-model-switch.test.ts` — 192/194 passed; 2 failures pre-existing (Windows path mismatch)\n- `pnpm vitest run src/commands/agent.test.ts` — 42/42 passed\n- `pnpm vitest run src/auto-reply/reply/model-selection.test.ts` — 61/63 passed; 2 failures pre-existing (Windows EPERM during temp dir cleanup)\n- `pnpm test:extension anthropic` — 17 test files, 219 tests, all passing\n- `pnpm test:contracts` — channel contracts: 426/426 passed; plugin contracts: 952/986 passed (34 EBUSY failures pre-existing on Windows)\n- `pnpm check` — all preflight guards passed (only pre-existing npm shrinkwrap staleness)\n\n> This PR was authored with AI assistance (Claude Code).\n",
-        "branch": "fix/model-locked-repair-bypass",
-        "head_sha": "fabdc7a672864dbcae4f46eb46508bbbe900e428",
-        "author": "papilionidae",
-        "labels": [
-          "commands",
-          "agents",
-          "size: S",
-          "extensions: anthropic",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 auth-provider",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/anthropic/session-catalog.ts",
-            "additions": 10,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-command.ts",
-            "additions": 15,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/model-selection.test.ts",
-            "additions": 14,
-            "deletions": 17,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/model-selection.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/agent.test.ts",
-            "additions": 14,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 67,
-        "deletions": 48,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105335",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105335.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 30,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105290:4950924224:2026-07-12T12:40:49Z:clawsweeper_auto_repair",
-      "comment_id": "4950924224",
-      "comment_version_key": "4950924224:2026-07-12T12:40:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105290#issuecomment-4950924224",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 105290,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T10:58:29Z",
-      "comment_updated_at": "2026-07-12T12:40:49Z",
-      "comment_body_sha256": "427793c1627ffa177cc8c225f5859bc44687631e992859452c2f29c21cb98d84",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=88f916223e2b9a76882507f4ae91c2cde1cb1877)",
-      "review_summary": "Adds Codex-only explicit final-versus-progress intent to `message_tool_only` sends, requires confirmed `final: true` delivery for immediate turn release, strips the internal field before channel dispatch, and updates prompts and regression fixtures.\n\nPR surface: Source +43, Tests +93. Total +136 across 18 files.\n\nReproducibility: yes. The canonical issue and live Telegram evidence provide a high-confidence current-main path where a confirmed progress send releases the active Codex turn before subsequent tool work.",
-      "review_followup": "- [P2] First choose the permanent Codex completion contract; if explicit intent is accepted, the contributor should make the narrow shared-instruction scoping repair and add sibling-runtime coverage.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "88f916223e2b9a76882507f4ae91c2cde1cb1877",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-12T12:39:21.374Z",
-      "review_lease_owner": "github-run-29192757079-1",
-      "review_lease_comment_id": "4951184925",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "3faa8d7e5774ccfd807d13f8cd1f04f16fff4f6dba070624bb3c148324df10a1",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(codex): keep progress replies from ending active turns",
-        "body": "Related: #100153\n\nAlternative to #100156.\n\n## What Problem This Solves\n\nFixes an issue where users running Codex with `message_tool_only` source delivery could receive a progress or acknowledgment reply and then see the active turn end before the promised work or final answer was completed.\n\n## Why This Change Was Made\n\nThis adds explicit delivery intent to current-source `message(action=send)` calls for Codex `message_tool_only` runs. Sends with `final: false` or an omitted `final` remain visible but non-terminal; only a successfully delivered current-source send with `final: true` releases the turn.\n\nThe prompt and delivery hints tell the model to use commentary for ordinary progress and `final: true` only after requested work and verification are complete. The internal `final` field is removed before provider delivery. Other runtimes, delivery modes, channels, and explicit cross-chat sends retain their existing behavior.\n\nThis is a structural alternative to #100156. That PR reduces the failure through prompt steering; this change keeps the runtime safe when a model still sends a progress message through the message tool.\n\n## User Impact\n\nCodex-backed users can receive a visible progress message without losing the rest of the active turn. Completed final replies still terminate cleanly, preserving duplicate-reply prevention and normal turn release.\n\n## Evidence\n\nBefore the change, a real Telegram direct-chat turn on macOS with OpenClaw 2026.7.2, Codex app-server, `message_tool_only`, and GPT-5.6 followed this sequence:\n\n```text\nmessage(action=send) progress reply\ntool result: delivered\nturn.dynamic_tool_terminal_release\nsession ended successfully before the promised investigation\n```\n\nLive Telegram verification after the change:\n\n- `message(action=send, final=false)` delivered `PROGRESS_SENT`.\n- The same turn continued through a 10-second wait and a Git status tool call.\n- `message(action=send, final=true)` delivered `FINAL_SENT`.\n- `turn.dynamic_tool_terminal_release` occurred only after `FINAL_SENT`.\n- The session ended successfully with no abort or timeout.\n- A separate natural five-minute investigation completed 19 tool calls and delivered its full diagnosis with `final=true`.\n\nValidation after rebasing onto current `main` and refreshing canonical generated fixtures:\n\n- Four focused test files: 385/385 passed.\n- Post-format CLI-runner recheck: 69/69 passed.\n- Prompt snapshot consistency passed: all seven generated files current.\n- Full production build passed.\n- Formatting and diff checks passed.\n\nThe optional automated Codex reviewer could not authenticate from the shell (`HTTP 401`), so no automated review verdict is claimed.\n\nAI-assisted: yes. The implementation, tests, and live reproduction were prepared with Codex assistance and reviewed and validated by the contributor.\n",
-        "branch": "fix/codex-explicit-final-message",
-        "head_sha": "74c589dd0193b986ac917bddd1b27656d15c31b1",
-        "author": "fazakis",
-        "labels": [
-          "agents",
-          "size: M",
-          "extensions: codex",
-          "proof: sufficient",
-          "mantis: telegram-visible-proof",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.test.ts",
-            "additions": 34,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/codex/src/app-server/dynamic-tools.ts",
-            "additions": 5,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/cli-runner/prepare.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/system-prompt.test.ts",
-            "additions": 11,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/system-prompt.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.test.ts",
-            "additions": 25,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tools/message-tool.ts",
-            "additions": 33,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/message-tool-delivery-hints.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.heartbeat-turn.json",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
-            "additions": 5,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
-            "additions": 9,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
-            "additions": 9,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md",
-            "additions": 9,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/helpers/agents/happy-path-prompt-snapshots.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 18,
-        "additions": 168,
-        "deletions": 32,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105290",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105290.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 101,
-          "gatingTotal": 96,
-          "counts": {
-            "SUCCESS": 28,
-            "IN_PROGRESS": 46,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (plugin-boundary):IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-sqlite-session-schema-baseline:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "Security High (actions):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
-            "checks-fast-bun-launcher:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "checks-node-compact-small-whole-3:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
-            "Critical Quality (plugin-boundary):IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-boundaries-bcd:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
-            "check-sqlite-session-schema-baseline:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-channels:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "trusted ClawSweeper verdict head 88f916223e2b9a76882507f4ae91c2cde1cb1877 does not match current head 74c589dd0193b986ac917bddd1b27656d15c31b1"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105360:4951167495:2026-07-12T12:40:43Z:clawsweeper_needs_human",
-      "comment_id": "4951167495",
-      "comment_version_key": "4951167495:2026-07-12T12:40:43Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105360#issuecomment-4951167495",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 105360,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T12:25:57Z",
-      "comment_updated_at": "2026-07-12T12:40:43Z",
-      "comment_body_sha256": "b73b7a8796fe882dc965e77d2d447a52d61ea582ba24a46940e4098b2f3eb280",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] No code repair is indicated; a maintainer should require and inspect successful direct source-ref Package Acceptance proof before merging this protected-label PR.; Cleared: The patch introduces no concrete security or supply-chain concern: it removes an npm runtime import and extracts a trusted local artifact through a fixed executable and argument array without a shell. (sha=ccad24033bef31eb7ca8e1ac2a0a17bfdcba0e28)",
-      "review_summary": "The PR replaces the package harness’s npm `tar` import with system-tar extraction, adds dependency-free harness and workflow regression tests, and adds one PR-workflow note to `AGENTS.md`.\n\nPR surface: Tests +52, Docs +1, Other +6. Total +59 across 4 files.\n\nReproducibility: yes. Hosted Package Acceptance run 29191823111 reproduces the failure in package candidate resolution, and source inspection shows the trusted checkout loading an npm-dependent harness before any trusted-checkout install.",
-      "review_followup": "- [P1] No code repair is indicated; a maintainer should require and inspect successful direct source-ref Package Acceptance proof before merging this protected-label PR.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "ccad24033bef31eb7ca8e1ac2a0a17bfdcba0e28",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-12T12:39:13.906Z",
-      "review_lease_owner": "github-run-29192868021-1",
-      "review_lease_comment_id": "4951196425",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "1c6c179f6b47bbc6c63188d28edbda5bcb152409aa427e8684ad6afa20f38fa3",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(release): keep source-ref packaging self-contained",
-        "body": "## What Problem This Solves\n\nFixes an issue where direct Package Acceptance runs using an immutable source ref failed before packaging when the trusted workflow checkout did not install dependencies.\n\n## Why This Change Was Made\n\nKeep the trusted package harness independent of its checkout's dependency tree by using the existing cross-platform system tar contract for the one extraction step. The candidate checkout remains the only checkout that installs dependencies, preserving exact-ref and old-ref validation.\n\n## User Impact\n\nRelease maintainers can run direct source-ref Package Acceptance lanes with a trusted workflow ref without an unrelated dependency install in the workflow checkout.\n\n## Evidence\n\n- Before: Package Acceptance run 29191823111 failed with ERR_MODULE_NOT_FOUND for tar in Resolve package candidate.\n- Blacksmith Testbox run 29192032470: 95 focused workflow and package-harness tests passed.\n- Targeted oxfmt check passed for all three changed files.\n- Fresh autoreview: clean, no accepted or actionable findings.\n",
-        "branch": "codex/package-ref-harness",
-        "head_sha": "ccad24033bef31eb7ca8e1ac2a0a17bfdcba0e28",
-        "author": "steipete",
-        "labels": [
-          "scripts",
-          "docker",
-          "maintainer",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "AGENTS.md",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/package-openclaw-for-docker.mjs",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
-            "additions": 42,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/scripts/package-acceptance-workflow.test.ts",
-            "additions": 11,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 62,
-        "deletions": 3,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105360",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105360.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 92,
-          "gatingTotal": 87,
-          "counts": {
-            "SUCCESS": 69,
-            "SKIPPED": 22,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105274:4950830962:2026-07-12T12:39:37Z:clawsweeper_needs_human",
@@ -1431,7 +121,273 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/105274#issuecomment-4950830962",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 105274,
+      "issue_number": 499,
+      "author": "brokemac79",
+      "author_id": 255583030,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-12T12:23:00Z",
+      "comment_updated_at": "2026-07-12T12:23:00Z",
+      "comment_body_sha256": "c0450a2010a1d84523a4cf1b1d9dd85fc7b94b823e00d70d9f6c2a7775f08811",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "stop",
+      "intent": "stop",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(dashboard): add unlisted OpenClaw Bay demo",
+        "body": "## Summary\n\n- add an unlisted, read-only OpenClaw Bay demo at `/bay-demo`\n- turn the existing ClawSweeper status snapshot into an animated beach with live stage lanes, terminal pools, retrigger tunnels, repository filters, search, a detail drawer, master-sweeper modes, and a bounded 20-outcome tide rendered as a shoreline-following surge and backwash\n- poll the shared Worker status 25% less often than Overview (every 20 seconds versus every 15 seconds), without adding a new GitHub API query path; actual upstream GitHub refreshes remain cache-dependent\n- keep `/bay` unpublished and leave the existing Overview, issue-triage, and PR-proof-triage navigation unchanged\n\n![OpenClaw Bay deterministic Playwright proof](https://raw.githubusercontent.com/brokemac79/clawsweeper/62ce6243966a8c403eed095de33ba1f707967f47/docs/proof/openclaw-bay/playwright-proof-storyboard.jpg)\n\n[Inspect the compact Playwright trace](https://raw.githubusercontent.com/brokemac79/clawsweeper/62ce6243966a8c403eed095de33ba1f707967f47/docs/proof/openclaw-bay/trace.zip) · [read the 23-assertion summary](https://raw.githubusercontent.com/brokemac79/clawsweeper/62ce6243966a8c403eed095de33ba1f707967f47/docs/proof/openclaw-bay/proof-summary.json) · [inspect the runner and exact fixtures](https://github.com/brokemac79/clawsweeper/tree/62ce6243966a8c403eed095de33ba1f707967f47/docs/proof/openclaw-bay)\n\n## Problem\n\nThe operational Overview is intentionally dense and table-oriented. Maintainers asked to try a more visual, playful way to see whether ClawSweeper is active without replacing the existing operational surfaces. This PR publishes the selected prototype as an explicitly experimental demo on the existing dashboard Worker.\n\n## Implementation\n\n- renders active work in Arriving, Setting up, Reviewing, Repairing, and Applying lanes using the existing worker snapshot\n- raises a READY flag and lets the master sweeper animate proved forward movement\n- treats any new `run_id` for the same GitHub item as a retrigger, using the tunnel/re-emergence path even when a poll first sees the new run in the same or a later lane\n- shows Completed, Failed, and Cancelled only from explicit terminal evidence; disappearing workers stay CHECKING during the bounded confirmation grace period\n- stores only a bounded terminal view: fewer than 20 current outcomes, the latest 20 washed outcomes retained for the 60-second wash animation, and at most 256 seen event IDs under the existing seven-day status TTL\n- adds `Where's my crustacean?`, repository filters, GitHub/workflow detail links, patrol/on-change modes, local-only tide preview, reduced-motion handling, and hardened noindex/no-store/frame-blocked headers\n- replaces the prototype's flat tide overlay with a 7.2-second shoreline-following surge/recede animation built from inline SVG and CSS: translucent water and glass layers, painted sea texture, irregular foam, ripples, bubbles, wet-sand sheen, terminal-crustacean washout, and explicit incoming, crest, receding, and idle phases\n- uses the same visible wash for preview and generated tides; a real tide commits the empty terminal buffer only after the crustaceans have moved seaward\n- reuses the checked-in Bay background for water texture, announces tide state through a polite live region, and provides a brief static wash for reduced-motion users\n\n## GitHub API And Runtime Load\n\nBay is a presentation over the existing cache-backed `/api/status` snapshot. It adds **no browser-to-GitHub requests and no new GitHub REST or GraphQL query path**. Terminal outcomes and timing samples are derived from workflow-job and recent-close data already collected for Overview.\n\nBay polls the Worker every 20 seconds versus Overview every 15 seconds: three rather than four status requests per minute after initial load, or 25% fewer browser-to-Worker requests. This is deliberately **not** described as 25% fewer upstream GitHub API calls: cache expiry, edge location, and concurrent viewers determine whether either status request causes a refresh. The defensible GitHub API claim is neutral/no-new-query-path, while browser polling load is lower.\n\nThe tide polish is presentation-only. It does not alter `/api/status`, its 20-second polling cadence, the Worker cache, status fields, or upstream GitHub collection, and it introduces no new external media or API request. It reuses the existing checked-in Bay background. The richer animation does have client-side rendering cost, so this is not a claim that Bay is lighter overall.\n\n## Validation\n\n- hosted CI on exact head `62ce6243966a8c403eed095de33ba1f707967f47` — `pnpm check`, Windows Codex launcher, both CodeQL analyses, and aggregate CodeQL passed\n- `node --test test/dashboard-worker.test.ts` — 79/79 passed\n- `node --test --test-name-pattern \"OpenClaw Bay\" test/dashboard-worker.test.ts` — 3/3 passed against the final exact-commit proof refresh\n- `pnpm run build:dashboard` — passed\n- `pnpm run lint:dashboard` — passed\n- `node --check docs/proof/openclaw-bay/run-proof.mjs` — passed\n- `pnpm exec oxlint docs/proof/openclaw-bay/run-proof.mjs --deny-warnings -D correctness` — passed\n- `bash -n docs/proof/openclaw-bay/run-proof.sh` — passed with Git for Windows Bash\n- `pnpm exec oxfmt --check dashboard/bay-page.ts docs/proof/openclaw-bay/run-proof.mjs test/dashboard-worker.test.ts` — passed\n- `git diff --check origin/main...HEAD` — passed\n- local `pnpm check` reached the known Windows host baseline where shell-backed workflow tests call WSL `bash`; this machine's default `docker-desktop` distro has no `/bin/bash`. The changed dashboard build/lint/tests and Docker-backed browser proof pass; exact-head hosted CI is tracked below.\n\n## Deterministic Browser Proof\n\nThe checked-in runner starts the real local Wrangler `/bay-demo` route and loads the real artwork. It replaces only `/api/status` with three exact synthetic, redacted transition responses plus one source-derived real-tide response, so the interactions are repeatable without credentials, live dashboard payloads, or GitHub API traffic.\n\nCrabbox `local-container` proof `cbx_58b0a8f78e74` (`harbor-lobster`) used `mcr.microsoft.com/playwright:v1.60.0-noble` and passed all 23 assertions across 16 labelled frames:\n\n- crustacean and master-sweeper animation clocks advance\n- a forward transition raises READY, is physically swept, and lands in the reported lane\n- a changed run ID creates both retrigger tunnel openings with the exact burrow label, then resurfaces in Setting up\n- search focuses and highlights GitHub reference `#97722`\n- repository filtering leaves only the selected repository's active and terminal items\n- the detail drawer exposes exactly the safe GitHub item, job, and workflow-run links\n- preview tide advances through incoming, crest, backwash, and restored states along the illustrated shoreline\n- layered water, painted texture, irregular foam, ripples, bubbles, and wet-sand effects visibly wash the terminal pools\n- terminal crustaceans disappear only at the temporary preview crest and return during backwash; preview sends no status poll or mutation and leaves terminal keys and `3 / 20` unchanged\n- reduced-motion receives a bounded 520 ms static wash with the same non-mutating result\n- a generated real tide visibly washes terminal crustaceans before committing the empty shared buffer; active-lane keys remain unchanged\n- zero browser console errors, uncaught page errors, browser-to-`api.github.com` requests, or non-GET/HEAD requests\n\nThe three checked-in fixture bodies match their recorded SHA-256 values; the derived real-tide response has its own recorded SHA-256. A binary scan found no tokens, authorization headers, cookies, local Windows user paths, usernames, or live/private payloads. The final proof was generated against implementation commit `09941a121d0911278a64f71f3bbd7d57fa090dc8`; head `62ce6243966a8c403eed095de33ba1f707967f47` adds only the exact-commit proof refresh and source-SHA transport fallback.\n\n## Review Closeout\n\n- independent tide audit — accepted and fixed two findings: generated tides now animate terminal washout before clearing, and proof captures the visible incoming/crest/backwash states instead of the nearly transparent first 280 ms\n- `codex review --uncommitted` — initial review accepted only stale proof/artifact hygiene findings; the checked-in 23-assertion evidence was regenerated and local Crabbox archives removed\n- `codex review --uncommitted` — final implementation dirty review clean, no actionable findings\n- exact-commit proof rerun — 23/23 Playwright assertions, 16 frames, zero direct GitHub API requests, zero mutation requests, unchanged preview keys, and a proved real clear\n- `codex review --uncommitted` — proof-only refresh clean, no actionable findings\n- `codex review --base origin/main` — final branch review clean; no actionable correctness issues, with dashboard build, focused tests, dashboard lint, and `git diff --check` passing\n\n## Maintainer Decision\n\nThe product-boundary decision is resolved: @brokemac79 will own this experiment and accepts `/bay-demo` being unlisted and noindexed but unauthenticated and public by URL for the demo. `/bay` and the normal dashboard navigation remain unpublished.\n\nThis ownership decision does not make the route private. Anyone who knows or guesses the URL can open it; a genuinely maintainer-only deployment would still require Cloudflare Access or application authentication.\n\n## Risks And Rollout\n\n- `/bay-demo` is unlisted, not private. Anyone who knows or guesses the URL can open it; a maintainer-only rollout would need Cloudflare Access or separate application authentication.\n- this is an experimental view, not a replacement for operational triage pages\n- the terminal feed is intentionally bounded and evidence-based, so it is not a historical ledger\n- inline page CSS/JS is allowed by the current route-specific CSP; external files or CSP nonces would be a later hardening improvement if the demo becomes permanent\n\n## Release Note\n\nExperimental: add an unlisted OpenClaw Bay dashboard demo that visualises the existing ClawSweeper worker state as an animated shoreline, including a layered shoreline-following tide and backwash.",
+        "branch": "codex/explore-dashboard-page",
+        "head_sha": "62ce6243966a8c403eed095de33ba1f707967f47",
+        "author": "brokemac79",
+        "labels": [
+          "clawsweeper:human-review",
+          "P3",
+          "status: 🚀 automerge armed",
+          "proof: sufficient",
+          "rating: 🦞 diamond lobster",
+          "feature: ✨ showcase",
+          "merge-risk: 🚨 other",
+          "proof: 🎥 video"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "dashboard/bay-page.ts",
+            "additions": 267,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "dashboard/public/bay-assets/bay-background.webp",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "dashboard/public/bay-assets/crustaceans-atlas.webp",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "dashboard/public/bay-assets/master-sweeper.webp",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "dashboard/worker.ts",
+            "additions": 372,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "dashboard/wrangler.toml",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/openclaw-bay-demo.jpg",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/openclaw-bay-demo.md",
+            "additions": 116,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/openclaw-bay-demo.mp4",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/README.md",
+            "additions": 87,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/fixtures/01-initial.json",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/fixtures/02-forward.json",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/fixtures/03-retrigger.json",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/playwright-proof-storyboard.jpg",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/proof-summary.json",
+            "additions": 436,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/run-proof.mjs",
+            "additions": 952,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/run-proof.sh",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "docs/proof/openclaw-bay/trace.zip",
+            "additions": 0,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/dashboard-smoke.mjs",
+            "additions": 73,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/dashboard-smoke.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test/dashboard-worker.test.ts",
+            "additions": 456,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 22,
+        "additions": 2852,
+        "deletions": 14,
+        "is_clawsweeper_pr": false,
+        "cluster_id": "automerge-openclaw-clawsweeper-499",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-499.md",
+        "source_job_path": null,
+        "has_automerge_job": true,
+        "automerge_cluster_id": "automerge-openclaw-clawsweeper-499",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-499.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 6,
+          "gatingTotal": 5,
+          "counts": {
+            "SUCCESS": 6
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/clawsweeper:499:4951152817:2026-07-12T12:20:45Z:automerge",
+      "comment_id": "4951152817",
+      "comment_version_key": "4951152817:2026-07-12T12:20:45Z",
+      "comment_url": "https://github.com/openclaw/clawsweeper/pull/499#issuecomment-4951152817",
+      "repo": "openclaw/clawsweeper",
+      "target_branch": "main",
+      "issue_number": 499,
+      "author": "brokemac79",
+      "author_id": 255583030,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-12T12:20:45Z",
+      "comment_updated_at": "2026-07-12T12:20:45Z",
+      "comment_body_sha256": "b20841dd047d73b0d7cf464b323b7162a153e6790811fed6e52ea044ec073391",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "automerge",
+      "intent": "automerge",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/clawsweeper:499:4947923148:2026-07-12T12:18:42Z:clawsweeper_needs_human",
+      "comment_id": "4947923148",
+      "comment_version_key": "4947923148:2026-07-12T12:18:42Z",
+      "comment_url": "https://github.com/openclaw/clawsweeper/pull/499#issuecomment-4947923148",
+      "repo": "openclaw/clawsweeper",
+      "target_branch": "main",
+      "issue_number": 499,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "CONTRIBUTOR",
@@ -1465,73 +421,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(gateway): cap SSH pairing output by UTF-8 bytes",
-        "body": "## Summary\n\n- Bound SSH node-pairing probe output by UTF-8 bytes instead of UTF-16 code units.\n- Stop processing each stream immediately after its 64 KiB budget is full or a chunk is truncated.\n- Add focused multi-chunk saturation coverage and refresh the real OpenSSH before/after/control proof.\n\n## What Problem This Solves\n\nThe SSH-verified node-pairing probe labels its output cap as 64 KiB. The first revision enforced the byte cap, but each later untrusted chunk still concatenated with and UTF-8 encoded the retained output. A pairing host could therefore keep stdout or stderr active until timeout and repeatedly consume Gateway CPU and temporary allocations even though no more output could be retained.\n\n## Why This Change Was Made\n\nThe probe runtime now owns an independent byte count and saturation state for stdout and stderr. It truncates only the incoming chunk to the remaining capacity, appends the retained prefix, and returns immediately on every later data event once that stream is full or truncated.\n\n## User Impact\n\nOversized or continuously streaming SSH probe output can no longer make the Gateway repeatedly process the retained 64 KiB until timeout. Normal identity JSON, SSH trust policy, pairing eligibility, identity matching, and failure semantics remain unchanged.\n\n- **Why it matters / User impact:** A remote pairing host cannot amplify Gateway CPU and temporary allocations with post-cap chunks until timeout.\n- **What did NOT change:** These surfaces are unchanged and out of scope: SSH trust policy, pairing eligibility, identity matching, timeout handling, Gateway protocol, and approval persistence.\n\n## Architecture / source-of-truth\n\n- **Canonical reachability path:** remote SSH output input → child-process UTF-8 ingestion → per-stream normalization and byte-limit validation → runtime accumulator state → identity parser request or bounded failure-response effect.\n- **Canonical owner:** `src/gateway/node-pairing-ssh-verify.runtime.ts`, which owns the subprocess lifecycle and output budget.\n- **Shared helper:** `src/utils/utf8-truncate.ts` remains the owner of valid UTF-8 prefix truncation; the runtime now calls it only for the incoming chunk and remaining capacity.\n- **Sibling check:** stdout and stderr have independent state, and caller-facing identity verification remains covered by `src/gateway/node-pairing-ssh-verify.test.ts`.\n- **Boundary crossed:** Untrusted remote SSH stdout/stderr crosses Node child-process pipes into the Gateway pairing runtime.\n- **Shared helper / provider constraint check:** The existing UTF-8 prefix helper is reused; no SSH provider or protocol constraint changed.\n- **Architecture / source-of-truth check:** The canonical source-of-truth boundary is the accumulator owner, which enforces saturation before identity parsing or diagnostic consumption.\n\n## Origin / follow-up\n\nFollows #104180 and repairs the remaining post-cap work-amplification gap found in this PR's first byte-cap implementation.\n\n- **Gap this fills:** byte retention was bounded, but later chunks were still concatenated and encoded.\n- **Consistency:** the fix remains in the same SSH probe runtime owner and does not expand pairing policy scope.\n\n## Root Cause\n\nThe first byte-cap implementation called `truncateUtf8Prefix(current + chunk, MAX_PROBE_OUTPUT_BYTES)` for every data event. After saturation, that repeatedly rebuilt and encoded the retained prefix. The root fix is a post-cap early return plus incremental remaining-byte accounting at the accumulator boundary.\n\n- **Root cause:** the source invariant was incomplete: the accumulator enforced retained byte length but had no persistent saturation state or incremental byte count.\n- **Why this is root-cause fix:** this repairs the source invariant in the canonical owner because it prevents post-cap work at ingestion, before any downstream parser or consumer can observe the chunk.\n- **Fix classification:** Root cause fix.\n\n## Review findings addressed\n\n- **RF-001:** The author-side blocker is addressed by this code, test, proof, and verification update; the PR is ready for a fresh review.\n- **RF-002:** Added `node-pairing-ssh-verify.runtime.saturation.test.ts`, which fills stdout, emits multiple later chunks, verifies no further UTF-8 encoding occurs, and confirms stderr remains independently active.\n- **RF-003 / RF-004 / RF-005:** Replaced whole-retained-string truncation with per-stream byte accounting and an immediate return after full capacity or truncation.\n- **RF-006:** `node scripts/run-vitest.mjs src/gateway/node-pairing-ssh-verify.runtime.saturation.test.ts src/gateway/node-pairing-ssh-verify.runtime.test.ts` passed.\n- **RF-007:** `node scripts/run-vitest.mjs src/gateway/node-pairing-ssh-verify.test.ts` passed.\n- **RF-008:** `node_modules/.bin/oxfmt --check` passed for the affected runtime and tests.\n- **RF-009:** `node_modules/.bin/oxlint` passed for the affected runtime and tests.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** UTF-8 byte enforcement and safe post-saturation behavior for a real SSH node-identity probe stream.\n- **Real environment tested:** Linux production `/usr/bin/ssh` over TCP loopback to an isolated real `/usr/sbin/sshd` using public-key authentication and a forced remote command.\n- **Exact steps or command run after this patch:** Started the isolated sshd, invoked `runNodeIdentityProbe` through the real child-process/network boundary, emitted a 65,538-byte multibyte prefix followed by 64 additional 65,536-byte chunks, then ran a normal identity JSON control.\n- **Evidence after fix:**\n\n```text\ntransport=real /usr/bin/ssh -> TCP loopback -> isolated /usr/sbin/sshd -> forced remote command\noversized_source=65538-byte multibyte prefix + 64 later 65536-byte chunks\n{\"label\":\"before\",\"status\":\"ok\",\"utf8Bytes\":109228,\"replacementCharacter\":false}\n{\"label\":\"after\",\"status\":\"ok\",\"utf8Bytes\":65535,\"replacementCharacter\":false}\n{\"label\":\"control\",\"status\":\"ok\",\"utf8Bytes\":59,\"replacementCharacter\":false,\"controlJson\":\"{\\\"deviceId\\\":\\\"proof-device\\\",\\\"publicKey\\\":\\\"proof-public-key\\\"}\"}\n```\n\n- **Observed result after fix:** Oversized multi-chunk output stayed within the 65,536-byte contract without a replacement character, and normal identity JSON was unchanged.\n- **What was not tested:** A second physical node or a non-Linux SSH server. The changed production subprocess, TCP, OpenSSH server, remote-command, and stream-accumulation boundary were exercised directly.\n\n## Regression Test Plan\n\n- RED proved that two post-cap stdout chunks still triggered two `Buffer.from` calls before the repair.\n- GREEN proves later chunks are ignored in O(1) while stderr retains an independent budget.\n- Existing multibyte stdout/stderr cap tests and caller-facing pairing verification remain green.\n- **Target test file:** `src/gateway/node-pairing-ssh-verify.runtime.saturation.test.ts`.\n- **Scenario locked in:** stdout reaches exactly 64 KiB, multiple later stdout chunks are ignored, and stderr remains independently writable.\n- **Why this is the smallest reliable guardrail:** it observes the expensive UTF-8 encoding boundary directly while driving the production data listeners.\n\n## Competition / linked PR analysis\n\nThis is an author repair to the existing focused PR following #104180. A related open PR / competition scan found no replacement for this same-contract accumulator fix. Latest-main drift has no overlapping changed file and does not cover the missing post-saturation early return.\n\nThe public contract, configuration, schema, protocol, defaults, migration behavior, and backward compatibility remain unchanged; the patch only restores bounded work behind the existing 64 KiB contract.\n\n## Risk / Compatibility\n\nLow and localized. ASCII and normal identity JSON at or below the existing cap are unchanged. The only behavioral difference occurs after a stream reaches or exceeds the established 64 KiB budget, where later bytes were already guaranteed not to be retained.\n\n## Merge risk\n\n- **Risk label considered:** `merge-risk: availability` because the affected Gateway subprocess path accepts output controlled by a pairing host.\n- **Failure mode removed:** repeated concatenation and UTF-8 encoding after saturation.\n- **Why acceptable:** the patch restores bounded per-event work without changing authorization, SSH options, public API, configuration, protocol, or timeout handling.\n- **Risk labels considered:** `merge-risk: availability` only; no compatibility or authorization contract changes.\n- **Risk explanation:** the affected path is availability-sensitive because a remote host controls stream cadence until timeout.\n- **Maintainer-ready confidence:** High; the change is isolated to the owner, has a focused RED/GREEN guardrail, and fresh real OpenSSH proof.\n- **Patch quality notes:** The patch quality warning was checked explicitly: no new public surface, fallback, parser, configuration, or unrelated cleanup was introduced, and the related open PR scan found no same-contract replacement.\n\n## What was not changed\n\n- SSH host-key or authentication policy.\n- Pairing eligibility and CIDR rules.\n- Device ID/public-key matching.\n- Timeout and child-process termination behavior.\n- Gateway approval persistence or protocol messages.\n",
-        "branch": "fix/followup-104180",
-        "head_sha": "294cd8d7f4f2d87f2da532302c2763199f66b02b",
-        "author": "mushuiyu886",
-        "labels": [
-          "gateway",
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦞 diamond lobster",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
-        ],
-        "files": [
-          {
-            "path": "src/gateway/node-pairing-ssh-verify.runtime.saturation.test.ts",
-            "additions": 50,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/node-pairing-ssh-verify.runtime.test.ts",
-            "additions": 78,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/node-pairing-ssh-verify.runtime.ts",
-            "additions": 17,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 145,
-        "deletions": 10,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105274",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105274.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "gatingTotal": 102,
-          "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 36,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "reason": "comment version already processed in ledger"
     },
     {
       "idempotency_key": "comment-router:openclaw/openclaw:102082:4951204156:2026-07-12T12:38:30Z:re_review",
@@ -16598,21 +15488,21 @@
   },
   "short_circuited": false,
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 94400,
+    "total_ms": 3986,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 9145
+        "ms": 1382
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 7823
+        "ms": 1059
       },
       {
         "name": "classify_comment_commands",
-        "ms": 16542
+        "ms": 4
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -16628,7 +15518,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 55615
+        "ms": 1502
       },
       {
         "name": "append_ledger",
