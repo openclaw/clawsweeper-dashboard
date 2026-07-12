@@ -319,6 +319,12 @@ proof, supplied-but-not-sufficient proof, mock-only proof, and proof label
 mismatches. See
 [`docs/pr-proof-triage-dashboard.md`](docs/pr-proof-triage-dashboard.md).
 
+The unlisted OpenClaw Bay experiment at `/bay-demo` renders the same read-only
+operational status as an animated shoreline. It is public to anyone with the
+URL, deliberately absent from dashboard navigation, and adds no browser-to-GitHub
+requests or new GitHub query path. See
+[`docs/openclaw-bay-demo.md`](docs/openclaw-bay-demo.md).
+
 The optional proof-nudge lane can dry-run or post polite reminder comments for
 open PRs that remain blocked on `triage: needs-real-behavior-proof`. It uses
 comment-body cooldown markers, never closes PRs, and keeps scheduled operation
