@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-12T06:34:48.661Z",
+  "generated_at": "2026-07-12T06:35:00.879Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T03:34:46.663Z",
+  "since": "2026-07-12T03:35:00.301Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1,
@@ -39,13 +39,13 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/104899#issuecomment-4950238484",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 104899,
+      "issue_number": 105021,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T06:31:40Z",
-      "comment_updated_at": "2026-07-12T06:31:40Z",
-      "comment_body_sha256": "ca8ada1b683c0770035911153ff0ee344b2394e7ecaf0ef3880a032b7ae4046b",
+      "comment_created_at": "2026-07-12T06:31:59Z",
+      "comment_updated_at": "2026-07-12T06:31:59Z",
+      "comment_body_sha256": "9475c3d0be9e877f242012081d5c986cdab8e730a1330287cb92fdb951395e45",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -73,101 +73,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(duckduckgo): forward abort signal when web search runs are canceled",
-        "body": "## What Problem This Solves\n\nTwo cancellations bugs in the DuckDuckGo web search path:\n\n1. **Dropped abort signal** — DuckDuckGo is the only web search provider that discards the caller's `AbortSignal`. While every other provider forwards `context?.signal` to its HTTP client, DDG drops it at the provider boundary. A canceled run leaves the DDG request open until its 20-second timeout expires.\n\n2. **Fallback after cancellation** — Even after forwarding the signal, an aborted DDG request is caught by the shared `runWebSearch` catch block, which can start the next auto-detected provider. Canceling one provider should not trigger unintended fallback work.\n\n## Why This Change Was Made\n\n**DDG signal forwarding** (provider + client): Forward `context?.signal` through the DDG provider and client to `withTrustedWebSearchEndpoint`, matching the pattern every other web search provider already uses (tavily #104965, searxng #104216, brave, exa, firecrawl, etc.). The entire chain already supports `signal?: AbortSignal` — DDG was simply the last provider not using it.\n\n**Shared runtime abort guard** (`src/web-search/runtime.ts`): Add `params.signal?.throwIfAborted()` at the top of the provider loop and `params.signal?.aborted` in the catch block so a parent cancellation stops fallback immediately. This is the canonical pattern from #104216 — without it, forwarding the signal into a provider that then rejects on abort would still trigger the next auto-detected provider.\n\n## Evidence\n\n### Real behavior proof — abort through the guarded-fetch stack\n\nA real stalled HTTP server (never sends headers) exercises the exact code path DDG uses: `withSelfHostedWebSearchEndpoint` → `fetchWithSsrFGuard` → `buildTimeoutAbortSignal` → `fetch()`. Both `withTrustedWebSearchEndpoint` (DDG's actual call) and `withSelfHostedWebSearchEndpoint` (used in this proof to allow localhost) share identical `fetchWithSsrFGuard` → `buildTimeoutAbortSignal({ signal })` → `fetch()` code paths; the only difference is the SSRF policy object.\n\n```\n[proof] Signal propagated in 123ms through guarded-fetch stack\n        (withSelfHostedWebSearchEndpoint → fetchWithSsrFGuard → buildTimeoutAbortSignal → fetch)\n[proof] stalled server: http://127.0.0.1:33563/stall\n[proof] abort: controller.abort(\"proof: cancellation\") @ ~100ms\n[proof] error: DOMException: This operation was aborted\n```\n\nA held-open TCP connection is cancelled promptly (123ms) when the signal fires, rather than waiting for the configured 20-second timeout.\n\nProof script: `extensions/duckduckgo/proof/abort-guarded-fetch-proof.test.ts`\n\n### Signal chain — full path (source verified)\n\n| Layer | File | Line | Mechanism |\n|---|---|---|---|\n| Web search runtime | `src/web-search/runtime.ts` | 475 | `params.signal?.throwIfAborted()` — terminal guard (new) |\n| Web search runtime | `src/web-search/runtime.ts` | 489 | `definition.execute(params.args, { signal: params.signal })` |\n| Web search runtime | `src/web-search/runtime.ts` | 503 | `params.signal?.aborted \\|\\| !allowFallback` — catch guard (new) |\n| DDG provider tool | `extensions/duckduckgo/src/ddg-search-provider.ts` | 53 | `signal: context?.signal` (new) |\n| DDG client | `extensions/duckduckgo/src/ddg-client.ts` | 201 | `signal: params.signal` (new) |\n| Trusted endpoint wrapper | `src/agents/tools/web-search-provider-common.ts` | 105 | `signal: params.signal` → `withTrustedWebToolsEndpoint` |\n| Guarded fetch router | `src/agents/tools/web-guarded-fetch.ts` | 88 | Spread `...params` → `withWebToolsNetworkGuard` |\n| SSRF guard | `src/infra/net/fetch-guard.ts` | 496-498 | `buildTimeoutAbortSignal({ signal: params.signal })` |\n\nNo new SDK surface is needed — the entire chain already accepts `AbortSignal`.\n\n### Test suite\n\n```\n$ node scripts/run-vitest.mjs run extensions/duckduckgo/ src/web-search/runtime.test.ts\n ✓ DDG: 12/12 passed (including signal forwarding test)\n ✓ runtime: 31/31 passed (including \"does not fall back after parent cancellation\")\n```\n\n### Lint\n\n```\n$ node scripts/run-oxlint.mjs \\\n    extensions/duckduckgo/src/ddg-search-provider.ts \\\n    extensions/duckduckgo/src/ddg-client.ts \\\n    extensions/duckduckgo/src/ddg-search-provider.test.ts \\\n    src/web-search/runtime.ts \\\n    src/web-search/runtime.test.ts\n✓ clean\n```\n\n### Landing order\n\nThe `src/web-search/runtime.ts` abort guard is included here so this PR typechecks and tests standalone. #104216 (SearXNG, same author) also adds the same guard. Whichever PR lands first, the other will rebase; no cross-repo dependency.\n",
-        "branch": "fix/ddg-abort-signal",
-        "head_sha": "128ea817ab76b534eeb57945b9ba7ebdc3234be2",
-        "author": "wangmiao0668000666",
-        "labels": [
-          "size: M",
-          "extensions: duckduckgo",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/duckduckgo/proof/abort-guarded-fetch-proof.test.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/duckduckgo/src/ddg-client.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/duckduckgo/src/ddg-search-provider.test.ts",
-            "additions": 22,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/duckduckgo/src/ddg-search-provider.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/web-search/runtime.test.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/web-search/runtime.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 199,
-        "deletions": 2,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-104899",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-104899.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 106,
-          "gatingTotal": 101,
-          "counts": {
-            "SUCCESS": 66,
-            "SKIPPED": 35,
-            "FAILURE": 4,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-1:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-docs:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-large-1:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-docs:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -178,23 +84,23 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2169,
+    "total_ms": 1887,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 499
+        "ms": 546
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1463
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -206,7 +112,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 171
+        "ms": 1308
       },
       {
         "name": "append_ledger",
