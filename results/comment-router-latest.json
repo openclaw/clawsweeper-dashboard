@@ -1,24 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T10:44:08.589Z",
+  "generated_at": "2026-07-13T10:45:06.355Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T07:44:06.718Z",
+  "since": "2026-07-13T07:45:05.818Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
+  "max_comments": 1000,
   "item_numbers": [
-    105903
-  ],
-  "comment_ids": [
-    4957081284
+    104415
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,157 +29,32 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:105903:4957081284:2026-07-13T10:40:35Z:re_review",
-      "comment_id": "4957081284",
-      "comment_version_key": "4957081284:2026-07-13T10:40:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105903#issuecomment-4957081284",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 105903,
-      "author": "wm0018",
-      "author_id": 13618944,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T10:40:35Z",
-      "comment_updated_at": "2026-07-13T10:40:35Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cron): batch pending-media snapshot in session reaper to avoid O(SxT) loop",
-        "body": "#### What Problem This Solves\n\nClose #105694\n\nFixes an O(S × T) CPU bottleneck in the cron session reaper that blocks the Node.js event loop on each timer tick. For every cron continuation row, `sweepCronRunSessions` called `hasPendingGeneratedMediaTaskForSessionKey`, which internally performs a full cloned-and-sorted task-registry snapshot via `listTaskRecords`. With thousands of sessions, this synchronous work saturates the main thread and causes gateway timeout / WebSocket disconnection.\n\n#### Why This Change Was Made\n\nInstead of changing the per-row `hasPendingGeneratedMediaTaskForSessionKey` helper (still used by the single-invocation `cron-run-continuation-cleanup` path), this adds `buildPendingGeneratedMediaSessionKeySet` — a one-shot snapshot that collects all session keys with pending generated-media work by iterating the in-process activity map once and the full task registry once. The reaper then does O(1) `Set.has()` lookups inside the loop.\n\nKey design decisions:\n- Preserves the exact `requesterSessionKey` / `ownerKey` matching contract — no semantic change, only a scan-lifting optimization\n- The snapshot is deliberately conservative: session keys that the reaper never visits may still be included, which is harmless\n\n#### User Impact\n\nNo visible impact. The cron reaper produces identical pruning decisions with strictly less CPU time per sweep.\n\n#### Evidence\n\n- **Type check:** `tsgo` passes with no errors\n- **Unit tests:**\n  - `task-status-access.test.ts` — 10 tests pass (+6)\n  - `session-reaper.test.ts` — 20 tests pass\n  - `cron-run-continuation-cleanup.test.ts` — 5 tests pass (no regression)\n- **Change scope:** 5 files, +131 −7 lines. No config, CLI, SDK, docs, or changelog surface.\n- **No new dependencies**\n- **Real gateway startup + 6-minute run + clean shutdown** (Node v22.23.1, 11 production plugins):\n\n```\n[gateway] starting...\n[gateway] starting HTTP server...\n[gateway] agent model: vendor/model-name (thinking=off, fast=off)\n[gateway] http server listening (11 plugins: acpx, browser, canvas, device-pair, file-transfer,\n           matrix, memory-core, ollama, phone-control, talk-voice, workboard; 12.8s)\n[gateway] starting channels and sidecars...\n[matrix] [default] starting provider (http://10.x.x.x:xxxxx)\n[plugins] embedded acpx runtime backend registered lazily\n[gateway] ready\n[gateway] agent runtime plugins pre-warmed in 211ms\n\n  … 6+ minutes stable runtime, cron timer ticks fire cleanly …\n\n[gateway] signal SIGTERM received\n[gateway] received SIGTERM; shutting down\n[shutdown] started: gateway stopping\n[shutdown] completed cleanly in 1052ms\n```\n\n- **No reaper errors or warnings** over a full cron-timer cycle (6+ minutes). The gateway starts, runs, and shuts down identically to main — the only difference is strictly less CPU time per reaper sweep.\n- **Gateway-proof (vi.spyOn only, real production modules):** exercised `sweepCronRunSessions` with `vi.spyOn` on `listTaskRecords`. Tasks seeded through real `createTaskRecord` → real SQLite persistence.\n\n```\n$ OPENCLAW_STATE_DIR=$(mktemp -d) node scripts/run-vitest.mjs \\\n    src/cron/_proof-reaper-gateway.test.ts --reporter verbose\n\n ✓ real listTaskRecords called exactly 1x per sweep (spyon, not mock)\n\n  [REAL modules] S=50 sessions, T=20 tasks created\n  listTaskRecords calls per sweep: 1\n  sweep result: swept=true, pruned=42\n  old path would have called listTaskRecords ~25 times (per continuation row)\n\n ✓ new vs old decisions: 100% match on real tasks + real reaper loop\n\n  [correctness] old vs new: 50/50 match, 0 mismatch\n  pending set size: 33\n\n ✓ contract: requester+owner captured, terminal excluded, non-media skipped\n\n ✓ S=100 sessions, real reaper: 1 listTaskRecords call (timer)\n\n  [perf] S=100, T=200, listTaskRecords calls: 1, sweep: 34.45ms\n  [perf] old path would call listTaskRecords ~50 times\n\n Test Files  1 passed (1) | Tests  4 passed (4)\n```\n\n- **`listTaskRecords` called exactly 1x per sweep** at S=50 and S=100 (old path: ~S/2 times)\n- **50/50 decisions match** between old per-row helper and new one-shot snapshot\n- **Contract preserved**: requester + owner session keys both captured; terminal tasks excluded; chat/non-media ignored\n- **Real SQLite persistence**: tasks created via `createTaskRecord` → full production persist path",
-        "branch": "fix/session-reaper-batch-pending-media",
-        "head_sha": "dbd8afcba21de74cf264314fe1d5ad8c8884b3ae",
-        "author": "wm0018",
-        "labels": [
-          "size: S",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cron/session-reaper.test.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/session-reaper.ts",
-            "additions": 3,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/generated-media-task-activity.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-status-access.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-status-access.ts",
-            "additions": 24,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 131,
-        "deletions": 7,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105903",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105903.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 107,
-          "gatingTotal": 102,
-          "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 34,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "check-lint:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-lint:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2065,
+    "total_ms": 879,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 379
+        "ms": 502
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1409
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -194,7 +66,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 194
+        "ms": 342
       },
       {
         "name": "append_ledger",
