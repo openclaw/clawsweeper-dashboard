@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-13T22:27:28.076Z
+Generated: 2026-07-13T22:43:22.728Z
 
 ## Summary
 
@@ -30,5 +30,5 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#106859](https://github.com/openclaw/openclaw/pull/106859) | fix(voice-call): reject malformed media base64 | automerge-openclaw-openclaw-106528 | MERGEABLE | BEHIND | CANCELLED:4 IN_PROGRESS:34 SKIPPED:62 SUCCESS:32 NEUTRAL:1; blockers:35 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:IN_PROGRESS; CodeQL / Security High (process-exec-boundary):IN_PROGRESS, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#106859](https://github.com/openclaw/openclaw/pull/106859) | fix(voice-call): reject malformed media base64 | automerge-openclaw-openclaw-106528 | MERGEABLE | BEHIND | CANCELLED:11 SKIPPED:91 SUCCESS:68 NEUTRAL:1; blockers:5 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
 | [#106789](https://github.com/openclaw/openclaw/pull/106789) | docs: respect configured Crabbox provider for agent tests | automerge-openclaw-openclaw-104485 | MERGEABLE | BEHIND | CANCELLED:9 SKIPPED:82 SUCCESS:21 FAILURE:1; blockers:4 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED; Real behavior proof:CANCELLED; Real behavior proof:CANCELLED, needs_merge_preflight | repair failing checks or document unrelated main flake with touched-surface proof |
