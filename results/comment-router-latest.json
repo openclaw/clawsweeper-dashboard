@@ -1,16 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T03:57:38.608Z",
+  "generated_at": "2026-07-13T03:57:42.645Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T00:57:35.215Z",
+  "since": "2026-07-13T00:57:39.741Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1000,
+  "max_comments": 100,
   "item_numbers": [
-    105643
+    105827
+  ],
+  "comment_ids": [
+    4954273651
   ],
   "comment_ids": [],
   "status_comment_id": null,
@@ -32,19 +35,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105643:4952544572:2026-07-13T03:55:58Z:clawsweeper_auto_repair",
-      "comment_id": "4952544572",
-      "comment_version_key": "4952544572:2026-07-13T03:55:58Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105643#issuecomment-4952544572",
+      "idempotency_key": "comment-router:openclaw/openclaw:105827:4954273651:2026-07-13T03:54:03Z:re_review",
+      "comment_id": "4954273651",
+      "comment_version_key": "4954273651:2026-07-13T03:54:03Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105827#issuecomment-4954273651",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 105643,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "target_branch": null,
+      "issue_number": 105827,
+      "author": "lzyyzznl",
+      "author_id": 41978486,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-12T19:53:32Z",
-      "comment_updated_at": "2026-07-13T03:55:58Z",
-      "comment_body_sha256": "a5b423f4b8ea983bb262f9778e42668b2940a43d124d58af75102b9a808a632e",
+      "comment_created_at": "2026-07-13T03:54:03Z",
+      "comment_updated_at": "2026-07-13T03:54:03Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper auto repair",
@@ -74,38 +77,32 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli-runner): sweep orphaned bundle MCP temp dirs at gateway startup",
-        "body": "Fixes #105641\n\n## What Problem This Solves\n\nPer-run bundled MCP temp configs (`os.tmpdir()/openclaw-cli-mcp-*/mcp.json`, containing the rendered loopback URL and resolved tokens) are only reclaimed by the in-memory `cleanup()` callback returned from `prepareModeSpecificBundleMcpConfig`. When the gateway process exits with runs in flight (restart, crash, SIGKILL), the callback dies with it and the directory leaks — credential-bearing files outlive the gateway generation that issued them, and restart-heavy deployments accumulate leaked dirs until reboot. 26 leaked dirs built up over 33 days on our production host, dates correlating 1:1 with restart activity (full field data in #105641).\n\n## Approach\n\nA gateway-startup post-ready sidecar (`sidecars.bundle-mcp-temp-sweep`, mirroring `sidecars.session-locks`) that removes orphaned dirs. Orphan detection is **liveness-based, not age-based**:\n\n- Live CLI children carry the config path in their argv (`--mcp-config <dir>/mcp.json`, from `injectClaudeMcpConfigArgs`), so a dir is only removed when **no visible process references it**. Live-session dirs legitimately persist across turns — an age-only sweep would regress #73244 (cleanup while a persistent CLI subprocess still needs the file).\n- A 5-minute spawn-grace window protects the mkdtemp→spawn race of a run being prepared whose child hasn't spawned yet.\n- The sweep **fails closed**: if the process scan yields nothing (restricted environment), everything is kept — keeping a leaked dir beats breaking a live run.\n- Process scan is async and cross-platform: `ps -axww` on POSIX, `/proc` walk as fallback for minimal Linux containers without procps, PowerShell `Get-CimInstance Win32_Process` on Windows (via the existing `getWindowsPowerShellExePath` helper), all with timeouts.\n- False positives (an unrelated process merely mentioning the path) only KEEP a dir for another boot — the safe direction.\n\n`BUNDLE_MCP_TEMP_PREFIX` is now a shared const so the creator (`bundle-mcp.ts`) and the sweeper cannot drift.\n\n## Evidence\n\n**Live reproduction of the leak on a production gateway (OpenClaw v2026.6.11, Ubuntu VPS), before this fix** — run in flight + `systemctl restart`:\n\n```\nnovo temp dir: /tmp/openclaw-cli-mcp-V6tUnQ\n>>> systemctl restart com run em voo...\n✅ LEAK REPRODUZIDO: /tmp/openclaw-cli-mcp-V6tUnQ sobreviveu ao restart do gateway\ntotal 4\ndrwx------   2 root root   60 Jul 12 14:51 .\n-rw-r--r--   1 root root 1470 Jul 12 14:51 mcp.json\n=== total dirs: 26\n```\n\n**Control (same host): SIGKILL of only the CLI child does *not* leak** — the surviving gateway still runs the cleanup callback, confirming the leak specifically requires gateway death:\n\n```\nnovo temp dir detectado: /tmp/openclaw-cli-mcp-EB9IqM\nclaude pids: 2901090\nSIGKILL enviado\n❌ dir foi limpo apesar do kill\n=== total dirs: 24\n```\n\n**Focused tests** (new `bundle-mcp-sweep.test.ts` + touched `server-startup-post-attach.test.ts`):\n\n```\n Test Files  3 passed (3)\n      Tests  70 passed (70)\n```\n\n**Lint**: `pnpm lint` exits 0 on the branch.\n\n**After-fix exact-head proof — real host process scanner (no mocks), Linux/`ps` path.** Ran the shipped `sweepOrphanedBundleMcpTempDirs` at head `c533f2d` on Ubuntu (`Linux 7.0.0`, Node 22.22.2, procps-ng 4.0.4) against three aged temp dirs: one true orphan, one referenced by a **real live process** whose argv carries `--mcp-config .../LIVE1/mcp.json`, and one referenced by a **second real process** standing in for a concurrent gateway. No `listCommandLines` override — the sweep used the actual host scanner:\n\n```\n=== BEFORE (3 dirs, mtime -2h):\nopenclaw-cli-mcp-CONC1\nopenclaw-cli-mcp-LIVE1\nopenclaw-cli-mcp-ORPHAN1\n=== real processes holding LIVE1/CONC1 (host `ps -axww`):\nclaude --strict-mcp-config --mcp-config openclaw-cli-mcp-LIVE1/mcp.json 120\nclaude --mcp-config openclaw-cli-mcp-CONC1/mcp.json --other 120\n=== SWEEP (real process scanner, no mock):\nremoved: [\"openclaw-cli-mcp-ORPHAN1\"]\nkept:    [\"openclaw-cli-mcp-CONC1\",\"openclaw-cli-mcp-LIVE1\"]\n=== AFTER:\nopenclaw-cli-mcp-CONC1\nopenclaw-cli-mcp-LIVE1\n```\n\nThe orphan is removed; both the persistent-session dir and the concurrent-gateway dir are preserved because the real `ps` scan sees their live references — directly addressing the \"incomplete process inventory could delete a live config\" risk on the actual scanner path.\n\n### Update — owner-aware reclamation (addresses the queued-config ownership finding)\n\nThe prior revision keyed reclamation on argv liveness plus a grace window. As reviewed, the bundle MCP config is rendered at prepare time (`prepare.ts`), *before* the run enters `enqueueCliRun` (`execute.ts`), so a run waiting in the serialization queue owns a config that no child argv references yet. Past the grace window, a concurrent gateway's startup sweep could delete that dir, making the queued run spawn with a missing `--mcp-config`.\n\nFix (`5bf9437d`): each temp dir now carries an owner marker (`.owner.json` = creating gateway pid + Linux boot id). An aged, argv-unreferenced dir is reclaimed only once its owning gateway is gone — pid dead (`process.kill(pid, 0)`), or boot id changed by a reboot. Unmarked legacy dirs keep the prior age+liveness rule so pre-existing leaks are still swept, and a marker write failure is non-fatal (falls back to legacy), so ownership can never over-protect a leak. The primary case (gateway death with runs in flight, #105641) is unchanged: the dead gateway's pid fails the liveness probe, so the orphan is still removed.\n\nLocal validation on the rebased head (`5bf9437d`): `oxlint` clean, `tsgo:core` + `tsgo:core:test` clean, `check:temp-path-guardrails` pass, `deadcode:exports` adds no new entry (the marker name is module-private), and the `bundle-mcp-sweep` + `server-startup-post-attach` + `prepare` suites pass (217 tests).\n\n#### Real-behavior proof — owner-aware keep/remove at exact head `5bf9437d`\n\nRan the exported `sweepOrphanedBundleMcpTempDirs` (esbuild-bundled from the exact-head source — the real function, not a reimplementation) on a real Linux host (node v22) with its real defaults: real `ps` process scan, real `process.kill(pid, 0)` liveness, real boot id. Two temp dirs aged 24h past the grace window, neither referenced by any live argv — one owned by a live process, one by a dead process. Redacted (no tokens, endpoints, host paths, or boot id):\n\n```\n== Setup (aged 24h, no argv reference to either dir) ==\nlive-owner dir  owner.json: {\"pid\": 2937168 (LIVE), \"bootId\": \"<redacted-boot-id>\"}\ndead-owner dir  owner.json: {\"pid\": 2937169 (DEAD), \"bootId\": \"<redacted-boot-id>\"}\nprocess.kill(2937168,0) -> alive=true\nprocess.kill(2937169,0) -> alive=false\n\n== sweepOrphanedBundleMcpTempDirs (real defaults) ==\nremoved: [ '<tmp>/openclaw-cli-mcp-dead-owner' ]\nkept:    [ '<tmp>/openclaw-cli-mcp-live-owner' ]\n\n== Verification on disk ==\nlive-owner dir still present: true  (expected true  — queued run of a live gateway preserved)\ndead-owner dir reclaimed:     true (expected true  — true orphan removed)\n\nRESULT: PASS\n```\n\nThe live-owner dir (a queued run's config whose gateway is still alive, no argv reference yet) is preserved; the dead-owner dir (a true orphan) is reclaimed — the exact keep/remove distinction the owner marker adds, exercised on the final-head code with the real liveness probe.\n\n## Tests\n\nNew `bundle-mcp-sweep.test.ts` covers the scenarios called out in the issue: gateway death with runs in flight (orphan removed), a live CLI child keeping its dir (#73244 control), a concurrent gateway instance's child keeping its dir, spawn-grace window, fail-closed on empty process scan, legacy empty dirs, and non-matching entries/missing roots. Owner-aware cases added: a queued run whose owning gateway is still alive is kept, a dead-owner dir is removed, a dir whose owner boot id predates a reboot is removed even if the pid was reused, and a live-owned dir with a matching boot id is kept.\n\n`server-startup-post-attach.test.ts` mocks the sweep module so the existing startup test doesn't touch the real tmpdir/process table; its assertions are unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01TiH8Npb28iWm4ZkXVrN4HJ\n\n\n\n",
-        "branch": "fix/bundle-mcp-temp-sweep",
-        "head_sha": "5bf9437d3ab93b38427b773643d75ac68f2d2489",
-        "author": "totobusnello",
+        "title": "fix(agents): tighten lsSchema.limit from Type.Number to Type.Integer",
+        "body": "## Summary\n\nFixes #105827\n\n**Problem**: `lsSchema.limit` uses `Type.Number`, which accepts fractional values (e.g. `10.5`) that are semantically invalid for an entry count. This can silently pass schema validation and reach tool logic with nonsensical values.\n\n**Solution**: Change the schema field to `Type.Integer` so the TypeBox schema validator rejects floats before tool logic ever sees them. Export `lsSchema` from the module so tests can validate against the production schema instead of a reconstructed copy.\n\n**What changed**: One character in `src/agents/sessions/tools/ls.ts:28` — `Type.Number` → `Type.Integer`. The test file `ls.limit-schema.test.ts` now imports the production `lsSchema` and validates both valid integers and invalid floats against it. Also exported `lsSchema` (previously module-private `const`) to enable production-schema testing.\n\n**NOT changed**: Tool execution behavior, default limit value (500), `normalizePositiveLimit` clamping logic, any other schema field, the tool registration path, or the tool's runtime behavior. Existing `ls.test.ts` tests continue to pass unchanged.\n\n## Real behavior proof\n\n**Behavior addressed**: Schema-level rejection of float `limit` values in the production `lsSchema`.\n**Real environment tested**: Linux x64, Node.js 25.9.0, OpenClaw `main@HEAD` with this patch applied.\n**Exact steps or command run after this patch**: `pnpm test src/agents/sessions/tools/ls.limit-schema.test.ts --reporter=verbose`\n**After-fix evidence**: `node --import tsx/esm -e \"...\"` → 4/4 passed (see terminal output in Tests section)\n**Observed result after the fix**: `Check(lsSchema, { limit: 10.5 })` returns `false`; `Check(lsSchema, { limit: 100 })` returns `true`. Float values are rejected at schema level.\n**What was not tested**: End-to-end tool execution with mocked filesystem is covered by existing `ls.test.ts`. Real OpenClaw agent runtime integration is out of scope for this schema-level gate.\n\n## Tests and validation\n\n```\n$ pnpm test src/agents/sessions/tools/ls.limit-schema.test.ts --reporter=verbose\n\n RUN  v4.1.9 /home/lizeyu/workspace/openclaw\n\n ✓ |unit-fast| src/agents/sessions/tools/ls.limit-schema.test.ts > ls tool limit schema > rejects float limit — validates against production lsSchema\n ✓ |unit-fast| src/agents/sessions/tools/ls.limit-schema.test.ts > ls tool limit schema > accepts various valid integer limits through the full tool path\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  11:00:51\n   Duration  568ms\n\n$ pnpm test src/agents/sessions/tools/ls.test.ts\n   (existing tests continue to pass)\n```\n\nValidated cases against the production `lsSchema` via `Check()` from `typebox/value`:\n\n| Input | Expected | Result |\n|-------|----------|--------|\n| `{ path: \"/tmp\", limit: 100 }` | ✅ accept | passed |\n| `{ path: \"/tmp\", limit: 0 }` | ✅ accept | passed |\n| `{ path: \"/tmp\" }` (optional omitted) | ✅ accept | passed |\n| `{ path: \"/tmp\", limit: 10.5 }` | ❌ reject | passed |\n| `{ path: \"/tmp\", limit: \"abc\" }` | ❌ reject | passed |\n| `{ path: \".\", limit: Number.MAX_SAFE_INTEGER }` | ✅ accept | passed |\n\n## Risk checklist\n\n- [x] This change is backwards compatible — integers previously accepted by `Type.Number` remain accepted by `Type.Integer`\n- [x] This change has been tested with existing configurations — production schema validated directly\n- [ ] I have updated relevant documentation — schema is self-documenting via TypeBox types\n- [x] Breaking changes (if any) are documented in Summary\n\n---\nmerge-risk: 🚨 compatibility — narrow schema contract change (float → integer only), accepted as intentional.\n",
+        "branch": "fix/scan-20260713-8-ls-limit-type-integer",
+        "head_sha": "33190f2c1d82cca174ad50a1858cd937903ffbb8",
+        "author": "lzyyzznl",
         "labels": [
           "gateway",
           "agents",
-          "size: L",
+          "size: XS",
           "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "P3",
+          "rating: 🐚 platinum hermit",
+          "merge-risk: 🚨 compatibility",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "src/agents/cli-runner/bundle-mcp-sweep.test.ts",
-            "additions": 174,
+            "path": "src/agents/sessions/tools/ls.limit-schema.test.ts",
+            "additions": 23,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/agents/cli-runner/bundle-mcp-sweep.ts",
-            "additions": 303,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/cli-runner/bundle-mcp.ts",
-            "additions": 6,
-            "deletions": 1,
+            "path": "src/agents/sessions/tools/ls.ts",
+            "additions": 2,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
@@ -121,16 +118,16 @@
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 505,
-        "deletions": 1,
+        "changedFiles": 2,
+        "additions": 25,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105643",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105643.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105827",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105827.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
@@ -139,546 +136,50 @@
           "total": 113,
           "gatingTotal": 108,
           "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 39,
-            "FAILURE": 1,
+            "SUCCESS": 58,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 11,
+            "FAILURE": 5,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-compact-large-1:FAILURE"
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):FAILURE",
+            "QA Smoke CI (profile 2/2):FAILURE",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "check-guards:FAILURE",
+            "check-dependencies:FAILURE",
+            "check-test-types:FAILURE",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-compact-large-1:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:105643:4954057133:2026-07-13T03:05:42Z:re_review",
-      "comment_id": "4954057133",
-      "comment_version_key": "4954057133:2026-07-13T03:05:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105643#issuecomment-4954057133",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 105643,
-      "author": "totobusnello",
-      "author_id": 246086438,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T03:05:42Z",
-      "comment_updated_at": "2026-07-13T03:05:42Z",
-      "comment_body_sha256": "24d285fd3e7400afdf696d57e97b1411d3379750f2c6d842e736fe70e36e0fd5",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=c41b2c509fa20fa4fab316eb76ee23956fd3a380)",
-      "review_summary": "The PR internalizes or deletes production-unused exports across QA and utility plugins, then shrinks the dead-export and TypeScript LOC baselines.\n\nPR surface: Source -64, Other -127. Total -191 across 72 files.\n\nReproducibility: not applicable. This PR is internal contract cleanup rather than a reported runtime bug. The blocking mismatch is directly source-verifiable from the changed export and the repository-owned skill instructions.",
-      "review_followup": "- [P1] A maintainer should resolve the existing review thread by aligning the claw-score contract, refresh the behind-main baselines, and confirm the exact-head guard run; the protected `maintainer` label keeps this out of autonomous repair routing.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "c41b2c509fa20fa4fab316eb76ee23956fd3a380",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-13T03:54:03.221Z",
-      "review_lease_owner": "github-run-29222537564-1",
-      "review_lease_comment_id": "4954262589",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "a9f1cbc5f5efe82a7befff8ba95e84b53e14d5e5f6c77310f94cc0ea48a06d98",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cli-runner): sweep orphaned bundle MCP temp dirs at gateway startup",
-        "body": "Fixes #105641\n\n## What Problem This Solves\n\nPer-run bundled MCP temp configs (`os.tmpdir()/openclaw-cli-mcp-*/mcp.json`, containing the rendered loopback URL and resolved tokens) are only reclaimed by the in-memory `cleanup()` callback returned from `prepareModeSpecificBundleMcpConfig`. When the gateway process exits with runs in flight (restart, crash, SIGKILL), the callback dies with it and the directory leaks — credential-bearing files outlive the gateway generation that issued them, and restart-heavy deployments accumulate leaked dirs until reboot. 26 leaked dirs built up over 33 days on our production host, dates correlating 1:1 with restart activity (full field data in #105641).\n\n## Approach\n\nA gateway-startup post-ready sidecar (`sidecars.bundle-mcp-temp-sweep`, mirroring `sidecars.session-locks`) that removes orphaned dirs. Orphan detection is **liveness-based, not age-based**:\n\n- Live CLI children carry the config path in their argv (`--mcp-config <dir>/mcp.json`, from `injectClaudeMcpConfigArgs`), so a dir is only removed when **no visible process references it**. Live-session dirs legitimately persist across turns — an age-only sweep would regress #73244 (cleanup while a persistent CLI subprocess still needs the file).\n- A 5-minute spawn-grace window protects the mkdtemp→spawn race of a run being prepared whose child hasn't spawned yet.\n- The sweep **fails closed**: if the process scan yields nothing (restricted environment), everything is kept — keeping a leaked dir beats breaking a live run.\n- Process scan is async and cross-platform: `ps -axww` on POSIX, `/proc` walk as fallback for minimal Linux containers without procps, PowerShell `Get-CimInstance Win32_Process` on Windows (via the existing `getWindowsPowerShellExePath` helper), all with timeouts.\n- False positives (an unrelated process merely mentioning the path) only KEEP a dir for another boot — the safe direction.\n\n`BUNDLE_MCP_TEMP_PREFIX` is now a shared const so the creator (`bundle-mcp.ts`) and the sweeper cannot drift.\n\n## Evidence\n\n**Live reproduction of the leak on a production gateway (OpenClaw v2026.6.11, Ubuntu VPS), before this fix** — run in flight + `systemctl restart`:\n\n```\nnovo temp dir: /tmp/openclaw-cli-mcp-V6tUnQ\n>>> systemctl restart com run em voo...\n✅ LEAK REPRODUZIDO: /tmp/openclaw-cli-mcp-V6tUnQ sobreviveu ao restart do gateway\ntotal 4\ndrwx------   2 root root   60 Jul 12 14:51 .\n-rw-r--r--   1 root root 1470 Jul 12 14:51 mcp.json\n=== total dirs: 26\n```\n\n**Control (same host): SIGKILL of only the CLI child does *not* leak** — the surviving gateway still runs the cleanup callback, confirming the leak specifically requires gateway death:\n\n```\nnovo temp dir detectado: /tmp/openclaw-cli-mcp-EB9IqM\nclaude pids: 2901090\nSIGKILL enviado\n❌ dir foi limpo apesar do kill\n=== total dirs: 24\n```\n\n**Focused tests** (new `bundle-mcp-sweep.test.ts` + touched `server-startup-post-attach.test.ts`):\n\n```\n Test Files  3 passed (3)\n      Tests  70 passed (70)\n```\n\n**Lint**: `pnpm lint` exits 0 on the branch.\n\n**After-fix exact-head proof — real host process scanner (no mocks), Linux/`ps` path.** Ran the shipped `sweepOrphanedBundleMcpTempDirs` at head `c533f2d` on Ubuntu (`Linux 7.0.0`, Node 22.22.2, procps-ng 4.0.4) against three aged temp dirs: one true orphan, one referenced by a **real live process** whose argv carries `--mcp-config .../LIVE1/mcp.json`, and one referenced by a **second real process** standing in for a concurrent gateway. No `listCommandLines` override — the sweep used the actual host scanner:\n\n```\n=== BEFORE (3 dirs, mtime -2h):\nopenclaw-cli-mcp-CONC1\nopenclaw-cli-mcp-LIVE1\nopenclaw-cli-mcp-ORPHAN1\n=== real processes holding LIVE1/CONC1 (host `ps -axww`):\nclaude --strict-mcp-config --mcp-config openclaw-cli-mcp-LIVE1/mcp.json 120\nclaude --mcp-config openclaw-cli-mcp-CONC1/mcp.json --other 120\n=== SWEEP (real process scanner, no mock):\nremoved: [\"openclaw-cli-mcp-ORPHAN1\"]\nkept:    [\"openclaw-cli-mcp-CONC1\",\"openclaw-cli-mcp-LIVE1\"]\n=== AFTER:\nopenclaw-cli-mcp-CONC1\nopenclaw-cli-mcp-LIVE1\n```\n\nThe orphan is removed; both the persistent-session dir and the concurrent-gateway dir are preserved because the real `ps` scan sees their live references — directly addressing the \"incomplete process inventory could delete a live config\" risk on the actual scanner path.\n\n### Update — owner-aware reclamation (addresses the queued-config ownership finding)\n\nThe prior revision keyed reclamation on argv liveness plus a grace window. As reviewed, the bundle MCP config is rendered at prepare time (`prepare.ts`), *before* the run enters `enqueueCliRun` (`execute.ts`), so a run waiting in the serialization queue owns a config that no child argv references yet. Past the grace window, a concurrent gateway's startup sweep could delete that dir, making the queued run spawn with a missing `--mcp-config`.\n\nFix (`5bf9437d`): each temp dir now carries an owner marker (`.owner.json` = creating gateway pid + Linux boot id). An aged, argv-unreferenced dir is reclaimed only once its owning gateway is gone — pid dead (`process.kill(pid, 0)`), or boot id changed by a reboot. Unmarked legacy dirs keep the prior age+liveness rule so pre-existing leaks are still swept, and a marker write failure is non-fatal (falls back to legacy), so ownership can never over-protect a leak. The primary case (gateway death with runs in flight, #105641) is unchanged: the dead gateway's pid fails the liveness probe, so the orphan is still removed.\n\nLocal validation on the rebased head (`5bf9437d`): `oxlint` clean, `tsgo:core` + `tsgo:core:test` clean, `check:temp-path-guardrails` pass, `deadcode:exports` adds no new entry (the marker name is module-private), and the `bundle-mcp-sweep` + `server-startup-post-attach` + `prepare` suites pass (217 tests).\n\n#### Real-behavior proof — owner-aware keep/remove at exact head `5bf9437d`\n\nRan the exported `sweepOrphanedBundleMcpTempDirs` (esbuild-bundled from the exact-head source — the real function, not a reimplementation) on a real Linux host (node v22) with its real defaults: real `ps` process scan, real `process.kill(pid, 0)` liveness, real boot id. Two temp dirs aged 24h past the grace window, neither referenced by any live argv — one owned by a live process, one by a dead process. Redacted (no tokens, endpoints, host paths, or boot id):\n\n```\n== Setup (aged 24h, no argv reference to either dir) ==\nlive-owner dir  owner.json: {\"pid\": 2937168 (LIVE), \"bootId\": \"<redacted-boot-id>\"}\ndead-owner dir  owner.json: {\"pid\": 2937169 (DEAD), \"bootId\": \"<redacted-boot-id>\"}\nprocess.kill(2937168,0) -> alive=true\nprocess.kill(2937169,0) -> alive=false\n\n== sweepOrphanedBundleMcpTempDirs (real defaults) ==\nremoved: [ '<tmp>/openclaw-cli-mcp-dead-owner' ]\nkept:    [ '<tmp>/openclaw-cli-mcp-live-owner' ]\n\n== Verification on disk ==\nlive-owner dir still present: true  (expected true  — queued run of a live gateway preserved)\ndead-owner dir reclaimed:     true (expected true  — true orphan removed)\n\nRESULT: PASS\n```\n\nThe live-owner dir (a queued run's config whose gateway is still alive, no argv reference yet) is preserved; the dead-owner dir (a true orphan) is reclaimed — the exact keep/remove distinction the owner marker adds, exercised on the final-head code with the real liveness probe.\n\n## Tests\n\nNew `bundle-mcp-sweep.test.ts` covers the scenarios called out in the issue: gateway death with runs in flight (orphan removed), a live CLI child keeping its dir (#73244 control), a concurrent gateway instance's child keeping its dir, spawn-grace window, fail-closed on empty process scan, legacy empty dirs, and non-matching entries/missing roots. Owner-aware cases added: a queued run whose owning gateway is still alive is kept, a dead-owner dir is removed, a dir whose owner boot id predates a reboot is removed even if the pid was reused, and a live-owned dir with a matching boot id is kept.\n\n`server-startup-post-attach.test.ts` mocks the sweep module so the existing startup test doesn't touch the real tmpdir/process table; its assertions are unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01TiH8Npb28iWm4ZkXVrN4HJ\n\n\n\n",
-        "branch": "fix/bundle-mcp-temp-sweep",
-        "head_sha": "5bf9437d3ab93b38427b773643d75ac68f2d2489",
-        "author": "totobusnello",
-        "labels": [
-          "gateway",
-          "agents",
-          "size: L",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/cli-runner/bundle-mcp-sweep.test.ts",
-            "additions": 174,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/cli-runner/bundle-mcp-sweep.ts",
-            "additions": 303,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/cli-runner/bundle-mcp.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.test.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-startup-post-attach.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/cli.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/dreaming-phases.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/dreaming.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-local-worker-errors.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/short-term-promotion.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/cli.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-wiki/src/config.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/oc-path/src/oc-path/emit.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/oc-path/src/oc-path/jsonc/parse.ts",
-            "additions": 0,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/oc-path/src/oc-path/resolve.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/ollama/src/web-search-provider.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/openshell/src/backend.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/policy/src/doctor/register.ts",
-            "additions": 0,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-channel/src/channel-base.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/agentic-parity-report.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/evidence-gallery.ts",
-            "additions": 0,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/gateway-child.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/gateway-log-sentinel.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/gateway-process-boundary.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/harness-parity.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/jsonl-replay.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/shared/canonical-scenarios.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/shared/live-approval-result.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/shared/live-credential-source.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/shared/live-transport-result.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/shared/live-transport-rtt.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/shared/live-transport-scenarios.ts",
-            "additions": 3,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis-phase-timer.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/crabbox-runtime.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/desktop-browser-smoke.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/discord-smoke.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/run.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/telegram-desktop-builder.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/mantis/visual-task.runtime.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/qa-transport.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/runtime-parity.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/runtime-tool-metadata.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/scenario-catalog.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/scorecard-taxonomy.ts",
-            "additions": 15,
-            "deletions": 21,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/token-efficiency-report.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-lab/src/tool-coverage-report.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/cli.ts",
-            "additions": 0,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/runners/contract/runtime.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/runners/contract/scenario-runtime-shared.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/runners/contract/scenario-runtime.ts",
-            "additions": 1,
-            "deletions": 10,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/runners/contract/scenarios.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/shared/live-transport-scenarios.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/substrate/client.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/substrate/e2ee-client.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/substrate/harness.runtime.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/substrate/recording-proxy.ts",
-            "additions": 0,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workboard/src/types.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/cli.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/data-read.ts",
-            "additions": 1,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/http-route.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/manifest.ts",
-            "additions": 5,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/scaffold.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/schema.ts",
-            "additions": 4,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/serve.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/workspaces/src/store.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/deadcode-exports.baseline.mjs",
-            "additions": 10,
-            "deletions": 137,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/ts-max-loc-baseline.json",
-            "additions": 13,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 5,
-        "additions": 505,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105643",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105643.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 114,
-          "gatingTotal": 109,
-          "counts": {
-            "SUCCESS": 72,
-            "SKIPPED": 39,
-            "FAILURE": 1,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-large-1:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-large-1:FAILURE"
+            "QA Smoke CI (profile 1/2):FAILURE",
+            "QA Smoke CI (profile 2/2):FAILURE",
+            "check-guards:FAILURE",
+            "check-dependencies:FAILURE",
+            "check-test-types:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -825,19 +326,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4918,
+    "total_ms": 3261,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 302
+        "ms": 492
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1985
+        "ms": 2329
       },
       {
         "name": "classify_comment_commands",
-        "ms": 986
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -853,7 +354,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1515
+        "ms": 357
       },
       {
         "name": "append_ledger",
