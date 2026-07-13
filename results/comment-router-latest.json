@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T01:25:17.671Z",
+  "generated_at": "2026-07-13T01:25:26.612Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T22:25:17.199Z",
+  "since": "2026-07-12T22:25:22.864Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1000,
   "item_numbers": [
-    105817
+    105726
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 6,
+  "commands_seen": 3,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -30,7 +30,272 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105726:4953248751:2026-07-13T01:23:47Z:clawsweeper_needs_human",
+      "comment_id": "4953248751",
+      "comment_version_key": "4953248751:2026-07-13T01:23:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105726#issuecomment-4953248751",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105726,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-12T23:43:25Z",
+      "comment_updated_at": "2026-07-13T01:23:47Z",
+      "comment_body_sha256": "9f6bdd6a695d91883b0351f83289d350e767fc019e56f66d5856db299071053e",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No automated code repair is indicated; the contributor should supply real behavior proof and refresh the branch for normal maintainer review.; Cleared: The two-file runtime-and-test diff adds no dependency, workflow, permission, secret, download, or supply-chain surface, and no concrete security regression was found. (sha=afe3cc92cdbbfff2573062dc6441a98f8b02e4d9)",
+      "review_summary": "The PR makes foreground bash-tool cancellation reject with an AbortError, clears the pending yield timer before killing the process, and adds regression coverage for cancellation races.\n\nPR surface: Source +13, Tests +30. Total +43 across 2 files.\n\nReproducibility: yes. from source inspection: abort kills the managed process, whose normalized outcome is then resolved as a foreground result on current main. I did not independently execute the current-main failure path, so this is source-reproducible rather than a live reproduction.",
+      "review_followup": "- [P1] No automated code repair is indicated; the contributor should supply real behavior proof and refresh the branch for normal maintainer review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "afe3cc92cdbbfff2573062dc6441a98f8b02e4d9",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-13T01:22:13.245Z",
+      "review_lease_owner": "github-run-29217097093-1",
+      "review_lease_comment_id": "4953603440",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "1ae2978de370bbdf883bb9703605e78cda3f720da46265099f957d44674d435f",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): reject with AbortError when tool execution is cancelled",
+        "body": "## What Problem This Solves\n\nWhen a tool execution is cancelled via the agent's AbortSignal, onAbortSignal calls run.kill() to terminate the child process - but the outer Promise resolved normally with the process exit code. The agent manager was misled into believing the tool finished normally.\n\n## Root Cause\n\nThe process exit handler always called resolve(buildExecForegroundResult(...)) regardless of whether the exit was caused by an abort signal. Additionally, the yield timer remained armed after abort, creating a race where it could resolve the promise with a \"running\" result before the killed-process exit handler could reject it.\n\n## Fix\n\n1. Added a `toolAborted` flag set by onAbortSignal before calling run.kill()\n2. Clear the yield timer in onAbortSignal so it cannot race against the killed-process exit handler\n3. In run.promise.then(), check toolAborted first and reject with AbortError instead of resolving\n\n## User Impact\n\n- Cancel/stop during bash tool execution now correctly aborts the agent run\n- Yield timer race is eliminated: abort atomically clears the timer + kills the process\n- Backgrounded and yielded sessions remain unaffected\n\n## Evidence\n\n### A. Unit Test Results (35/35 passed)\n\n```\n$ node scripts/run-vitest.mjs src/agents/bash-tools.test.ts\n Test Files  1 passed (1)\n      Tests  35 passed (35)\n```\n\n### B. Regression Test: Yield Timer Race (new test)\n\n```\n ✓ rejects with AbortError when abort fires before yield window expires\n```\n\nThis test starts a foreground command with a 60s yield window, triggers abort during execution (via onUpdate), and expects the promise to reject with \"Tool execution was aborted\" - NOT resolve with a \"running\" session result.\n\nBefore the fix, the yield timer would resolve the promise. After the fix, onAbortSignal clears the timer first.\n\n### C. Code Flow (Before vs After)\n\n```\nBEFORE (bug):\n  onAbortSignal -> run.kill() -> [yieldTimer still armed -> race!]\n  -> process exits -> run.promise.then() -> resolve(...)\n  -> agent run treats cancelled tool as successful execution\n\nAFTER (fixed):\n  onAbortSignal -> toolAborted=true -> clearTimeout(yieldTimer) -> run.kill()\n  -> process exits -> run.promise.then() -> check toolAborted -> reject(AbortError)\n  -> agent run correctly aborts\n```\n\n### D. Lint + Format\n\n```\n$ npx oxlint -c .oxlintrc.json src/agents/bash-tools.exec.ts\n  No errors\n$ npx oxfmt --check src/agents/bash-tools.exec.ts\n  All matched files use the correct format\n```\n\n### E. Merge Risk: session-state\n\nThe change is scoped to in-flight foreground tool execution only. It does not touch session persistence, SQLite, config, or storage. Backgrounded and yielded sessions return early from onAbortSignal and are unaffected.\n\n## What Changed\n\n- src/agents/bash-tools.exec.ts: +13 lines (toolAborted flag + clear yieldTimer + AbortError rejection)\n- src/agents/bash-tools.test.ts: +23 lines (regression test for yield timer race)\n\nFixes #105681",
+        "branch": "fix/bash-exec-abort-reject-105681",
+        "head_sha": "afe3cc92cdbbfff2573062dc6441a98f8b02e4d9",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.test.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 44,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105726",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105726.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "gatingTotal": 108,
+          "counts": {
+            "SUCCESS": 69,
+            "SKIPPED": 41,
+            "IN_PROGRESS": 1,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "check-sqlite-session-flip-proof:FAILURE"
+          ],
+          "pending": [
+            "QA Smoke CI (profile 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-sqlite-session-flip-proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:105726:4953587021:2026-07-13T01:14:04Z:re_review",
+      "comment_id": "4953587021",
+      "comment_version_key": "4953587021:2026-07-13T01:14:04Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105726#issuecomment-4953587021",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105726,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T01:14:04Z",
+      "comment_updated_at": "2026-07-13T01:14:04Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): reject with AbortError when tool execution is cancelled",
+        "body": "## What Problem This Solves\n\nWhen a tool execution is cancelled via the agent's AbortSignal, onAbortSignal calls run.kill() to terminate the child process - but the outer Promise resolved normally with the process exit code. The agent manager was misled into believing the tool finished normally.\n\n## Root Cause\n\nThe process exit handler always called resolve(buildExecForegroundResult(...)) regardless of whether the exit was caused by an abort signal. Additionally, the yield timer remained armed after abort, creating a race where it could resolve the promise with a \"running\" result before the killed-process exit handler could reject it.\n\n## Fix\n\n1. Added a `toolAborted` flag set by onAbortSignal before calling run.kill()\n2. Clear the yield timer in onAbortSignal so it cannot race against the killed-process exit handler\n3. In run.promise.then(), check toolAborted first and reject with AbortError instead of resolving\n\n## User Impact\n\n- Cancel/stop during bash tool execution now correctly aborts the agent run\n- Yield timer race is eliminated: abort atomically clears the timer + kills the process\n- Backgrounded and yielded sessions remain unaffected\n\n## Evidence\n\n### A. Unit Test Results (35/35 passed)\n\n```\n$ node scripts/run-vitest.mjs src/agents/bash-tools.test.ts\n Test Files  1 passed (1)\n      Tests  35 passed (35)\n```\n\n### B. Regression Test: Yield Timer Race (new test)\n\n```\n ✓ rejects with AbortError when abort fires before yield window expires\n```\n\nThis test starts a foreground command with a 60s yield window, triggers abort during execution (via onUpdate), and expects the promise to reject with \"Tool execution was aborted\" - NOT resolve with a \"running\" session result.\n\nBefore the fix, the yield timer would resolve the promise. After the fix, onAbortSignal clears the timer first.\n\n### C. Code Flow (Before vs After)\n\n```\nBEFORE (bug):\n  onAbortSignal -> run.kill() -> [yieldTimer still armed -> race!]\n  -> process exits -> run.promise.then() -> resolve(...)\n  -> agent run treats cancelled tool as successful execution\n\nAFTER (fixed):\n  onAbortSignal -> toolAborted=true -> clearTimeout(yieldTimer) -> run.kill()\n  -> process exits -> run.promise.then() -> check toolAborted -> reject(AbortError)\n  -> agent run correctly aborts\n```\n\n### D. Lint + Format\n\n```\n$ npx oxlint -c .oxlintrc.json src/agents/bash-tools.exec.ts\n  No errors\n$ npx oxfmt --check src/agents/bash-tools.exec.ts\n  All matched files use the correct format\n```\n\n### E. Merge Risk: session-state\n\nThe change is scoped to in-flight foreground tool execution only. It does not touch session persistence, SQLite, config, or storage. Backgrounded and yielded sessions return early from onAbortSignal and are unaffected.\n\n## What Changed\n\n- src/agents/bash-tools.exec.ts: +13 lines (toolAborted flag + clear yieldTimer + AbortError rejection)\n- src/agents/bash-tools.test.ts: +23 lines (regression test for yield timer race)\n\nFixes #105681",
+        "branch": "fix/bash-exec-abort-reject-105681",
+        "head_sha": "afe3cc92cdbbfff2573062dc6441a98f8b02e4d9",
+        "author": "zw-xysk",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/bash-tools.exec.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/bash-tools.test.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 44,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105726",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105726.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "gatingTotal": 108,
+          "counts": {
+            "SUCCESS": 69,
+            "SKIPPED": 41,
+            "IN_PROGRESS": 1,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "check-sqlite-session-flip-proof:FAILURE"
+          ],
+          "pending": [
+            "QA Smoke CI (profile 2/2):IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-sqlite-session-flip-proof:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:105726:4953144711:2026-07-12T23:08:48Z:re_review",
+      "comment_id": "4953144711",
+      "comment_version_key": "4953144711:2026-07-12T23:08:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105726#issuecomment-4953144711",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105726,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-12T23:08:48Z",
+      "comment_updated_at": "2026-07-12T23:08:48Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -39,19 +304,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 809,
+    "total_ms": 5209,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 442
+        "ms": 446
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1984
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 1197
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -67,7 +332,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 337
+        "ms": 1438
       },
       {
         "name": "append_ledger",
