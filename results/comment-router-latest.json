@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T06:29:33.433Z",
+  "generated_at": "2026-07-13T06:30:02.021Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T03:29:33.080Z",
+  "since": "2026-07-13T03:29:59.672Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1000,
   "item_numbers": [
-    106040
+    105780
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 4,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -30,7 +30,184 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105780:4953386996:2026-07-13T06:28:17Z:clawsweeper_needs_human",
+      "comment_id": "4953386996",
+      "comment_version_key": "4953386996:2026-07-13T06:28:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105780#issuecomment-4953386996",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105780,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T00:21:58Z",
+      "comment_updated_at": "2026-07-13T06:28:17Z",
+      "comment_body_sha256": "2b8553800f21199a5fa5b5e2ce18f29334ac8234701f3fa8c76d2548e995a94d",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- No automated repair is identified; refresh the exact head against current main, obtain clean required guard results, and complete normal maintainer merge review.; Cleared: The diff changes an in-memory aggregation and tests only; it adds no dependency, permission, secret, workflow, artifact-download, or code-execution surface. (sha=b20b8f0bd56cc9151bc95a2170a2b68b295ca845)",
+      "review_summary": "Precomputes rolling 24-hour sent-commitment counts per session and adds concentrated-store regression coverage for commitment selection and heartbeat fan-out.\n\nPR surface: Source +4, Tests +189. Total +193 across 3 files.\n\nReproducibility: yes. Seed one recent sent commitment and thousands of pending due commitments for one agent/session, then call `listDueCommitmentSessionKeys` with the production fan-out limit; current main repeatedly rescans the complete store and shows superlinear latency.",
+      "review_followup": "- No automated repair is identified; refresh the exact head against current main, obtain clean required guard results, and complete normal maintainer merge review.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "b20b8f0bd56cc9151bc95a2170a2b68b295ca845",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-13T06:26:44.267Z",
+      "review_lease_owner": "github-run-29228844471-1",
+      "review_lease_comment_id": "4955039057",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "9ded9d030596867c38e68b88dbd6ad26a9b52557e6d5201b53cfcf3374a2973b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(commitments): avoid quadratic heartbeat session discovery",
+        "body": "Related: #105787\n\n## What Problem This Solves\n\nFixes heartbeat commitment fan-out latency when many due commitments belong to one session. The existing path loads and expires the JSON store while holding the queue/file lock, releases that lock, then scans the returned in-memory records. For every qualifying due record it rescans the complete store to count recent sent commitments. The quadratic scan is outside the lock, but it delays heartbeat processing and increases heartbeat latency. Reported isolated medians were approximately 191 ms at 1,000, 847 ms at 2,000, and 2.28 s at 4,000 records.\n\n## Why This Change Was Made\n\nThe commitments store now builds the rolling 24-hour sent-count map once per agent and reuses it for due-session discovery and single-session due selection. Due-window, snooze, expiry, daily-cap, ordering, limit, agent-scope, queue, and cross-process file-lock behavior remain on the existing path.\n\nThis is intentionally an interim JSON-store fix. OpenClaw's shared SQLite state schema already contains a commitments table and indexes, but making it canonical requires a separate JSON-to-SQLite migration/doctor contract and broader persistence coverage. That migration remains a follow-up rather than expanding this focused latency fix.\n\n## User Impact\n\nHeartbeat commitment discovery changes from repeated full-store counting to one aggregation pass plus the existing due-record scan. Large concentrated sessions therefore scale linearly with store size instead of quadratically, without changing which sessions are eligible for delivery.\n\n## Evidence\n\n- Store correctness coverage includes due windows, snoozes, rolling daily caps, agent scope, deterministic session-key ordering, expiry, and concurrent file-store updates.\n- The concentrated-session regression uses 8,000 due records in one session and a production-like `limit: 10`, so the base implementation repeatedly rescans the store while the fixed implementation reuses one count map.\n- The runner-level regression uses the production heartbeat runner with a real temporary JSON state directory and 16,000 concentrated due records. The model and channel boundaries are stubbed there for deterministic CI coverage.\n- Focused validation, using the linked-worktree local fallback:\n  ```text\n  node scripts/run-vitest.mjs src/commitments/store.test.ts src/infra/heartbeat-runner.commitments.test.ts --reporter=verbose\n  11 store tests passed; 14 heartbeat-runner tests passed.\n  ```\n\n### Real Gateway heartbeat proof\n\nI reran the actual built `dist/index.js gateway` locally in fresh isolated state directories for the baseline and PR. Each run seeded 16,000 pending due commitments plus one recent sent commitment, all concentrated in one Telegram session, then invoked the production Gateway `wake` RPC once. The Gateway scheduler, heartbeat runner, JSON store, due-session selector, Telegram plugin dispatch, and delivery/status updates were real. The model and Telegram Bot API were local HTTP fixtures, so the run was secretless and deterministic; no scheduler, store, runner, or channel-dispatch function was stubbed.\n\nThe baseline used main checkout `43901be298`, a descendant of the PR base `6c884691105b`; there were no changes under `src/commitments/` or `src/infra/heartbeat-runner.ts` between those refs. The PR run used `fcb249f4953485071e123b7cd2fce31f32ea96da`. The redacted terminal output below is one matched run per revision:\n\n```text\nbaseline 43901be298:\nREAL_GATEWAY_HEARTBEAT_PROOF {\"store\":\"json\",\"commitmentCount\":16000,\"seededDueSessionKeys\":[\"agent:main:telegram:proof\"],\"channelSendCount\":1,\"sentRequestBodies\":1,\"elapsedMs\":21510,\"pendingAfterRun\":15998,\"lastHeartbeat\":{\"status\":\"sent\",\"to\":\"telegram:12345\",\"durationMs\":1947}}\n\nPR fcb249f495:\nREAL_GATEWAY_HEARTBEAT_PROOF {\"store\":\"json\",\"commitmentCount\":16000,\"seededDueSessionKeys\":[\"agent:main:telegram:proof\"],\"channelSendCount\":1,\"sentRequestBodies\":1,\"elapsedMs\":13990,\"pendingAfterRun\":15998,\"lastHeartbeat\":{\"status\":\"sent\",\"to\":\"telegram:12345\",\"durationMs\":2267}}\n```\n\nSelection and delivery behavior matched: both runs discovered the same session key, sent exactly one Telegram request to the same target, reported `sent`, and left the same 15,998 commitments pending. Wake-to-delivery elapsed time was 21.5 s on the baseline and 14.0 s on the PR. This is representative real-process behavior proof, not a statistically stable benchmark; cold Gateway startup and local fixture variance affect timing. The durable scaling proof remains the concentrated-session regression.\n\n### Direct DigitalOcean proof status\n\nI attempted the requested direct DigitalOcean route with the token supplied through the environment and never printed it:\n\n```text\nprovider: digitalocean\nlease: cbx_1d0ec418e4bc\nhead binding: fcb249f4953485071e123b7cd2fce31f32ea96da\nwarmup: succeeded\nsync: exact head verified remotely\nresult: dependency install on s-1vcpu-1gb was killed with exit 137 (1 GB memory)\ncleanup: lease deleted\n```\n\nThe DO lease did not reach Gateway execution, so the local run above is the accepted narrow fallback rather than DigitalOcean proof. No Blacksmith lease was used.\n\n- `git diff --check`, `oxfmt --check`, and `oxlint` passed for the changed source/tests.\n- Correctly invoked autoreview:\n  ```sh\n  .agents/skills/autoreview/scripts/autoreview --mode local\n  .agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main\n  ```\n  Local mode reported no uncommitted changes; the committed branch review reported no accepted/actionable findings.\n- Current PR-head GitHub checks have no failures, and the Real behavior proof check passed. The branch remains behind current `origin/main`; no rebase or code churn was introduced.\n\n## AI-Assisted Disclosure\n\nThis PR was prepared with Codex and is AI-assisted. I reviewed the implementation, its callers, sibling selection path, persistence/locking behavior, tests, and the SQLite/Kysely storage contracts.\n\n",
+        "branch": "fix/commitments-sqlite-scaling",
+        "head_sha": "b20b8f0bd56cc9151bc95a2170a2b68b295ca845",
+        "author": "morluto",
+        "labels": [
+          "size: M",
+          "proof: sufficient",
+          "P2",
+          "rating: 🦞 diamond lobster",
+          "status: 👀 ready for maintainer look"
+        ],
+        "files": [
+          {
+            "path": "src/commitments/store.test.ts",
+            "additions": 81,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commitments/store.ts",
+            "additions": 28,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/heartbeat-runner.commitments.test.ts",
+            "additions": 108,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 217,
+        "deletions": 24,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105780",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105780.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 105,
+          "gatingTotal": 100,
+          "counts": {
+            "FAILURE": 12,
+            "SUCCESS": 59,
+            "SKIPPED": 34
+          },
+          "blockers": [
+            "Security High (core-auth-secrets):FAILURE",
+            "Scan changed paths (precise):FAILURE",
+            "Detect shared OpenClawKit scan scope:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "Security High (channel-runtime-boundary):FAILURE",
+            "Security High (network-ssrf-boundary):FAILURE",
+            "Security High (mcp-process-tool-boundary):FAILURE",
+            "Security High (process-exec-boundary):FAILURE",
+            "Security High (plugin-trust-boundary):FAILURE",
+            "Security High (actions):FAILURE",
+            "check-guards:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Security High (core-auth-secrets):FAILURE",
+            "Scan changed paths (precise):FAILURE",
+            "Detect shared OpenClawKit scan scope:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "Security High (channel-runtime-boundary):FAILURE",
+            "Security High (network-ssrf-boundary):FAILURE",
+            "Security High (mcp-process-tool-boundary):FAILURE",
+            "Security High (process-exec-boundary):FAILURE",
+            "Security High (plugin-trust-boundary):FAILURE",
+            "Security High (actions):FAILURE",
+            "check-guards:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:105780:4954157334:2026-07-13T03:27:31Z:re_review",
+      "comment_id": "4954157334",
+      "comment_version_key": "4954157334:2026-07-13T03:27:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105780#issuecomment-4954157334",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105780,
+      "author": "morluto",
+      "author_id": 76467478,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T03:27:31Z",
+      "comment_updated_at": "2026-07-13T03:27:31Z",
+      "comment_body_sha256": "418df1b2502b653d2a29ebd68fcd927e067596e8738cb674d652f73776a76f87",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -39,19 +216,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 580,
+    "total_ms": 3331,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 324
+        "ms": 290
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1191
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 788
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -67,7 +244,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 227
+        "ms": 971
       },
       {
         "name": "append_ledger",
