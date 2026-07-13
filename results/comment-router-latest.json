@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T16:59:25.847Z",
+  "generated_at": "2026-07-13T16:59:29.776Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T13:59:24.057Z",
+  "since": "2026-07-13T13:59:27.485Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    89040
+    106541
   ],
   "comment_ids": [
-    4960385241
+    4960441179
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:4960385241:2026-07-13T16:46:51Z:re_review",
-      "comment_id": "4960385241",
-      "comment_version_key": "4960385241:2026-07-13T16:46:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-4960385241",
+      "idempotency_key": "comment-router:openclaw/openclaw:106541:4960441179:2026-07-13T16:53:20Z:re_review",
+      "comment_id": "4960441179",
+      "comment_version_key": "4960441179:2026-07-13T16:53:20Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/106541#issuecomment-4960441179",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 106541,
+      "author": "Pick-cat",
+      "author_id": 266665499,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T16:46:51Z",
-      "comment_updated_at": "2026-07-13T16:46:51Z",
+      "comment_created_at": "2026-07-13T16:53:20Z",
+      "comment_updated_at": "2026-07-13T16:53:20Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -77,128 +77,56 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Preserve `fs.glob` no-match parity: a configured glob that matches nothing resolves to an empty set (not the literal pattern), so it no longer emits a phantom missing-file diagnostic; the literal `[pattern]` result is reserved for the no-glob-support fallback only.\n- Preserve `fs.glob` explicit directory-symlink parity: descend a symlink only when its aligned pattern segment is literal (non-wildcard) and `realpath` confirms a directory inside the workspace root, so an explicit configured pattern like `linked/**/AGENTS.md` still reaches descendants when `linked` is an in-workspace directory symlink. Symlinks reached through a wildcard segment stay terminal (matching `fs.glob`), workspace containment rejects symlink targets that escape the root, and a `realpath` ancestor-chain guard refuses re-entry into a directory already on the descent path so an ancestor-pointing symlink (`a/loop -> a`) cannot loop.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`** / **`src/hooks/internal-hook-dispatch.ts`**\n- Keep the public `triggerInternalHook(event)` signature (re-exported via `plugin-sdk/hook-runtime`) unchanged and matching `main` — no new public parameter or exported options type.\n- Move the bootstrap-only handler scheduling (`yieldBetweenHandlers` with `setImmediate` yield between handlers) and per-handler timing/slow-handler (>500ms) warning into an internal `internal-hook-dispatch` module that is not on the plugin SDK surface.\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable yielding between handlers for `agent:bootstrap` hook triggers (via the internal dispatch entrypoint)\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Keep the public `resolveBootstrapFilesForRun` params (re-exported via `plugin-sdk/agent-harness-runtime`) callback-free and matching `main`; route embedded-runner substage timing through an internal `resolveBootstrapFilesForRunWithTiming` variant kept off the SDK surface.\n- Support the new async workspace file loading interface.\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — yield-between-handlers ordering, handler timing reporting, and slow handler warning exercised through the internal dispatch entrypoint\n- `workspace.load-extra-bootstrap-files.test.ts` — a no-match glob resolves to an empty set with no missing-file diagnostic (fs.glob parity)\n- `workspace.load-extra-bootstrap-files.test.ts` — explicit directory-symlink glob parity across three states (real `fs.symlink`): a literal-named directory symlink is descended and its descendants match; a `**`-reached symlink stays terminal; an ancestor-pointing (cyclic) literal symlink terminates without looping\n\nThe public plugin SDK surface is unchanged: `node scripts/plugin-sdk-surface-report.mjs` exits 0 with no new package-exported entrypoints. All existing tests pass without modification.\n\n### Performance impact\n\n- Root bootstrap file loading: serial sync → parallel async (estimated 3-5x speedup for 8 files)\n- Glob walks: synchronous/blocking → async with periodic `setImmediate` yields (prevents multi-second event-loop stalls on large workspaces). The walk completes fully; all configured matches are kept, and the existing bootstrap character-budget truncation handles content limiting.\n- Hook chains: uninterrupted → yielded (prevents monopolizing the event loop during bootstrap)\n\n## Real behavior proof\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, which blocks the loop and drops messages. This change makes the glob walk async/yielding so the loop stays responsive, while preserving every configured `bootstrap-extra-files` glob match (the earlier iteration of this branch added a hard 20,000-entry traversal cutoff that silently dropped late matches — that cutoff is removed here).\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFiles` from `src/agents/workspace.ts`. Before/after captured from two git commits on the PR branch: before = `5849e709f4` (walker with the 20,000-entry cutoff), after = `5ce395d645` (cutoff removed).\n- **Real environment scenario**: A workspace of ~26,100 filesystem entries (a 3-tier tree, 30×30×28 filler files) with a single configured-glob target `AGENTS.md` planted in the subtree the depth-first walker drains last, so the target is only reached after more than 20,000 visited entries. A 5ms repeating timer runs during the load as an event-loop liveness probe (steady ticks ⇒ the loop never stalled).\n- **Failing proof before fix**: commit `5849e709f4` (cutoff present):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 82.9ms\n  liveness timer ticks during load: 16 (loop responsive)\n  matched bootstrap files returned: 0\n  deep AGENTS.md (past old 20k cutoff) loaded: false\n  RESULT: late configured glob match was DROPPED (pre-fix behavior)\n  ```\n- **Exact steps or command run after this patch**:\n  ```\n  # against the patched checkout (commit 5ce395d645) a script that builds the\n  # ~26,100-entry workspace, starts a 5ms liveness timer, then calls the real\n  # loadExtraBootstrapFiles(root, [\"**/AGENTS.md\"]) and checks the deep match:\n  npx tsx proof-live.mts\n  ```\n- **Evidence after fix**: terminal output from `node`/`tsx` against commit `5ce395d645` (cutoff removed):\n  ```\n  approx filesystem entries: ~26100 (old cutoff was 20000)\n  elapsed: 99.4ms\n  liveness timer ticks during load: 20 (loop responsive)\n  matched bootstrap files returned: 1\n  deep AGENTS.md (past old 20k cutoff) loaded: true\n  RESULT: configured glob match beyond old cutoff is PRESERVED; event loop stayed live\n  ```\n- **Observed result after fix**: With the cutoff removed, the configured `**/AGENTS.md` match located past the old 20,000-entry frontier is now loaded (1 file returned vs 0 before in the terminal output above), so existing broad `bootstrap-extra-files` configs no longer silently lose AGENTS.md/TOOLS.md context. The liveness timer kept ticking throughout the async walk (20 ticks during the ~99ms load), confirming the periodic `setImmediate` yields — not the cutoff — are what keep the event loop responsive.\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real glob-resolution code path and event-loop liveness directly rather than through a connected channel. The focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\n### Directory-symlink glob parity proof\n\n- **Behavior addressed**: The cooperative walker only descended `Dirent.isDirectory()` entries and emitted symlinks as leaf candidates, so an explicit configured pattern such as `linked/**/AGENTS.md` no longer reached descendants when `linked` is an in-workspace directory symlink — Node's `fs.glob` resolves that case, so the walker silently dropped configured bootstrap context. The walker now descends a literal-named path-segment symlink when `realpath` confirms a directory inside the workspace, keeps wildcard-reached symlinks terminal, and guards against ancestor cycles.\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`. Three regression tests build real temp directories with real `fs.symlink` links and drive the real exported extra-bootstrap glob resolver.\n- **Steps run**: `npx vitest run src/agents/workspace.load-extra-bootstrap-files.test.ts src/agents/workspace.test.ts`\n- **Observed result**: `Test Files 4 passed (4)`, `Tests 156 passed (156)`. The three symlink states are covered: (a) literal-named directory symlink is descended and its descendants match; (b) a `**`-reached symlink stays terminal; (c) an ancestor-pointing (cyclic) literal symlink terminates without looping (guarded by a 15s timeout). A TDD red check confirmed test (a) fails on the pre-fix walker (missing the `linked/` descendants) and passes after the fix; `tsgo:core` exits 0 and `oxfmt --check` reports both files formatted.\n- **What was not tested**: Behavior on Windows/`EPERM`/`ENOSYS` filesystems where symlink creation is unavailable — those cases skip cleanly rather than assert.\n\nCloses #87509\n\n\n\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "37389e5f3e7a434847e7f0469d6b729309aa5fe8",
-        "author": "jerry-xin",
+        "title": "fix(feishu): add chunk-idle timeout to inbound media download",
+        "body": "## What Problem This Solves\n\nFixes an issue where Feishu inbound media downloads that stall after the Lark SDK returns a stream body (headers/start ok, then no further chunks) would block `saveMessageResourceFeishu` forever via `saveMediaStream`'s unbounded `for await`, so inbound dispatch never produces an agent reply for that attachment.\n\n## Why This Change Was Made\n\n- Route every Feishu inbound `saveMediaStream` path through `saveMediaStreamWithIdleTimeout` (production floor 30s), matching Telegram's download idle floor and the WhatsApp/LINE channel pattern.\n- Idle helper lives in `extensions/feishu/src/media-chunk-idle.ts` so the oversized legacy `media.ts` does not grow past the LOC ratchet.\n- On timeout, reject with `FeishuInboundMediaTimeoutError`, call `iterator.return()`, and silence the losing `next()`.\n- Only `saveMediaStreamWithIdleTimeout` is exported (knip); timeout class/helper stay module-private.\n- Does **not** change core `saveMediaStream` / `src/media/store.ts`.\n- Does **not** touch Feishu docx URL reads (`#104663`).\n\nNo new config/env surface.\n\n## User Impact\n\n**Before:** A stalled Feishu message-resource body could hang inbound handling for that attachment indefinitely.\n\n**After:** Idle streams fail closed after 30s with a clear timeout error so the Feishu monitor loop can continue.\n\n## Evidence\n\nCompete: no open PR for Feishu inbound media chunk-idle; `#104663` is `docx.ts` only.\n\nHead: `89ab5e2a0b528cd711682a1ac0613e236e3e46aa`\n\n```text\n$ OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs extensions/feishu/src/media-chunk-idle.test.ts --reporter=verbose\n\n[feishu media idle proof] timed_out=true elapsed_ms=51 chunkTimeoutMs=50 production_ms=30000\n[feishu media idle proof] production_default_ms=30000 timed_out=true\n ✓ rejects when the source stalls past chunkTimeoutMs\n ✓ does not reject when chunks arrive within chunkTimeoutMs\n ✓ defaults to a 30s production idle floor\n ✓ calls iterator.return() exactly once on timeout so the upstream Readable is destroyed\nTests  4 passed (4)\n```\n\nNegative control: never-yielding stream without idle wrap would hang `saveMediaStream`'s `for await`; with the 50ms floor, timeout rejects in ~51ms and `iterator.return()` is called once. Production default advances fake timers to 30s.",
+        "branch": "fix/feishu-inbound-media-chunk-idle",
+        "head_sha": "89ab5e2a0b528cd711682a1ac0613e236e3e46aa",
+        "author": "pick-cat",
         "labels": [
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "channel: feishu",
+          "size: M"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 28,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/bootstrap-hooks.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.ts",
-            "additions": 58,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stage-timing.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stage-timing.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 317,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.test.ts",
-            "additions": 148,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 257,
-            "deletions": 46,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 42,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hook-dispatch.ts",
-            "additions": 107,
+            "path": "extensions/feishu/src/media-chunk-idle.test.ts",
+            "additions": 134,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/hooks/internal-hooks.test.ts",
-            "additions": 102,
+            "path": "extensions/feishu/src/media-chunk-idle.ts",
+            "additions": 82,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/hooks/internal-hooks.ts",
+            "path": "extensions/feishu/src/media.ts",
             "additions": 6,
-            "deletions": 44,
+            "deletions": 7,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 14,
-        "additions": 1132,
-        "deletions": 136,
+        "changedFiles": 3,
+        "additions": 222,
+        "deletions": 7,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-106541",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-106541.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 96,
+          "gatingTotal": 91,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
+            "SUCCESS": 62,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -219,19 +147,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2096,
+    "total_ms": 2661,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 549
+        "ms": 557
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1157
+        "ms": 1653
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -247,7 +175,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 306
+        "ms": 370
       },
       {
         "name": "append_ledger",
