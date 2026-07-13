@@ -1,23 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T09:19:50.819Z",
+  "generated_at": "2026-07-13T09:20:10.618Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T06:19:50.531Z",
+  "since": "2026-07-13T06:20:07.568Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    106182
+    106174
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4956370473
+  ],
+  "status_comment_id": 4956370910,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -30,28 +32,151 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:106174:4956370473:2026-07-13T09:18:17Z:re_review",
+      "comment_id": "4956370473",
+      "comment_version_key": "4956370473:2026-07-13T09:18:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/106174#issuecomment-4956370473",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 106174,
+      "author": "obviyus",
+      "author_id": 22031114,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T09:18:17Z",
+      "comment_updated_at": "2026-07-13T09:18:17Z",
+      "comment_body_sha256": "25d57931f83b8604c89b420de7280d2aad109ab2a125df25c2869b09b6b449f1",
+      "status_comment_id": 4956370910,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 106174,
+          "dispatch_key": "router-6a784f34ebb2347a",
+          "dispatched_at": "2026-07-13T09:20:11.802Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-13T09:20:13.181Z",
+          "response_comment_id": "4956370910",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): drain parked restart emit hooks on hooked emissions",
+        "body": "## What Problem This Solves\n\n`gateway` tool restarts queue a continuation (restart sentinel written in an emit hook, recovered on boot as a resume turn). When a config-reload restart deferral (`server-reload-handlers.ts` → `deferGatewayRestartUntilIdle` with its own `emitHooks`) wins the emission race, `emitPreparedGatewayRestartUnderAdmission` runs only the caller's hooks and never drains the parked `pendingRestartEmitHooks` — the sentinel is never written, so the promised continuation silently disappears and the session stays dead until a human pings it. Observed in production (see issue): the agent reported `continuationQueued: true`, told the user the task would \"resume automatically after restart\", restarted, and never resumed. Two follow-on leaks on the same path: the orphaned hooks' `afterEmitRejected` never fires, and `pendingRestartSessionKey` is never cleared, so stale ownership survives in-process restarts and can reject a *different* session's future continuation.\n\nFixes #106138\n\n## Why This Change Was Made\n\nThe tool-restart path and the config-watcher path are two deferral polls racing for one emission; only the hookless winner preserved queued continuations. The bounded fix makes the emission point honor the parked hooks regardless of who emits: the caller's `beforeEmit` (reload secrets preflight) runs first, then the parked-hook drain loop runs with its original replace/reject semantics — its tail re-read also captures hooks accepted (`emitHooksQueued: true`) while the caller's preparation awaited, so no async window remains before emission where a queued continuation could be dropped. Session ownership (`pendingRestartSessionKey`) now clears exactly when the slot is consumed on every emission attempt (previously leaked on hooked emissions, and — because container restarts are in-process — across gateway generations), every prepared hook set is rolled back via `afterEmitRejected` on non-emitted outcomes, and `afterEmitFailed` callbacks are error-isolated so one throwing hook set cannot skip another's cleanup. The empty-slot path stays await-free because mid-flight intent/deferral consumers observe hookless emission latency. Merging the two restart state machines was deliberately left out of scope — this restores the invariant `continuationQueued: true` ⇒ continuation survives, without touching reload-handler semantics.\n\nConcurrent-emitter interleaving (two emissions racing mid-`beforeEmit`) was reviewed and is already impossible: every emission path goes through `emitPreparedGatewayRestart`, which synchronously takes the restart-signal admission fence (`beginGatewayRestartSignalAdmission` sets `restartSignalPending` with no await between admission entry and fence), and a concurrent attempt blocks in `tryBeginGatewayIndependentRootWorkAdmission`. This single-flight contract is now documented at `emitPreparedGatewayRestartUnderAdmission`.\n\n## User Impact\n\nAgent-initiated gateway restarts (`gateway` tool `action: \"restart\"` with `continuationMessage`) now reliably resume after the restart even when a restart-required config change (e.g. `browser.noSandbox`) armed the config watcher's own deferral in the same window — the exact \"config set, then restart\" sequence agents commonly run. No config, protocol, or tool-surface changes.\n\n## Evidence\n\n- Production trace (issue #106138): reload deferral won the emission (`all operations and replies completed; restarting gateway now`), no sentinel recovery/notice/continuation followed, while an earlier tool-side emission in the same session delivered its continuation correctly.\n- New tests in `src/infra/infra-runtime.test.ts` (+4): hooked emission drains parked hooks and emits once via the caller's `emitRestart` with ownership cleared for the next session; hooks accepted while caller preparation awaits ride the same emission; parked hooks get `afterEmitRejected` on non-emitted outcomes; every `afterEmitFailed` runs even when an earlier one throws. Existing #86742 different-session rejection cases and mid-flight timing probes unchanged and green.\n- Validation (Blacksmith Testbox, synced worktree on current `main`): `node scripts/run-vitest.mjs` over `src/infra/infra-runtime.test.ts`, `restart.deferral-timeout`, `restart-suspension`, `restart-coordinator`, `restart-sentinel`, `src/agents/tools/gateway-tool.test.ts`, `src/gateway/server-reload-handlers.test.ts`, `src/auto-reply/reply/commands-session-restart.test.ts`, `src/gateway/server-methods/update.test.ts` — all shards pass; `tsgo` core lane clean; core test-types lane has 0 non-`ui/` errors (the 2 `ui/app-sidebar.ts` errors reproduce identically on clean `main` with the diff stashed — pre-existing, unrelated).\n- **Live A/B behavior proof** (real gateway, mock Telegram + mock LLM, real `gateway` tool call, config-watcher deferral winning the emission): after-fix run delivers exactly one sentinel recovery (`Gateway restart ok`) and exactly one continuation turn; before-fix run (`src/infra/restart.ts` reverted to `main`, rebuilt) loses both despite `continuationQueued: true`. Full logs: https://github.com/openclaw/openclaw/pull/106174#issuecomment-4956370473\n- Codex autoreview: clean, \"patch is correct (0.88)\", no actionable findings.\n",
+        "branch": "fix/restart-continuation-drop",
+        "head_sha": "0acc84815c0157630daedf880b02ea51c55ea940",
+        "author": "obviyus",
+        "labels": [
+          "maintainer",
+          "size: M",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/infra-runtime.test.ts",
+            "additions": 170,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/restart.ts",
+            "additions": 87,
+            "deletions": 26,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 257,
+        "deletions": 26,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-106174",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-106174.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 114,
+          "gatingTotal": 109,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 41,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "processed_at": "2026-07-13T09:20:10.973Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 461,
+    "total_ms": 6466,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 256
+        "ms": 618
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2325
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -63,11 +188,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 174
+        "ms": 3407
       },
       {
         "name": "append_ledger",
