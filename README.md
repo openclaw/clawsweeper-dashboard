@@ -114,15 +114,6 @@ Maintainer commands can opt PRs into `autofix` or `automerge`, dispatch a fresh
 exact-head review, and run a bounded Codex review/fix loop. Codex handles the
 code repair and local validation loop; deterministic executor steps own every
 GitHub mutation, branch push, label update, and final merge gate.
-The executor cannot choose the privileged proof surface: a credential-free
-validator rebuilds the required staged plan from the sealed source, patch, and
-exact pre-edit repair-delta anchor plus current target policy, revalidates every
-command, and binds the accepted commit/tree to a narrow publication receipt.
-Publication retries accept only the exact authorized remote commit, recheck
-every sealed source and existing replacement target for live pause labels
-before each mutation, and restore the required replacement labels. Non-merge
-repair lanes complete only when the live PR still points at that published
-commit.
 
 Operators can create repair-only jobs for one author's blocked pull requests in
 one repository with `pnpm repair:pr-intake -- --repo owner/name --author login`,
@@ -280,9 +271,8 @@ Common commands:
   closes the item and any open same-repo targets explicitly referenced in the
   command text.
 - `clawsweeper:human-review` and `clawsweeper:manual-only` stop automatic PR
-  repair and issue-to-PR mutation. The trusted publisher rechecks the live
-  source item immediately before every branch push, PR create, comment, label,
-  or close mutation.
+  repair and issue-to-PR mutation. Issue implementation rechecks the live issue
+  immediately before every branch push and before PR creation.
 
 Only maintainers are accepted for write actions. The router checks repository
 collaborator permission (`admin`, `maintain`, or `write`) and falls back to
@@ -833,30 +823,6 @@ Token flow:
   context.
 - Apply mode uses the same app token for review comments and closes, so GitHub
   attributes mutations to the app bot account instead of a PAT user.
-- Merge-capable deterministic steps run only in trusted jobs with no Codex
-  setup or target-repository code execution. After validating the job
-  frontmatter, those jobs mint exact-repository mutation and
-  `Administration: write` verifier tokens. The verifier exists solely to read
-  complete repository-ruleset metadata, including bypass actors; mutation
-  credentials remain administration-free. The merge guard derives the
-  authenticated App IDs through the documented App endpoint, then binds those
-  IDs plus the pinned `app-slug` and `installation-id` action outputs before
-  allowing a merge. The App installation must approve this permission before
-  ruleset-backed automerge can be enabled.
-- Repair workers freeze one job, repository, run directory, source item and
-  revision, `origin/main`, output branch and operation, and action identity
-  before Codex execution. The execution runner receives no GitHub or state
-  write credential and can only prepare a local commit, tree, and Git bundle.
-  Target dependency setup disables package lifecycle scripts.
-- A separate no-credential runner reconstructs the prepared commit in a
-  disposable checkout and replays the original normalized staged-proof plan,
-  including provenance, prerequisites, subsumption, and changed-gate
-  semantics. A token-only job can publish only when that receipt and the
-  successful execution manifest match the trusted pre-execution digest.
-  Generic result actions and target tagging are not accepted by this lane.
-  Failed or cancelled execution and failed validation remain target
-  report-only; a central-repository credential may still requeue an explicitly
-  retryable report.
 - Commit review passes Codex only a read-scoped target token as `GH_TOKEN` for
   issue/PR/workflow/commit hydration, then creates write/check credentials only
   after Codex exits.
