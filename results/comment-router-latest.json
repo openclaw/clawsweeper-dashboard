@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T06:18:01.127Z",
+  "generated_at": "2026-07-13T06:18:11.023Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T03:17:58.266Z",
+  "since": "2026-07-13T03:18:09.040Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    105903
+    105837
   ],
   "comment_ids": [
-    4954957778
+    4954958759
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:105903:4954957778:2026-07-13T06:12:18Z:re_review",
-      "comment_id": "4954957778",
-      "comment_version_key": "4954957778:2026-07-13T06:12:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105903#issuecomment-4954957778",
+      "idempotency_key": "comment-router:openclaw/openclaw:105837:4954958759:2026-07-13T06:12:25Z:re_review",
+      "comment_id": "4954958759",
+      "comment_version_key": "4954958759:2026-07-13T06:12:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105837#issuecomment-4954958759",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 105903,
-      "author": "wm0018",
-      "author_id": 13618944,
+      "issue_number": 105837,
+      "author": "lzyyzznl",
+      "author_id": 41978486,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T06:12:18Z",
-      "comment_updated_at": "2026-07-13T06:12:18Z",
+      "comment_created_at": "2026-07-13T06:12:25Z",
+      "comment_updated_at": "2026-07-13T06:12:25Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -77,78 +77,85 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): batch pending-media snapshot in session reaper to avoid O(SxT) loop",
-        "body": "#### What Problem This Solves\n\nClose #105694\n\nFixes an O(S × T) CPU bottleneck in the cron session reaper that blocks the Node.js event loop on each timer tick. For every cron continuation row, `sweepCronRunSessions` called `hasPendingGeneratedMediaTaskForSessionKey`, which internally performs `listTaskRecords` — a full cloned-and-sorted snapshot of all task records plus in-process generated-media activity. With thousands of sessions, this synchronous work saturates the main thread and causes gateway timeout / WebSocket disconnection.\n\n#### Why This Change Was Made\n\nInstead of changing the per-row `hasPendingGeneratedMediaTaskForSessionKey` helper (still used by the single-invocation `cron-run-continuation-cleanup` path), this adds `buildPendingGeneratedMediaSessionKeySet` — a one-shot snapshot that collects all session keys with pending generated-media work by iterating the in-process activity map once and the full task registry once. The reaper then does O(1) `Set.has()` lookups inside the loop.\n\nKey design decisions:\n- Preserves the exact `requesterSessionKey` / `ownerKey` matching contract — no semantic change, only a scan-lifting optimization\n- The snapshot is deliberately conservative: session keys that the reaper never visits may still be included, which is harmless\n- ClawSweeper confirmed the shape: \"one canonical bulk pending-generated-media session-key snapshot that combines active in-process work with nonterminal persisted requester and owner keys\"\n\n#### User Impact\n\nNo visible impact. The cron reaper produces identical pruning decisions with strictly less CPU time per sweep.\n\n#### Evidence\n\n- **Type check:** `tsgo` passes with no errors\n- **Tests:**\n  - `task-status-access.test.ts` — 10 tests pass (+6: `buildPendingGeneratedMediaSessionKeySet` covers empty set, in-process activity, requesterSessionKey, ownerKey, terminal exclusion, non-generated-media exclusion, combined snapshot)\n  - `session-reaper.test.ts` — 20 tests pass (mock updated to use `buildPendingSet`; two pending-media tests now verify correct sessionKey membership)\n  - `cron-run-continuation-cleanup.test.ts` — 5 tests pass (no regression)\n- **Change scope:** 5 files, +131 −7 lines\n  - `src/tasks/generated-media-task-activity.ts` — new `getAllActiveGeneratedMediaSessionKeys` export\n  - `src/tasks/task-status-access.ts` — new `buildPendingGeneratedMediaSessionKeySet` helper\n  - `src/cron/session-reaper.ts` — one snapshot call before the loop, `Set.has()` per row\n  - `src/tasks/task-status-access.test.ts` — 6 new tests\n  - `src/cron/session-reaper.test.ts` — mock updated for new function\n  - No config, CLI, SDK, docs, or changelog surface affected\n- **No new dependencies** — reuses existing `listTaskRecords`, `getActiveGeneratedMediaTasks`, `isTerminalTaskStatus`\n- **Process-level proof:** directly exercised the real `sweepCronRunSessions` function with `vi.spyOn` on `listTaskRecords` to count per-sweep calls. The reaper was seeded with realistic cron continuation sessions and pending generated-media tasks, then called with `force: true`:\n\n```\n$ node scripts/run-vitest.mjs src/cron/_proof-session-reaper-batch.test.ts --reporter verbose\n\n ✓ calls listTaskRecords exactly once per sweep regardless of session count\n   (100 sessions with continuations + 5 persisted tasks → 1 listTaskRecords call)\n ✓ preserves sessions with pending generated-media work, prunes expired ones without\n   (protected key has pending media → preserved; expired + no media → pruned)\n ✓ captures both requesterSessionKey and ownerKey from persisted tasks\n   (both requester and owner session keys included in snapshot → both preserved)\n ✓ excludes terminal generated-media tasks from pending snapshot\n   (succeeded task excluded → not pending → expired session pruned)\n ✓ makes 1 listTaskRecords call with 500 sessions (old code: up to 250)\n\n   [scale] S=500 sessions, T=10 tasks, listTaskRecords calls: 1, sweep elapsed: 2ms\n   [scale] old path would have called listTaskRecords up to 250 times (once per continuation row)\n\n Test Files  1 passed (1)\n      Tests  5 passed (5)\n```\n\n- **Key findings:**\n  - `listTaskRecords` (full cloned-and-sorted task snapshot) is called exactly **once** per sweep regardless of S=500 sessions — old code would have called it up to 250 times (once per continuation row)\n  - All retention decisions match the old per-row contract: pending media keys preserved, terminal tasks excluded, both `requesterSessionKey` and `ownerKey` captured\n  - Sweep elapsed time is ~2ms for 500 sessions (old path: O(S×T) repeated clones and sorts)",
-        "branch": "fix/session-reaper-batch-pending-media",
-        "head_sha": "dbd8afcba21de74cf264314fe1d5ad8c8884b3ae",
-        "author": "wm0018",
+        "title": "fix(gateway): add base64 validation before decode in persistInboundImagesForTranscript",
+        "body": "## Summary\n\nFixes #105837\n\n**Problem**: `persistInboundImagesForTranscript` decodes base64 image data via `Buffer.from(data, \"base64\")` without validating the encoding first. Malformed base64 can silently produce garbage bytes or unexpected errors.\n\n**Solution**: Add `isValidBase64` guard before decode, throwing a clear error message when the image data is not valid base64. Export `isValidBase64` from the module so it can be tested directly against the production implementation.\n\n**What changed**: One guard in `src/gateway/chat-attachments.ts:74` — `if (!isValidBase64(image.data))` before `Buffer.from` decode. Exported both `isValidBase64` and `isBase64DataCharCode` (previously module-private) to enable direct production testing. Rewrote `chat-attachments.base64.test.ts` to import and validate against the exported production function instead of using placeholder assertions and a reimplemented copy.\n\n**NOT changed**: No changes to existing test behavior, no changes to image persistence logic, no changes to error handling outside this new guard. All existing tests continue to pass. The existing placeholder tests were replaced entirely with real assertions against the production function.\n\n## Real behavior proof\n\n**Behavior addressed**: `isValidBase64` guard validates base64 before `Buffer.from` decode in `persistInboundImagesForTranscript`.\n**Real environment tested**: Linux x64, Node.js 25.9.0, OpenClaw `main@HEAD` with this patch applied.\n**Exact steps or command run after this patch**: `pnpm test src/gateway/chat-attachments.base64.test.ts --reporter=verbose`\n**After-fix evidence**: 24 tests passed across 4 Vitest shards (see terminal output in Tests section below).\n**Observed result after the fix**: Valid base64 accepted (`dGVzdA==` → true), empty string rejected (false), invalid chars rejected (false), unpadded base64 rejected (false), padding-in-middle rejected (false), excessive padding rejected (false).\n**What was not tested**: End-to-end Gateway server with actual image uploads (requires full runtime setup); the guard is unit-testable at the function level and further validated by existing `chat-attachments.test.ts` integration path.\n\n## Tests and validation\n\n```\n$ pnpm test src/gateway/chat-attachments.base64.test.ts --reporter=verbose\n\n ✓ |gateway-core| isValidBase64 — production function > accepts valid padded base64\n ✓ |gateway-core| isValidBase64 — production function > rejects empty string\n ✓ |gateway-core| isValidBase64 — production function > rejects string with invalid characters\n ✓ |gateway-core| isValidBase64 — production function > rejects unpadded base64 (length not divisible by 4)\n ✓ |gateway-core| isValidBase64 — production function > rejects strings with padding in middle\n ✓ |gateway-core| isValidBase64 — production function > rejects strings with too much padding\n ...\n\n Test Files  4 passed (4)\n      Tests  24 passed (24)\n```\n\nReal runtime behavior proof — production `isValidBase64` guard rejecting malformed base64 before `Buffer.from`:\n\n```\n$ node --import tsx/esm -e \"...\"\n=== Real behavior proof: persistInboundImagesForTranscript guard ===\n\nVALID: Buffer.from(decode) size = 70 bytes (expected: minimal 1x1 PNG)\nREJECTED: \"\" → attachment: invalid base64 content\nREJECTED: \"not-base64!\" → attachment: invalid base64 content\nREJECTED: \"abc\" → attachment: invalid base64 content\nREJECTED: \"abc=defg\" → attachment: invalid base64 content\n\nAll scenarios validated.\n```\n\nValidated against the exported production `isValidBase64` function:\n\n| Input | Expected | Result |\n|-------|----------|--------|\n| `\"dGVzdA==\"` (valid padded) | ✅ accept | passed |\n| `\"iVBORw0KGgo...\"` (valid PNG base64) | ✅ accept | passed |\n| `\"\"` (empty) | ❌ reject | passed |\n| `\"invalid!\"` (invalid chars) | ❌ reject | passed |\n| `\"abc\"` (unpadded, length 3) | ❌ reject | passed |\n| `\"abc=defg\"` (padding in middle) | ❌ reject | passed |\n| `\"a===\"` (excessive padding) | ❌ reject | passed |\n\n## Risk checklist\n\n- [x] This change is backwards compatible — valid base64 inputs continue to decode as before\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation\n- [x] Breaking changes (if any) are documented in Summary\n\n---\nmerge-risk: 🚨 compatibility — new validation may reject previously-silently-accepted malformed base64; this is the intended fix.\n",
+        "branch": "fix/scan-20260713-5-chat-attachment-base64",
+        "head_sha": "244b5ad028624639e7929f896303af4ba799d90d",
+        "author": "lzyyzznl",
         "labels": [
-          "size: S",
+          "gateway",
+          "size: XS",
           "P2",
-          "rating: 🦐 gold shrimp",
-          "status: 📣 needs proof"
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof",
+          "security-sensitive-changed"
         ],
         "files": [
           {
-            "path": "src/cron/session-reaper.test.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
+            "path": "src/gateway/chat-attachments.base64.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "ADDED"
           },
           {
-            "path": "src/cron/session-reaper.ts",
-            "additions": 3,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/generated-media-task-activity.ts",
+            "path": "src/gateway/chat-attachments.ts",
             "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-status-access.test.ts",
-            "additions": 91,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/tasks/task-status-access.ts",
-            "additions": 24,
-            "deletions": 0,
+            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 131,
-        "deletions": 7,
+        "changedFiles": 2,
+        "additions": 38,
+        "deletions": 2,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105903",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105903.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105837",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105837.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 107,
-          "gatingTotal": 102,
+          "total": 105,
+          "gatingTotal": 100,
           "counts": {
-            "SUCCESS": 71,
-            "SKIPPED": 34,
-            "FAILURE": 1,
-            "NEUTRAL": 1
+            "FAILURE": 12,
+            "SUCCESS": 59,
+            "SKIPPED": 34
           },
           "blockers": [
-            "check-lint:FAILURE"
+            "Security High (core-auth-secrets):FAILURE",
+            "Scan changed paths (precise):FAILURE",
+            "Detect shared OpenClawKit scan scope:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "Security High (channel-runtime-boundary):FAILURE",
+            "Security High (network-ssrf-boundary):FAILURE",
+            "Security High (mcp-process-tool-boundary):FAILURE",
+            "Security High (process-exec-boundary):FAILURE",
+            "Security High (plugin-trust-boundary):FAILURE",
+            "Security High (actions):FAILURE",
+            "check-dependencies:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "check-lint:FAILURE"
+            "Security High (core-auth-secrets):FAILURE",
+            "Scan changed paths (precise):FAILURE",
+            "Detect shared OpenClawKit scan scope:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "Security High (channel-runtime-boundary):FAILURE",
+            "Security High (network-ssrf-boundary):FAILURE",
+            "Security High (mcp-process-tool-boundary):FAILURE",
+            "Security High (process-exec-boundary):FAILURE",
+            "Security High (plugin-trust-boundary):FAILURE",
+            "Security High (actions):FAILURE",
+            "check-dependencies:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -163,22 +170,22 @@
     "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3194,
+    "total_ms": 2174,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 456
+        "ms": 351
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2329
+        "ms": 1553
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 15
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -194,11 +201,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 334
+        "ms": 192
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
