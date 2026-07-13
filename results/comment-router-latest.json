@@ -1,23 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T10:30:46.518Z",
-  "repo": "openclaw/crabline",
+  "generated_at": "2026-07-13T10:31:03.062Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T07:30:46.087Z",
+  "since": "2026-07-13T07:31:00.327Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1000,
   "item_numbers": [
-    125
+    105848
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4956989948
+  ],
+  "status_comment_id": 4956990229,
   "max_autoclose_targets": 8,
-  "scanned_comments": 4,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -30,28 +32,168 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:105848:4956989948:2026-07-13T10:29:09Z:re_review",
+      "comment_id": "4956989948",
+      "comment_version_key": "4956989948:2026-07-13T10:29:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105848#issuecomment-4956989948",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105848,
+      "author": "wm0018",
+      "author_id": 13618944,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T10:29:09Z",
+      "comment_updated_at": "2026-07-13T10:29:09Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 4956990229,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 105848,
+          "dispatch_key": "router-22ccaa633afe314b",
+          "dispatched_at": "2026-07-13T10:31:04.109Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-13T10:31:06.812Z",
+          "response_comment_id": "4955200844",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(gateway): drain root work continuations before stop process exit",
+        "body": "#### What Problem This Solves\n\nClose #105697\n\nWhen a gateway process receives a direct stop signal (SIGTERM/SIGINT without a restart intent), any `session_end` plugin hooks that were already started by session reset/delete/compaction may be truncated before they complete. This happens because the session is removed from the shutdown tracker synchronously before the hook fires asynchronously via `runWithGatewayIndependentRootWorkContinuation`, and the direct-stop path (`handleStopAfterServerClose`) exits the process without waiting for these continuations to settle. Affected plugins may lose database writes, memory summaries, or external resource cleanups.\n\n#### Why This Change Was Made\n\nThe existing shutdown drain (`drainActiveSessionsForShutdown`) only covers sessions still in the active-session tracker when shutdown begins. Sessions already finalized by reset/delete/compaction are deliberately excluded to avoid double-firing. Their `session_end` hooks already run as tracked gateway root work continuations — the only gap is that the direct-stop path never waits for the root work set to drain before exiting.\n\nInstead of changing the `emitGatewaySessionEndPluginHook` signature (which would alter latency on every normal finalization path), this fix adds a bounded drain of the existing gateway root work set to the direct-stop path, matching the approach recommended by ClawSweeper in the issue review.\n\nThe drain uses a referenced `setTimeout` poll loop (not `.unref()`) so that the polling timer keeps the Node.js event loop alive during the wait. The wait is bounded at 2 seconds, and the caller always invokes `exitProcess(0)` after the drain returns. Per review clarification: the force-exit watchdog is cleared at line 705 of `run-loop.ts` before `handleStopAfterServerClose` is entered at line 710, so the drain does not depend on the watchdog — it is self-bounded by its own referenced timer and the unconditional `exitProcess(0)` that follows.\n\n#### User Impact\n\nNo visible impact under normal operation. On graceful gateway stop, pending `session_end` hooks now have up to 2 seconds to complete before the process exits. The wait is bounded to 2 seconds with a referenced timer, and the caller unconditionally calls `exitProcess(0)` after the drain returns (even on timeout), so a stuck hook cannot block shutdown.\n\n#### Evidence\n\n- **Type check:** `tsgo` passes with no errors on changed files\n- **Unit tests:**\n  ```\n  $ node scripts/run-vitest.mjs src/process/gateway-work-admission.test.ts src/cli/gateway-cli/run-loop.test.ts\n\n  ✓ |unit| src/process/gateway-work-admission.test.ts (17 tests)\n  ✓ |cli|  src/cli/gateway-cli/run-loop.test.ts (45 tests)\n\n  Test Files  2 passed (2) | Tests  62 passed (62)\n  ```\n- **Change scope:** 4 files, +116 lines\n  - `src/process/gateway-work-admission.ts` — new `waitForGatewayRootWorkDrain` helper\n  - `src/cli/gateway-cli/run-loop.ts` — drain call in `handleStopAfterServerClose`\n  - `src/process/gateway-work-admission.test.ts` — 4 new tests\n  - `src/cli/gateway-cli/run-loop.test.ts` — 2 new tests + mock fix\n  - No config, CLI, SDK, docs, or changelog surface affected\n- **No new dependencies**\n- **Real gateway startup + shutdown log** (Node v22.23.1, 11 production plugins loaded):\n\n```\n[gateway] loading configuration…\n[gateway] resolving authentication…\n[gateway] starting...\n[gateway] starting HTTP server...\n[health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)\n[gateway] agent model: vendor/model-name (thinking=off, fast=off)\n[gateway] http server listening (11 plugins: acpx, browser, canvas, device-pair, file-transfer,\n           matrix, memory-core, ollama, phone-control, talk-voice, workboard; 4.1s)\n[gateway] log file: /tmp/openclaw/openclaw-YYYY-MM-DD.log\n[hooks] loaded 4 internal hook handlers\n[matrix] [default] starting provider (http://10.x.x.x:xxxxx)\n[plugins] embedded acpx runtime backend registered lazily\n[gateway] ready\n[heartbeat] started\n\n--- SIGTERM received ---\n[gateway] signal SIGTERM received\n[gateway] received SIGTERM; shutting down\n[shutdown] started: gateway stopping\n[shutdown] completed cleanly in 852ms\n```\n\n- **Shutdown timeline:** SIGTERM → shutdown started (170ms) → server close + drain + cleanup → completed cleanly (852ms total). No hang, no crash, bounded exit.\n- **Process-level proof** (real child processes, real SIGTERM, real production modules):\n  ```\n  $ node --import tsx _proof-gateway-drain.ts\n\n  === Gateway Drain — Real Process Proof ===\n\n  [Case 1] No pending hooks — drain returns immediately, exit 0\n    exit=0, 17ms\n\n  [Case 2] 350ms hook, SIGTERM mid-flight → drain waits, file persisted\n    exit=0, 314ms, sentinel: done at 1783932907158\n\n  [Case 3] Stuck hook (never releases) → timeout 1000ms, exit 0\n    exit=0, 1023ms\n\n  [Case 4] 2 concurrent hooks (150ms + 350ms) → drain waits for slowest\n    exit=0, 318ms\n    fast: done at 1783932909249\n    slow: done at 1783932909450\n\n  === Results: 12 passed / 0 failed ===\n  ```\n\n  - Case 1: empty queue → drain returns true immediately\n  - Case 2: mid-flight hook → drain blocks until hook writes sentinel file\n  - Case 3: stuck hook → drain returns false after 1s timeout, exits cleanly\n  - Case 4: two concurrent hooks → drain waits for slowest, both files confirmed",
+        "branch": "fix/gateway-stop-session-end-drain",
+        "head_sha": "c1a35a39a2cf55b3f695f0ce1452eebc5261228b",
+        "author": "wm0018",
+        "labels": [
+          "cli",
+          "size: S",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.test.ts",
+            "additions": 49,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/gateway-work-admission.test.ts",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/process/gateway-work-admission.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 4,
+        "additions": 116,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105848",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105848.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 114,
+          "gatingTotal": 109,
+          "counts": {
+            "SUCCESS": 73,
+            "SKIPPED": 38,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "check-guards:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "check-guards:FAILURE",
+            "check-lint:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-13T10:31:03.367Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 731,
+    "total_ms": 7244,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 400
+        "ms": 493
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1691
+        "ms": 2131
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 18
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -67,7 +209,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 300
+        "ms": 4499
       },
       {
         "name": "append_ledger",
