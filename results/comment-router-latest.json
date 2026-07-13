@@ -1,18 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T09:34:43.992Z",
+  "generated_at": "2026-07-13T09:34:55.093Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T06:34:40.382Z",
+  "since": "2026-07-13T06:34:52.281Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1000,
   "item_numbers": [
-    105865
+    105844
   ],
-  "comment_ids": [],
+  "comment_ids": [
+    4956436704
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 5,
@@ -32,23 +34,23 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105865:4953858273:2026-07-13T09:32:49Z:clawsweeper_needs_human",
-      "comment_id": "4953858273",
-      "comment_version_key": "4953858273:2026-07-13T09:32:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105865#issuecomment-4953858273",
+      "idempotency_key": "comment-router:openclaw/openclaw:105844:4956436704:2026-07-13T09:25:11Z:re_review",
+      "comment_id": "4956436704",
+      "comment_version_key": "4956436704:2026-07-13T09:25:11Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105844#issuecomment-4956436704",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 105865,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T02:20:51Z",
-      "comment_updated_at": "2026-07-13T09:32:49Z",
-      "comment_body_sha256": "fc452d28e23cddefe74e3b27bdeb2ce0d27ea030776b77146606dc9c611f6621",
+      "target_branch": null,
+      "issue_number": 105844,
+      "author": "mjnkao",
+      "author_id": 224045620,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-13T09:25:11Z",
+      "comment_updated_at": "2026-07-13T09:25:11Z",
+      "comment_body_sha256": "0409615dcecfde31bf56dc29391e36ffc03293b5d811060868deb7d0fa00a29c",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -72,251 +74,679 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(cloud-workers): openclaw worker mode running the embedded loop on the box",
-        "body": "Part of #104294 (cloud workers, milestone 2, PR 9 — the composition PR). Builds on the four landed milestone-2 backend contracts: #104688 (worker role), #104809 (transcript commits), #105275 (live events), #105719 (inference proxy). Design: `docs/plan/cloud-workers.md` (openclaw worker mode).\n\n## What Problem This Solves\n\nThe four backend RPCs exist on the gateway side, but nothing yet runs an agent session ON a worker box. This PR adds `openclaw worker` mode: the entry point + worker-side runtime that dials the gateway over the reverse tunnel, admits with the minted credential + handshake, and runs the embedded agent loop on the box — with its persistence, model, and streaming seams tethered to the gateway, and tools running locally. This is where a worker box becomes capable of running a real session driven from the gateway.\n\n## Why This Change Was Made\n\n- `openclaw worker` entry: restricted runtime (loadPlugins:\"never\", no channels, no gateway HTTP surfaces, throwaway mkdtemp 0700 state dir, in-memory empty auth storage — no local model auth profile read). Dials the tunnel-forwarded local socket, presents credential + handshake, attaches to its single assigned session. Fails closed on admission failure (with a bounded 120s admission deadline so a leased box can't burn forever on an unreachable gateway).\n- Embedded runner rewired: session persistence -> transcript-commit RPC client (base-leaf CAS + runEpoch + seq, durable replay dedupe); model calls -> inference-proxy RPC client (provider/model reference strings only, streamed deltas + terminal, durable-replay resume); streaming -> live-event RPC client (monotonic seq, cumulative ACK, unacked-tail replay). Tools are the six coding tools (read/write/edit/apply_patch/exec/process), local-only, fail-closed availability check.\n- Reconnect/resume: exact-frame transcript retry (ledger dedupe), cumulative live-ACK replay of the unacked tail, durable inference resume (single provider call, no double-bill). Owner-epoch supersession -> clean fenced exit. Oversized transcript messages fail closed producer-side.\n\n## Deep-review fixes (a dedicated adversarial review found real concurrency/lifecycle bugs)\n\n- **BLOCKER fixed:** stop() during an in-flight transcript commit spun forever (100% CPU hang on SIGINT/SIGTERM) because the terminal `stopped` state was indistinguishable from a transient interrupt and the commit retry loop treated it as retryable. Introduced a terminal WorkerConnectionStoppedError; retry loops now retry only transient interruptions and rethrow on any terminal state. Stop-in-flight and post-stop emit settle promptly.\n- **Blast-radius fixed:** a gateway live-event window reset (a streaming-telemetry cursor reset) used to abort the entire run including a healthy in-flight inference turn. Now: satisfiable resyncs renumber the unacked tail from the gateway's expectedSeq (the gateway explicitly tolerates renumbered replay); an unrecoverable live-seam failure degrades to lossy preview streaming while inference/transcript continue. Live events are preview; they no longer kill the turn.\n- **Dead-seam removed + contract documented:** the unused in-process resumeFromBase resync was removed (leaf-only rebasing is unsafe — an unseen transcript mutation means stale inference context). On stale-base-leaf the run fail-stops with an explicit lost-tail lifecycle error and no duplicate commit; relaunch-with-fresh-context is milestone-3 (placement) territory, now documented in docs/cli/worker.md.\n- **Hardening:** the worker's session write path is now a real promise-chain mutex (was a pass-through relying on an unguarded serial-emission invariant); bounded admission deadline.\n\n## User Impact\n\nOpt-in only; dispatch/UI (target bar, placement) is milestone 3. This makes a worker box able to run a session end-to-end. No config/changelog/version-bump changes.\n\n## Evidence\n\n- Blacksmith Testbox: src/worker (runtime, RPC clients, launch), gateway worker-environments, CLI command policy, lint-suppressions — 744 tests green, including the deep-review regression tests (stop-during-commit, resync-below-cursor renumber, live-seam-failure-does-not-abort, stale-base-leaf fail-stop, epoch-flip mid-inference, reconnect-mid-stream single provider call).\n- Dedicated adversarial correctness review verified the hard parts correct (CAS/seq/replay dedupe, live ACK math, inference resume/no-double-bill, epoch fencing under withLock, restriction invariants) and found the bugs above, all fixed.\n- Clean build (rm -rf dist): public plugin-SDK declaration graph 5,077,853/5,100,000; no [INEFFECTIVE_DYNAMIC_IMPORT]. Type-aware lint, check:test-types, madge + import cycles zero, protocol:check, docs:map:check all green. Codex fresh autoreview clean.\n",
-        "branch": "claude/cloud-workers-worker-mode",
-        "head_sha": "ed722bbd4e37e7c7d49dee5a5d3f5e0451a62af8",
-        "author": "steipete",
+        "title": "feat(durable): expose wake inspection",
+        "body": "# PR4/5 - inspection-first durable wake observability\n\n## Context capsule\n\nThis PR is item 4 of the rebuilt beta3 durable core stack. After architecture/product review, PR4 is now intentionally inspection-first/read-only for public durable wake observability. Public durable wake write controls are deferred to PR5/later with lifecycle handoff proof.\n\n## Durable core stack overview\n\n- PR1/5 - docs/RFC/boundary anchor.\n- PR2/5 - runtime foundation/core plus terminal SQLite row immutability guard.\n- PR3/5 - wake targets, durable producers, replay/resume semantics.\n- PR4/5 - public durable wake inspection/observability plus CLI/Gateway/API read paths.\n- PR5/5 - internal session delivery handoff, final hardening, and any reviewed write-control contract.\n\n## What Problem This Solves\n\nPR3 persists durable wake obligations and delivery attempts. Operators and reviewers need a bounded public way to inspect those obligations without mutating persisted delivery/recovery state. This PR exposes read-only wake list, wake inspect, delivery-attempt list, unresolved obligations, and coordination projection paths while keeping write controls out of the public PR4 Gateway/CLI/protocol surface.\n\n## Scope\n\n- Public Gateway/CLI/protocol inspection paths:\n  - `durable.coordination.get`\n  - `durable.obligations.list`\n  - `durable.wake.list`\n  - `durable.wake.inspect`\n  - `durable.wake.deliveryAttempts.list`\n- Public durable wake write controls removed/deferred:\n  - `durable.wake.acknowledge`\n  - `durable.wake.supersede`\n  - `durable.wake.mark`\n  - CLI `wake-ack`, `wake-supersede`, `wake-mark`\n- Generated Swift protocol models updated to remove deferred write params/result.\n- Shipped plugin SDK compatibility preserved for `NodeSession` from `openclaw/plugin-sdk/gateway-runtime` with external packaged consumer proof.\n\n## Non-scope\n\n- No public durable wake mutation controls in PR4.\n- No external transport delivery claim.\n- No PR5 promotion.\n- No cron changes.\n\n## Architecture rationale\n\nPublic wake writes can terminalize persisted obligations and affect recovery/message delivery. PR4 keeps the public contract inspection-first so operators can diagnose durable state without creating compatibility expectations around write authorization, idempotency, terminal-state rejection, audit semantics, or lifecycle/session delivery handoff. Internal store write primitives remain available for PR5 integration but are not exposed as PR4 public API.\n\n## Evidence\n\n- Final head: `d7857aa47459c23e89fca642061b43010d5eeeb7`\n- Head before implementation: `8856c95432bf3ab2b343a3896ee18362d25eaabf`\n- Detailed proof artifact: `/Users/avo/aicos/runtime/openclaw-durable-pr-stack/pr4-inspection-first-implementation-proof-2026-07-13.md`\n- Focused tests: `node scripts/run-vitest.mjs packages/gateway-protocol/src/index.test.ts src/gateway/server-methods/durable.test.ts src/commands/durable.test.ts test/release-check.test.ts` passed, 4 shards / 127 tests.\n- Plugin SDK dts/export proof: `pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs` passed; declaration graph 4,389,302 bytes under 5,000,000 byte cap; `gateway-runtime.d.ts` includes `NodeSession`.\n- Plugin SDK surface/API: `pnpm plugin-sdk:surface:check` and `pnpm plugin-sdk:api:check` passed.\n- Protocol build: `pnpm --dir packages/gateway-protocol build` passed.\n- External packaged consumer smoke: packed `openclaw-2026.7.1-beta.6.tgz`, typechecked `import type { NodeSession } from \"openclaw/plugin-sdk/gateway-runtime\"`, loaded packaged `dist/plugin-sdk/gateway-runtime.js`, and called `errorShape(ErrorCodes.INVALID_REQUEST, ...)`; passed.\n- Lint/static fallback: `node scripts/run-oxlint.mjs <changed TS files>` passed; `git diff --check` passed.\n- Public-surface scan: only negative tests reference removed durable wake write names.\n\n## Proof gaps / environment notes\n\n- Remote Testbox proof was attempted but blocked because the local `blacksmith` executable is missing. AWS Crabbox warmup was also blocked by missing broker login. Focused local fallback proof was run and recorded.\n- `pnpm check:changed` delegates to the same unavailable Blacksmith backend in this worktree and was blocked for that reason.\n- Plain package-manager install of the root tarball in a temp consumer is currently blocked by the package's `@openclaw/ai@workspace:*` dependency resolution. The external consumer smoke therefore used the packed root artifact unpacked into external `node_modules/openclaw` plus installed declared runtime dependencies to prove the packaged subpath type/load behavior.\n\n## ClawSweeper review focus\n\nPlease review this PR as inspection-first/read-only public durable wake observability. Public write controls are intentionally deferred; findings should treat public `acknowledge`, `supersede`, or `mark` exposure in PR4 as a regression, not a missing feature.\n",
+        "branch": "codex/openclaw-durable-beta3-newstack-pr4-controls-cli-gateway",
+        "head_sha": "d7857aa47459c23e89fca642061b43010d5eeeb7",
+        "author": "mjnkao",
         "labels": [
           "docs",
+          "app: web-ui",
           "gateway",
           "cli",
-          "maintainer",
+          "scripts",
+          "commands",
+          "agents",
           "size: XL",
-          "P1",
-          "rating: 🧂 unranked krab",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 security-boundary",
-          "merge-risk: 🚨 availability",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "docs/cli/index.md",
-            "additions": 2,
-            "deletions": 1,
+            "path": ".github/workflows/ci.yml",
+            "additions": 5,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "docs/cli/worker.md",
-            "additions": 71,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 518,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/.i18n/glossary.zh-CN.json",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli/durable.md",
+            "additions": 121,
             "deletions": 0,
             "changeType": "ADDED"
+          },
+          {
+            "path": "docs/cli/index.md",
+            "additions": 28,
+            "deletions": 16,
+            "changeType": "MODIFIED"
           },
           {
             "path": "docs/docs.json",
             "additions": 2,
-            "deletions": 1,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
             "path": "docs/docs_map.md",
-            "additions": 8,
-            "deletions": 0,
+            "additions": 49,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
             "path": "docs/gateway/protocol.md",
-            "additions": 9,
-            "deletions": 6,
+            "additions": 47,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/command-catalog.ts",
-            "additions": 10,
+            "path": "docs/specs/durable-core-beta3-architecture.md",
+            "additions": 202,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/cli/command-path-policy.test.ts",
-            "additions": 6,
+            "path": "docs/specs/durable-core-beta3-test-plan.md",
+            "additions": 154,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/cli/command-startup-policy.test.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/register.subclis-core.ts",
-            "additions": 5,
+            "path": "packages/gateway-protocol/src/index.test.ts",
+            "additions": 197,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/program/subcli-descriptors.ts",
-            "additions": 5,
+            "path": "packages/gateway-protocol/src/index.ts",
+            "additions": 62,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cli/worker-cli.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/gateway/worker-environments/inference.test.ts",
-            "additions": 77,
+            "path": "packages/gateway-protocol/src/schema.ts",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/worker/embedded-agent-live.runtime.ts",
-            "additions": 369,
+            "path": "packages/gateway-protocol/src/schema/agent.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/durable.ts",
+            "additions": 730,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/embedded-agent-transcript.runtime.ts",
-            "additions": 254,
+            "path": "packages/gateway-protocol/src/schema/logs-chat.ts",
+            "additions": 7,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/primitives.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/protocol-schemas.ts",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/gateway-protocol/src/schema/types.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/durable-runtime-live-smoke.mjs",
+            "additions": 423,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/embedded-agent.runtime.ts",
-            "additions": 251,
+            "path": "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+            "additions": 13,
             "deletions": 0,
-            "changeType": "ADDED"
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/worker/inference-stream.runtime.ts",
-            "additions": 333,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "scripts/plugin-sdk-surface-report.mjs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/worker/launch-descriptor.test.ts",
-            "additions": 170,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "src/agents/agent-command.ingress-diagnostics.test.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/worker/launch-descriptor.ts",
-            "additions": 204,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/transcript-message.ts",
-            "additions": 29,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-command.runtime.ts",
-            "additions": 57,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-connection-admission.ts",
-            "additions": 207,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-connection-contract.ts",
-            "additions": 99,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-connection-frames.ts",
-            "additions": 369,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-connection.ts",
-            "additions": 469,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-rpc-client-shared.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-rpc-clients.test.ts",
-            "additions": 565,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/worker/worker-rpc-clients.ts",
+            "path": "src/agents/agent-command.ts",
             "additions": 3,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/worker-rpc-inference-client.ts",
-            "additions": 260,
+            "path": "src/agents/embedded-agent-runner/run.empty-error-retry.test.ts",
+            "additions": 65,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.ts",
+            "additions": 69,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/params.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/types.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/openclaw-tools.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.format.e2e.test.ts",
+            "additions": 188,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.live.test.ts",
+            "additions": 38,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-announce.ts",
+            "additions": 292,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-cleanup.test.ts",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-cleanup.ts",
+            "additions": 26,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-helpers.test.ts",
+            "additions": 50,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-helpers.ts",
+            "additions": 70,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.test.ts",
+            "additions": 124,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-lifecycle.ts",
+            "additions": 27,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry-run-manager.ts",
+            "additions": 284,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.persistence.test.ts",
+            "additions": 65,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.test.ts",
+            "additions": 142,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.ts",
+            "additions": 28,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-registry.types.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/subagent-spawn.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt.test.ts",
+            "additions": 66,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/system-prompt.ts",
+            "additions": 53,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/gateway-tool.test.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/gateway-tool.ts",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/sessions-spawn-tool.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 16,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/command-registry-core.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/core-command-descriptors.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/register.durable.ts",
+            "additions": 134,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/worker-rpc-live-event-client.ts",
-            "additions": 225,
+            "path": "src/commands/durable.test.ts",
+            "additions": 413,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/worker-rpc-transcript-client.ts",
-            "additions": 162,
+            "path": "src/commands/durable.ts",
+            "additions": 740,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/worker.runtime.test.ts",
-            "additions": 1253,
+            "path": "src/durable/agent-turn.test.ts",
+            "additions": 232,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/worker/worker.runtime.ts",
-            "additions": 186,
+            "path": "src/durable/agent-turn.ts",
+            "additions": 437,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/config.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/coordination-projection.test.ts",
+            "additions": 205,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/coordination-projection.ts",
+            "additions": 444,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/executor.test.ts",
+            "additions": 365,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/executor.ts",
+            "additions": 784,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/fan-in-snapshot.test.ts",
+            "additions": 229,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/fan-in-snapshot.ts",
+            "additions": 303,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/fan-in.test.ts",
+            "additions": 330,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/fan-in.ts",
+            "additions": 288,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/human-signal.test.ts",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/human-signal.ts",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/intake-envelope.test.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/intake-envelope.ts",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/intake.test.ts",
+            "additions": 94,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/intake.ts",
+            "additions": 119,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/orchestration-policy.test.ts",
+            "additions": 42,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/orchestration-policy.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/recovery.test.ts",
+            "additions": 799,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/recovery.ts",
+            "additions": 972,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/registry.ts",
+            "additions": 141,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/result-mailbox.ts",
+            "additions": 258,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/routes.test.ts",
+            "additions": 83,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/routes.ts",
+            "additions": 80,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/runtime-ids.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/runtime.ts",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/sqlite-store.test.ts",
+            "additions": 1846,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/sqlite-store.ts",
+            "additions": 3361,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/startup.test.ts",
+            "additions": 131,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/startup.ts",
+            "additions": 85,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/store-factory.test.ts",
+            "additions": 57,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/store-factory.ts",
+            "additions": 13,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/subagent.test.ts",
+            "additions": 1145,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/subagent.ts",
+            "additions": 835,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/types.ts",
+            "additions": 951,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-controls-inspection.test.ts",
+            "additions": 434,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-delivery-replay.test.ts",
+            "additions": 660,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-delivery-replay.ts",
+            "additions": 441,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-producers.test.ts",
+            "additions": 213,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-producers.ts",
+            "additions": 310,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-target-resolver.test.ts",
+            "additions": 204,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/wake-target-resolver.ts",
+            "additions": 271,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/durable/worker.test.ts",
+            "additions": 164,
             "deletions": 0,
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 32,
-        "additions": 5714,
-        "deletions": 8,
+        "changedFiles": 129,
+        "additions": 27298,
+        "deletions": 264,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105865",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105865.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105844",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105844.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BLOCKED",
         "review_decision": "",
         "checks": {
-          "total": 109,
-          "gatingTotal": 104,
+          "total": 99,
+          "gatingTotal": 94,
           "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 41,
-            "NEUTRAL": 1
+            "SUCCESS": 72,
+            "SKIPPED": 21,
+            "FAILURE": 5,
+            "QUEUED": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
+          "blockers": [
+            "checks-node-compact-small-whole-1:FAILURE",
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-docs:FAILURE",
+            "ios-build:QUEUED"
+          ],
+          "pending": [
+            "ios-build:QUEUED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-whole-1:FAILURE",
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-lint:FAILURE",
+            "check-test-types:FAILURE",
+            "check-docs:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "target is not open"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -325,21 +755,21 @@
   },
   "short_circuited": false,
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 3820,
+    "total_ms": 2977,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 312
+        "ms": 414
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2378
+        "ms": 2304
       },
       {
         "name": "classify_comment_commands",
-        "ms": 844
+        "ms": 15
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -355,11 +785,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 196
+        "ms": 165
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
