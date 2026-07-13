@@ -1,22 +1,22 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T01:44:13.604Z",
+  "generated_at": "2026-07-13T01:44:25.107Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T22:44:10.027Z",
+  "since": "2026-07-12T22:44:22.649Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1000,
   "item_numbers": [
-    105830
+    103534
   ],
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
+  "scanned_comments": 28,
+  "commands_seen": 4,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,23 +32,23 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:105830:4953695439:2026-07-13T01:42:31Z:clawsweeper_needs_human",
-      "comment_id": "4953695439",
-      "comment_version_key": "4953695439:2026-07-13T01:42:31Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/105830#issuecomment-4953695439",
+      "idempotency_key": "comment-router:openclaw/openclaw:103534:4950028351:2026-07-12T05:02:17Z:re_review",
+      "comment_id": "4950028351",
+      "comment_version_key": "4950028351:2026-07-12T05:02:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103534#issuecomment-4950028351",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 105830,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
+      "issue_number": 103534,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T01:42:31Z",
-      "comment_updated_at": "2026-07-13T01:42:31Z",
-      "comment_body_sha256": "ea5a7770310f17a70c7e514d387f8336a8d5612f5081efda01181d3588a7ce63",
+      "comment_created_at": "2026-07-12T05:02:17Z",
+      "comment_updated_at": "2026-07-12T05:02:17Z",
+      "comment_body_sha256": "cd588d9daad820998bc000e1e4289968a128949867e97519e23b2d4d0f3026a2",
       "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -74,665 +74,253 @@
       "actions": [],
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): explicit cron wakes bypass heartbeat quiet-hours gate (#105413)",
-        "body": "## What Problem This Solves\n\nFixes #105413.\n\nMain-session cron jobs (`sessionTarget: \"main\"` + `payload.kind: \"systemEvent\"`) are executed by delegating to the heartbeat runner: `executeMainSessionCronJob` enqueues the payload as a `SystemEvent` with `contextKey: \"cron:<jobId>\"` and then calls `runHeartbeatOnce({ source: \"cron\", intent: \"immediate\", reason: \"cron:<jobId>\", heartbeat: { target: \"last\" } })` (see `src/cron/service/timer.ts`).\n\nThe heartbeat active-hours (“quiet-hours”) gate in `runHeartbeatOnce` was checked **before** the queued cron event was ever inspected:\n\n```ts\n// src/infra/heartbeat-runner.ts (pre-fix)\nif (!isWithinActiveHours(cfg, heartbeat, startedAt)) {\n  return { status: \"skipped\", reason: \"quiet-hours\" };\n}\n```\n\nSo any main/systemEvent cron scheduled outside `heartbeat.activeHours` was silently skipped with `last_error: \"quiet-hours\"`, and its `payload.text` never reached a model turn. Reporter confirmed this deterministically on every fire since upgrading `2026.4.27 → 2026.6.11` (e.g. a `55 3 * * *` nightly flush job).\n\n`activeHours` is meant to bound *scheduled heartbeat polls*, not cron job execution. This PR draws that line.\n\n## Evidence\n\nFix (`src/infra/heartbeat-runner.ts`, around line 1459): let explicit cron wakes bypass the active-hours gate. Ordinary scheduled heartbeats keep it — the `activeHours` feature added in `31943dcecb8d` still bounds regular polls.\n\n```ts\nconst wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);\nconst isExplicitCronWake = wakeSource === \"cron\";\nif (!isExplicitCronWake && !isWithinActiveHours(cfg, heartbeat, startedAt)) {\n  return { status: \"skipped\", reason: \"quiet-hours\" };\n}\n```\n\nOnce the gate is bypassed, `resolveHeartbeatPreflight` already sets `isCronWake: true` for `source === \"cron\"`, and `resolveHeartbeatRunPrompt` (line 1255) already picks tagged cron events (`preflight.isCronWake || contextKey?.startsWith(\"cron:\")`) and routes them through `buildCronEventPrompt(...)`. So the tagged cron prompt path from commits `54513f424066` / `4c4d2558e34c` (vignesh07) and the delegation contract from `d4e59a3666d8` (mbelinky) are preserved verbatim — nothing else changes.\n\n### Feature interaction summary\n\n| Feature | Introduced in | Behavior after this PR |\n| --- | --- | --- |\n| `heartbeat.activeHours` quiet-hours skip | `31943dcecb8d` | Preserved for scheduled heartbeats (no `source`) and non-cron wake sources (`exec-event`, `hook`, `acp-spawn`, `session-state`). |\n| Tagged cron event prompt (`buildCronEventPrompt`) | `54513f424066`, `4c4d2558e34c` | Preserved; unchanged. |\n| Cron → heartbeat delegation with `contextKey: \"cron:<jobId>\"` and `target: \"last\"` | `d4e59a3666d8` | Preserved; the delegating call site in `src/cron/service/timer.ts` is unchanged. |\n\n### Tests\n\nAdded `src/infra/heartbeat-runner.cron-bypasses-active-hours.test.ts`:\n\n1. Ordinary scheduled heartbeat (no `source`) outside `activeHours` → `status: \"skipped\", reason: \"quiet-hours\"` (regression guard for `activeHours`).\n2. Explicit `source: \"cron\"` wake outside `activeHours` → `reason !== \"quiet-hours\"` (the #105413 regression).\n3. Cron wake with only `reason: \"cron:...\"` (inferred source path via `inferHeartbeatWakeSourceFromReason`) → `reason !== \"quiet-hours\"`.\n\nExisting coverage exercised by this change without modification:\n\n- `src/infra/heartbeat-runner.returns-default-unset.test.ts` — the “skips outside active hours” case (no `source`) still expects `quiet-hours`; this PR does not alter that path.\n- `src/infra/heartbeat-runner.active-hours-schedule.e2e.test.ts` — scheduler-level quiet-hours advancement is unaffected (scheduler still passes `source: \"cron\"` only for cron entries).\n- `src/cron/service.main-job-passes-heartbeat-target-last.test.ts` — delegation contract and `heartbeat.target = \"last\"` unchanged.\n\nLocal `pnpm` is not installed on this machine (see repo TOOLS notes); no format/lint pass was run beyond `git diff` self-review. Diff is scoped to the two files above.\n\n## Related\n\n- #105257 — same signature (`trigger: \"heartbeat\"` on a cron session with `[OpenClaw heartbeat poll]`) reported for one-shot `at` jobs; a proper cron wake bypass here should also help those.\n- #96663, #84923 — earlier reports of the same class of symptom.\n",
-        "branch": "fix/issue-105413",
-        "head_sha": "7efab2bff12ebde2eb46d4a5ec79215725abce40",
-        "author": "symbolstar",
+        "title": "fix(gateway): enforce plugin-ownership check in sessions.patch",
+        "body": "Closes #103077.\n\n## What Problem This Solves\n\nFixes an issue where an in-process plugin-runtime caller could use `sessions.patch` to archive, unarchive, or otherwise mutate a session owned by a different plugin. `sessions.delete` already rejects cross-plugin cleanup, but `sessions.patch` performed the mutation with no ownership check.\n\n## Why This Change Was Made\n\nThe existing `rejectPluginRuntimeDeleteMismatch` helper in `src/gateway/server-methods/sessions.ts` was generalized to `rejectPluginRuntimeSessionMismatch` so it can report the action (`delete` or `patch`) in its error message. `sessions.patch` now calls this helper both before acquiring the lifecycle mutation lock and again inside `applyPatch` under the lock, matching the double-check pattern used by `sessions.delete`.\n\n**ClawSweeper review follow-up:**\n1. `sessions.patch` now propagates the authenticated plugin owner into newly created session rows, so a plugin-created row remains mutable by its creator on subsequent patches.\n2. Plugin-runtime callers now fail closed on legacy ownerless rows. Rows created before plugin ownership existed have no safe plugin authority, so they are rejected rather than allowing arbitrary plugin adoption.\n\n## User Impact\n\nPlugin-runtime callers can no longer patch sessions created by other plugins. Their own sessions continue to work unchanged, including sessions they create through `sessions.patch`. Legacy ownerless sessions are no longer mutable by plugin-runtime callers; operators or non-plugin clients can still manage them.\n\n## Evidence\n\n- Added regression test `sessions.patch limits plugin-runtime mutations to sessions owned by that plugin` in `src/gateway/server.sessions.delete-lifecycle.test.ts`. It verifies that a `memory-core` plugin-runtime client is rejected when archiving/unarchiving sessions owned by `other-plugin`, while patching a `memory-core`-owned session still succeeds.\n- Added regression test `sessions.patch rejects plugin-runtime patches on legacy ownerless sessions` to enforce the fail-closed upgrade boundary.\n- Added regression test `sessions.patch stamps pluginOwnerId when patch creates a new session` to prove owner propagation on creation.\n- Added unit coverage in `src/gateway/sessions-patch.test.ts` for `pluginOwnerId` stamping behavior.\n- Focused local run:\n  - `pnpm test src/gateway/sessions-patch.test.ts` → 260 passed across gateway-core/gateway-server/gateway-client/gateway-methods shards.\n  - `pnpm test src/gateway/server.sessions.delete-lifecycle.test.ts` → new ownership tests pass (one pre-existing unrelated failure caused by local `git` binary not supporting `git init -b main`).\n- `oxlint` and `oxfmt` clean on changed files.\n\n## Real behavior proof\n\nThe focused tests run against a loopback Gateway server harness (`startGatewayServerHarness`), so the foreign-rejection and owner-success behavior is verified through real in-process plugin-runtime gateway wiring. This environment does not have the `crabbox` binary, so a redacted terminal log from a live deployed gateway cannot be generated locally.",
+        "branch": "fix/sessions-patch-plugin-ownership",
+        "head_sha": "861d0ab8319defe8b69737fc0401be8435800b14",
+        "author": "cxbasdev",
         "labels": [
-          "size: S",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 security-boundary",
-          "status: ⏳ waiting on author",
-          "extensions: copilot"
+          "gateway",
+          "size: M",
+          "P1"
         ],
         "files": [
           {
-            "path": "src/infra/heartbeat-runner.cron-bypasses-active-hours.test.ts",
-            "additions": 70,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/heartbeat-runner.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/cli-constants.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/cli-shared.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/register.runtime.ts",
-            "additions": 1,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/session-catalog.test.ts",
-            "additions": 76,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/anthropic/session-catalog.ts",
-            "additions": 28,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser/pw-ai.ts",
-            "additions": 0,
-            "deletions": 26,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/browser/src/browser/pw-session.browserless.live.test.ts",
-            "additions": 3,
+            "path": "src/config/sessions/session-accessor.ts",
+            "additions": 12,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/browser/src/browser/server-context.test-harness.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/copilot/harness.test.ts",
-            "additions": 156,
-            "deletions": 108,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/components.test.ts",
-            "additions": 26,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/internal/command-deploy.test.ts",
-            "additions": 13,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/internal/components.base.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/targets.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/setup.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/googlechat/src/targets.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/imessage/src/targets.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/channel.logout.test.ts",
-            "additions": 8,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/group-keys.test.ts",
-            "additions": 4,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/webhook-node.test.ts",
-            "additions": 23,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/llm-task/src/llm-task-tool.test.ts",
-            "additions": 49,
-            "deletions": 27,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/lobster/src/lobster-tool.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory-tool-manager.test-mocks.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
-            "additions": 14,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-core/src/tools.test.ts",
-            "additions": 37,
-            "deletions": 40,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-lancedb/index.test.ts",
-            "additions": 29,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/memory-lancedb/memory-lancedb.live.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/msteams/src/token.test.ts",
-            "additions": 29,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/opencode-go/stream-termination.test.ts",
-            "additions": 144,
-            "deletions": 86,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qa-matrix/src/runners/contract/scenario-runtime-cli.test.ts",
-            "additions": 33,
-            "deletions": 24,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/group/mention.test.ts",
-            "additions": 54,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/group/mention.ts",
-            "additions": 62,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/client-adapter.test.ts",
-            "additions": 14,
-            "deletions": 16,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor/event-handler.inbound-context.test.ts",
-            "additions": 28,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor/event-handler.reply-session-conflict.test.ts",
-            "additions": 4,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/signal/src/monitor/event-handler.test-harness.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/group-policy.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/message-handler/prepare.test.ts",
-            "additions": 26,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/slack/src/monitor/monitor.thread-resolution.test.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot/helpers.test.ts",
-            "additions": 149,
-            "deletions": 127,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/send.transport-close-proof.test.ts",
-            "additions": 22,
-            "deletions": 7,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/targets.test.ts",
-            "additions": 3,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/twitch/src/twitch-client.test.ts",
-            "additions": 21,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/whatsapp/src/inbound/message-aliases.test.ts",
-            "additions": 6,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/xai/image-generation-provider.test.ts",
-            "additions": 10,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "package.json",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/gateway-protocol/src/schema/sessions-catalog.test.ts",
+            "path": "src/flows/doctor-health-contributions.ts",
             "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/sessions.ts",
+            "additions": 51,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server.sessions.delete-lifecycle.test.ts",
+            "additions": 202,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/gateway-protocol/src/schema/sessions-catalog.ts",
-            "additions": 7,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/bench-sqlite-reliability.ts",
-            "additions": 16,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/check-session-accessor-boundary.mjs",
-            "additions": 3,
+            "path": "src/gateway/sessions-patch.test.ts",
+            "additions": 42,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "scripts/deadcode-exports.baseline.mjs",
-            "additions": 29,
-            "deletions": 36,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/session-accessor-debt-baseline.json",
-            "additions": 0,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/sqlite-reliability-contract.ts",
-            "additions": 46,
+            "path": "src/gateway/sessions-patch.ts",
+            "additions": 5,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/sqlite-reliability-runner.ts",
-            "additions": 332,
-            "deletions": 28,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/lib/sqlite-reliability-wal-monitor.ts",
-            "additions": 43,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "scripts/lib/sqlite-reliability-writer.ts",
-            "additions": 31,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "scripts/type-suppression-inventory.ts",
-            "additions": 209,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.background-task.test.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.background-task.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.core.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/acp/control-plane/manager.types.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.before-tool-call.e2e.test.ts",
-            "additions": 59,
-            "deletions": 51,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/agent-tools.before-tool-call.integration.e2e.test.ts",
-            "additions": 59,
-            "deletions": 33,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles.permissions.test.ts",
-            "additions": 128,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/auth-profiles/clone.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/persisted-boundary.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/persisted.ts",
-            "additions": 14,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/profiles.test.ts",
-            "additions": 714,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/runtime-snapshots.test.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/runtime-snapshots.ts",
-            "additions": 346,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/store.ts",
-            "additions": 682,
-            "deletions": 60,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/auth-profiles/types.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/compaction.token-sanitize.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers.sanitizeuserfacingtext.test.ts",
-            "additions": 72,
-            "deletions": 37,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openclaw-tools.browser-plugin.integration.test.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-suspension.test.ts",
-            "additions": 6,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-suspension.ts",
-            "additions": 7,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
-            "additions": 58,
-            "deletions": 32,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/edit.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/tools/write.test.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/tool-policy-pipeline.test.ts",
-            "additions": 34,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/message/ingress-queue.test.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/setup-group-access-configure.test.ts",
-            "additions": 15,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/setup-group-access.test.ts",
-            "additions": 37,
-            "deletions": 33,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/channels/plugins/setup-wizard-helpers.test.ts",
-            "additions": 35,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/command-bootstrap.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/command-execution-startup.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/lifecycle.runtime.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/pre-bootstrap.ts",
-            "additions": 41,
-            "deletions": 25,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.test.ts",
-            "additions": 22,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run-loop.ts",
-            "additions": 21,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run.option-collisions.test.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/gateway-cli/run.ts",
-            "additions": 2,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/program/config-guard.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cli/run-main.ts",
-            "additions": 8,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-config-preflight.state-migration.test.ts",
-            "additions": 52,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-config-preflight.ts",
-            "additions": 69,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-session-sqlite.test.ts",
-            "additions": 3,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor/shared/configured-provider-plugin-ids.ts",
-            "additions": 41,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/commands/doctor/shared/configured-provider-plugin-installs.ts",
-            "additions": 4,
-            "deletions": 95,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 77,
-        "deletions": 1,
+        "changedFiles": 6,
+        "additions": 317,
+        "deletions": 18,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-105830",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105830.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-103534",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-103534.md",
         "mode": "autonomous",
         "mergeable": "CONFLICTING",
         "merge_state_status": "DIRTY",
         "review_decision": "",
         "checks": {
-          "total": 112,
-          "gatingTotal": 107,
+          "total": 106,
+          "gatingTotal": 101,
           "counts": {
-            "SUCCESS": 70,
-            "SKIPPED": 40,
-            "IN_PROGRESS": 1,
+            "SUCCESS": 56,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 18,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-compact-small-6:IN_PROGRESS"
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
           "pending": [
-            "checks-node-compact-small-6:IN_PROGRESS"
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "checks-node-compact-small-whole-2:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-additional-extension-bundled:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:103534:4942105244:2026-07-11T03:43:42Z:re_review",
+      "comment_id": "4942105244",
+      "comment_version_key": "4942105244:2026-07-11T03:43:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103534#issuecomment-4942105244",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 103534,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-11T03:43:42Z",
+      "comment_updated_at": "2026-07-11T03:43:42Z",
+      "comment_body_sha256": "8ecdc8d409aff801081288c69c897b5f8032fc51bd3bee8671fcec36078f1e69",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:103534:4936749937:2026-07-10T15:13:34Z:re_review",
+      "comment_id": "4936749937",
+      "comment_version_key": "4936749937:2026-07-10T15:13:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103534#issuecomment-4936749937",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 103534,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-10T15:13:34Z",
+      "comment_updated_at": "2026-07-10T15:13:34Z",
+      "comment_body_sha256": "43c5ed5b0525b63137b01db4414ab26815c2c5ba008145bbc42fcd1af0474c9d",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:103534:4935993195:2026-07-10T13:46:54Z:re_review",
+      "comment_id": "4935993195",
+      "comment_version_key": "4935993195:2026-07-10T13:46:54Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/103534#issuecomment-4935993195",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 103534,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-10T13:46:54Z",
+      "comment_updated_at": "2026-07-10T13:46:54Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -743,19 +331,19 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3943,
+    "total_ms": 6003,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 413
+        "ms": 433
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1973
+        "ms": 1857
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1119
+        "ms": 49
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -771,7 +359,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 352
+        "ms": 3544
       },
       {
         "name": "append_ledger",
