@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T15:25:06.137Z",
+  "generated_at": "2026-07-13T15:25:48.058Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T12:25:03.551Z",
+  "since": "2026-07-13T12:25:46.115Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    106407
+    106385
   ],
   "comment_ids": [
-    4959586340
+    4959538699
   ],
   "status_comment_id": 4959586802,
   "max_autoclose_targets": 8,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:106407:4959586340:2026-07-13T15:23:10Z:re_review",
-      "comment_id": "4959586340",
-      "comment_version_key": "4959586340:2026-07-13T15:23:10Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/106407#issuecomment-4959586340",
+      "idempotency_key": "comment-router:openclaw/openclaw:106385:4959538699:2026-07-13T15:18:25Z:re_review",
+      "comment_id": "4959538699",
+      "comment_version_key": "4959538699:2026-07-13T15:18:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/106385#issuecomment-4959538699",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 106407,
+      "target_branch": null,
+      "issue_number": 106385,
       "author": "zenglingbiao",
       "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-13T15:23:10Z",
-      "comment_updated_at": "2026-07-13T15:23:10Z",
+      "comment_created_at": "2026-07-13T15:18:25Z",
+      "comment_updated_at": "2026-07-13T15:18:25Z",
       "comment_body_sha256": "97abd1c77f8e344c280e07ae79dc90eda06c8401e3fc833e7055418a70b9bdcf",
-      "status_comment_id": 4959586802,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -95,115 +95,68 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(envelope): accept timestamp 0 in formatEnvelopeTimestamp",
-        "body": "## Summary\n\n`formatEnvelopeTimestamp` used `if (!ts)` to check for missing timestamps, which incorrectly rejected the valid numeric timestamp `0` (Unix epoch). Replace the falsy check with an explicit `ts === undefined || ts === null` check.\n\n## What Problem This Solves\n\nIn `src/auto-reply/envelope.ts:117`, `formatEnvelopeTimestamp` guards with `if (!ts) { return undefined; }`. Since `ts` is typed `number | Date | undefined`, the value `0` is a valid millisecond timestamp (representing 1970-01-01T00:00:00.000Z), but `!0 === true` causes it to be silently rejected.\n\n**Code evidence**: In `envelope.ts:117`, `!ts` is falsy for `0` (valid Unix epoch timestamp).\n\n## Root Cause\n\nThe check `!ts` conflates \"missing/undefined\" with \"falsy numeric value\". For a parameter typed `number | Date | undefined`, the only invalid value is `undefined` (and technically `null`). Using `!` also rejects `0`, which is a valid timestamp.\n\n## Why This Fix\n\nThe minimal fix: change `if (!ts)` → `if (ts === undefined || ts === null)`. This preserves the existing behavior for `undefined` and `Date` instances (always truthy) while correctly accepting `0`.\n\n## User Impact\n\n- **Before**: `formatEnvelopeTimestamp(0)` silently returns `undefined` — the Unix epoch timestamp is dropped from envelope formatting.\n- **After**: `formatEnvelopeTimestamp(0)` returns `\"Thu 1970-01-01T00:00:00Z\"` (in UTC mode).\n\n## Evidence\n\n- **Before**: `formatEnvelopeTimestamp(0)` returns `undefined` → FAIL\n- **After**: `formatEnvelopeTimestamp(0)` returns formatted timestamp → PASS\n\n## Real Behavior Proof\n\n### Before (on main)\n```bash\n$ node --import tsx proof.mjs\n=== formatEnvelopeTimestamp(0) ===\nFAIL: formatEnvelopeTimestamp(0) returned undefined\n      The valid Unix epoch timestamp is being rejected by the falsy check.\n```\n\n### After (with fix)\n```bash\n$ node --import tsx proof.mjs\n=== formatEnvelopeTimestamp(0) ===\nResult: Thu 1970-01-01T00:00:00Z\nPASS: formatEnvelopeTimestamp(0) correctly formatted the Unix epoch timestamp.\n\n=== formatEnvelopeTimestamp(undefined) ===\nResult: undefined\nPASS: undefined correctly returns undefined.\n```\n\n## Tests and Validation\n\n- `pnpm check` passed (no lint errors)\n- Added 2 regression tests: timestamp 0 is formatted; undefined still returns undefined\n",
-        "branch": "fix/envelope-timestamp-zero",
-        "head_sha": "947be204dba9af3f9599b895aa3838f703803e40",
+        "title": "fix(restart-sentinel): log DB errors instead of silently swallowing them",
+        "body": "## Summary\n\n`clearRestartSentinel`, `readRestartSentinel`, and `hasRestartSentinel` used empty `catch {}` / `catch { return null }` / `catch { return false }` blocks that silently swallowed SQLite DB errors. This PR replaces them with `sentinelLog.warn(...)` so errors are visible in diagnostics while preserving the best-effort semantics.\n\n## What Problem This Solves\n\nIn `src/infra/restart-sentinel.ts`, three exported functions silently discard all errors from the SQLite state database:\n\n- **`clearRestartSentinel`** — `catch {}`: If the DB write fails (locked, corrupt, disk full), the sentinel is not cleared but the caller has no way to detect this. The gateway may continue to believe a restart is pending.\n- **`readRestartSentinel`** — `catch { return null }`: Any DB read error (transient lock, corruption) is treated identically to \"no sentinel exists\", potentially causing a pending restart to be silently dropped.\n- **`hasRestartSentinel`** — `catch { return false }`: Same problem — DB errors are indistinguishable from \"no sentinel\".\n\n**Code evidence**: In `restart-sentinel.ts:228`, the `catch {}` on the `runOpenClawStateWriteTransaction` call provides no visibility into whether the sentinel was actually cleared.\n\n## Root Cause\n\nThe functions were written with best-effort semantics (they must not throw during shutdown/cleanup), but the empty catch blocks went too far by discarding all diagnostic information. Unlike the intentional best-effort pattern in `ensureOpenClawStatePermissions` (which includes a comment explaining why the catch is empty), these catch blocks had no explanation and no logging.\n\n## Why This Fix\n\nFollows the same pattern accepted in:\n- [#84449](https://github.com/openclaw/openclaw/pull/84449) (`fix(delivery): log failDelivery errors instead of silently swallowing`) by @SebTardif\n- [#82943](https://github.com/openclaw/openclaw/pull/82943) (`fix(agents): log warnings instead of swallowing subagent errors`) by @SebTardif\n\nUses `createSubsystemLogger(\"restart-sentinel\")` + `formatErrorMessage(err)` — consistent with `restart.ts` which also uses `createSubsystemLogger(\"restart\")`.\n\n## User Impact\n\n- **Before**: Operators had no diagnostic signal when the restart sentinel could not be cleared or read — failures were completely invisible.\n- **After**: A warning is emitted to the diagnostics log (`[restart-sentinel]` prefix) with the full error context, while the functions continue to return safe defaults (`null` / `false` / `undefined`).\n\n## Evidence\n\n- **Before**: No warnings emitted on stderr when the DB operation fails — errors are silently swallowed.\n- **After**: Three warnings emitted with full error context; functions return safely without throwing.\n\n## Real Behavior Proof\n\n### Before (on main, `catch {}`)\n```bash\n$ node --import tsx scripts/proof-restart-sentinel-catch.mjs\n=== clearRestartSentinel ===\nclearRestartSentinel completed without throwing\n\n=== readRestartSentinel ===\nreadRestartSentinel returned: null\n\n=== hasRestartSentinel ===\nhasRestartSentinel returned: false\n\n=== stderr (warnings captured) ===\nFAIL: No warnings were emitted on stderr!\n      The catch blocks are silently swallowing errors.\n```\n\n### After (with fix)\n```bash\n$ node --import tsx scripts/proof-restart-sentinel-catch.mjs\n=== clearRestartSentinel ===\nclearRestartSentinel completed without throwing\n\n=== readRestartSentinel ===\nreadRestartSentinel returned: null\n\n=== hasRestartSentinel ===\nhasRestartSentinel returned: false\n\n=== stderr (warnings captured) ===\nPASS: Warnings were emitted on stderr:\n  [restart-sentinel] Failed to clear restart sentinel: ...\n  [restart-sentinel] Failed to read restart sentinel: ...\n  [restart-sentinel] Failed to check restart sentinel: ...\n```\n\n## Tests and Validation\n\n- `pnpm check` passed (no lint errors)\n- Added 3 regression tests in `restart-sentinel.test.ts` verifying that each function survives DB failures without throwing and returns the safe default value\n",
+        "branch": "fix/restart-sentinel-silent-catch",
+        "head_sha": "436fc8756e10d62986a7e3c66f348990dd67a04d",
         "author": "zenglingbiao",
         "labels": [
-          "size: XS",
+          "size: S",
           "proof: sufficient",
-          "P2",
+          "P3",
           "rating: 🦐 gold shrimp",
           "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "src/auto-reply/envelope.test.ts",
-            "additions": 14,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/envelope.ts",
-            "additions": 1,
+            "path": "src/infra/restart-sentinel.test.ts",
+            "additions": 88,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/discord/src/monitor/message-handler.process.ts",
-            "additions": 12,
-            "deletions": 20,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/message-handler.retry.ts",
-            "additions": 110,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/discord/src/monitor/reply-delivery.ts",
-            "additions": 15,
-            "deletions": 0,
+            "path": "src/infra/restart-sentinel.ts",
+            "additions": 13,
+            "deletions": 3,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 15,
-        "deletions": 1,
+        "additions": 101,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-106407",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-106407.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-106385",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-106385.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 102,
-          "gatingTotal": 97,
+          "total": 103,
+          "gatingTotal": 98,
           "counts": {
-            "SUCCESS": 49,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 18,
-            "FAILURE": 1,
+            "SUCCESS": 57,
+            "SKIPPED": 34,
+            "FAILURE": 11,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
+            "build-artifacts:FAILURE",
+            "QA Smoke CI (profile 1/2):FAILURE",
+            "QA Smoke CI (profile 2/2):FAILURE",
+            "checks-node-compact-small-whole-2:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-lint:FAILURE",
             "check-test-types:FAILURE",
             "check-additional-boundaries-a:IN_PROGRESS",
             "check-additional-extension-bundled:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS"
           ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-bundled:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
+          "pending": [],
           "terminalBlockers": [
             "check-test-types:FAILURE"
           ],
@@ -218,25 +171,25 @@
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5502,
+    "total_ms": 2119,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 516
+        "ms": 415
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1965
+        "ms": 1442
       },
       {
         "name": "classify_comment_commands",
-        "ms": 12
+        "ms": 15
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -252,7 +205,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2908
+        "ms": 176
       },
       {
         "name": "append_ledger",
