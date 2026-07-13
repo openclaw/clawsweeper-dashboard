@@ -1,22 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T04:33:58.665Z",
+  "generated_at": "2026-07-13T04:34:27.414Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-13T01:33:58.248Z",
+  "since": "2026-07-13T01:34:24.640Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    105949
+    105643
   ],
-  "status_comment_id": null,
+  "comment_ids": [
+    4954461268
+  ],
+  "status_comment_id": 4954461525,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,28 +32,199 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:105643:4954461268:2026-07-13T04:32:48Z:re_review",
+      "comment_id": "4954461268",
+      "comment_version_key": "4954461268:2026-07-13T04:32:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105643#issuecomment-4954461268",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105643,
+      "author": "totobusnello",
+      "author_id": 246086438,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T04:32:48Z",
+      "comment_updated_at": "2026-07-13T04:32:48Z",
+      "comment_body_sha256": "e2f8f548e1f129925f7a65a51e6b3e6c730067217c5f8ed85377fc846e1afac4",
+      "status_comment_id": 4954461525,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 105643,
+          "dispatch_key": "router-cf77d049c02e5f76",
+          "dispatched_at": "2026-07-13T04:34:28.415Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-13T04:34:29.533Z",
+          "response_comment_id": "4954461525",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli-runner): sweep orphaned bundle MCP temp dirs at gateway startup",
+        "body": "Fixes #105641\n\n## What Problem This Solves\n\nPer-run bundled MCP temp configs (`os.tmpdir()/openclaw-cli-mcp-*/mcp.json`, containing the rendered loopback URL and resolved tokens) are only reclaimed by the in-memory `cleanup()` callback returned from `prepareModeSpecificBundleMcpConfig`. When the gateway process exits with runs in flight (restart, crash, SIGKILL), the callback dies with it and the directory leaks — credential-bearing files outlive the gateway generation that issued them, and restart-heavy deployments accumulate leaked dirs until reboot. 26 leaked dirs built up over 33 days on our production host, dates correlating 1:1 with restart activity (full field data in #105641).\n\n## Approach\n\nA gateway-startup post-ready sidecar (`sidecars.bundle-mcp-temp-sweep`, mirroring `sidecars.session-locks`) that removes orphaned dirs. Orphan detection is **liveness-based, not age-based**:\n\n- Live CLI children carry the config path in their argv (`--mcp-config <dir>/mcp.json`, from `injectClaudeMcpConfigArgs`), so a dir is only removed when **no visible process references it**. Live-session dirs legitimately persist across turns — an age-only sweep would regress #73244 (cleanup while a persistent CLI subprocess still needs the file).\n- A 5-minute spawn-grace window protects the mkdtemp→spawn race of a run being prepared whose child hasn't spawned yet.\n- The sweep **fails closed**: if the process scan yields nothing (restricted environment), everything is kept — keeping a leaked dir beats breaking a live run.\n- Process scan is async and cross-platform: `ps -axww` on POSIX, `/proc` walk as fallback for minimal Linux containers without procps, PowerShell `Get-CimInstance Win32_Process` on Windows (via the existing `getWindowsPowerShellExePath` helper), all with timeouts.\n- False positives (an unrelated process merely mentioning the path) only KEEP a dir for another boot — the safe direction.\n\n`BUNDLE_MCP_TEMP_PREFIX` is now a shared const so the creator (`bundle-mcp.ts`) and the sweeper cannot drift.\n\n## Evidence\n\n**Live reproduction of the leak on a production gateway (OpenClaw v2026.6.11, Ubuntu VPS), before this fix** — run in flight + `systemctl restart`:\n\n```\nnovo temp dir: /tmp/openclaw-cli-mcp-V6tUnQ\n>>> systemctl restart com run em voo...\n✅ LEAK REPRODUZIDO: /tmp/openclaw-cli-mcp-V6tUnQ sobreviveu ao restart do gateway\ntotal 4\ndrwx------   2 root root   60 Jul 12 14:51 .\n-rw-r--r--   1 root root 1470 Jul 12 14:51 mcp.json\n=== total dirs: 26\n```\n\n**Control (same host): SIGKILL of only the CLI child does *not* leak** — the surviving gateway still runs the cleanup callback, confirming the leak specifically requires gateway death:\n\n```\nnovo temp dir detectado: /tmp/openclaw-cli-mcp-EB9IqM\nclaude pids: 2901090\nSIGKILL enviado\n❌ dir foi limpo apesar do kill\n=== total dirs: 24\n```\n\n**Focused tests** (new `bundle-mcp-sweep.test.ts` + touched `server-startup-post-attach.test.ts`):\n\n```\n Test Files  3 passed (3)\n      Tests  70 passed (70)\n```\n\n**Lint**: `pnpm lint` exits 0 on the branch.\n\n**After-fix exact-head proof — real host process scanner (no mocks), Linux/`ps` path.** Ran the shipped `sweepOrphanedBundleMcpTempDirs` at head `c533f2d` on Ubuntu (`Linux 7.0.0`, Node 22.22.2, procps-ng 4.0.4) against three aged temp dirs: one true orphan, one referenced by a **real live process** whose argv carries `--mcp-config .../LIVE1/mcp.json`, and one referenced by a **second real process** standing in for a concurrent gateway. No `listCommandLines` override — the sweep used the actual host scanner:\n\n```\n=== BEFORE (3 dirs, mtime -2h):\nopenclaw-cli-mcp-CONC1\nopenclaw-cli-mcp-LIVE1\nopenclaw-cli-mcp-ORPHAN1\n=== real processes holding LIVE1/CONC1 (host `ps -axww`):\nclaude --strict-mcp-config --mcp-config openclaw-cli-mcp-LIVE1/mcp.json 120\nclaude --mcp-config openclaw-cli-mcp-CONC1/mcp.json --other 120\n=== SWEEP (real process scanner, no mock):\nremoved: [\"openclaw-cli-mcp-ORPHAN1\"]\nkept:    [\"openclaw-cli-mcp-CONC1\",\"openclaw-cli-mcp-LIVE1\"]\n=== AFTER:\nopenclaw-cli-mcp-CONC1\nopenclaw-cli-mcp-LIVE1\n```\n\nThe orphan is removed; both the persistent-session dir and the concurrent-gateway dir are preserved because the real `ps` scan sees their live references — directly addressing the \"incomplete process inventory could delete a live config\" risk on the actual scanner path.\n\n### Update — hardened owner-aware reclamation (`ba7a6a89`)\n\nThe bundle MCP config is rendered at prepare time (`prepare.ts`), *before* the run enters `enqueueCliRun` (`execute.ts`), so a run waiting in the serialization queue owns a config that no child argv references yet. Past the grace window, a concurrent gateway's startup sweep could delete that dir, making the queued run spawn with a missing `--mcp-config`. Each temp dir now carries an owner marker (`.owner.json` = creating gateway pid + Linux boot id), and the sweep keeps a dir whose owning gateway is still alive.\n\nA second-opinion review (two independent models) tightened four things over the first owner-aware pass:\n\n- **Fail-loud ownership + rollback.** The marker write is no longer best-effort. If ownership cannot be recorded the run must not proceed, since an unmarked dir aged past the grace window is reclaimable by a concurrent sweep. `bundle-mcp.ts` wraps `mkdtemp → mcp.json → marker` and rolls the temp dir back on any failure, so no half-written or unowned config survives to be queued (this also closes a pre-existing `mcp.json`-write leak).\n- **Dead-owner reclaim bypasses the grace window.** An owner-marked dir whose gateway is provably gone (pid dead, or boot id changed by a reboot) is reclaimed at any age — otherwise the one-shot startup sweep kept a promptly-restarted gateway's own fresh crash debris until the next restart. The grace window now protects only unmarked legacy dirs (the prepare race).\n- **Fail-closed marker parsing.** Only a definitively absent marker (ENOENT) is legacy; anything unreadable, oversized, or malformed is *unknown* and kept. The pid is validated as a safe positive integer and the marker size is capped before parsing.\n- **Argv re-scan before removal.** A fresh process snapshot is taken immediately before deleting candidates, so a CLI child that spawned after the first scan keeps its dir (an empty re-scan fails closed).\n\nThe primary case (gateway death with runs in flight, #105641) is unchanged: the dead gateway's pid fails the liveness probe, so the orphan is still removed.\n\n**Known limitation (safe direction):** `bootId` is Linux-only, so on macOS/Windows and for same-boot pid reuse the owner check can *over-protect* a stale dir (keep a leak slightly longer) — it never under-protects (never deletes a live-owned config). Such a dir is reclaimed on the next restart whose sweep sees the owner gone. A process-start-time identity would close this and is deferred as a cross-platform follow-up.\n\nLocal validation on `ba7a6a89`: `oxlint`, `tsgo:core`, `tsgo:core:test`, `check:temp-path-guardrails` clean; `deadcode:exports` adds no new export; `bundle-mcp-sweep` + `bundle-mcp` + `bundle-mcp.resume` + `prepare` + `server-startup-post-attach` suites pass (250 tests).\n\n#### Real-behavior proof — exact head `ba7a6a89` on a real Linux host\n\nRan the exported `sweepOrphanedBundleMcpTempDirs` (esbuild-bundled from the exact-head source — the real function, not a reimplementation) on a real Linux host (node v22) with its real defaults: real `ps` scan, real `process.kill(pid, 0)` liveness, real boot id. Four temp dirs, none referenced by any live argv. Redacted (no tokens, endpoints, host paths, or boot id):\n\n```\n== Setup (no argv references any dir; real defaults) ==\nprocess.kill(2940110,0)=true (live)   process.kill(2940111,0)=false (dead)\nboot id present: yes (<redacted>)\n\n  live-owner-aged      marker=pid=LIVE     aged=true  expect=keep\n  dead-owner-aged      marker=pid=DEAD     aged=true  expect=remove\n  dead-owner-FRESH     marker=pid=DEAD     aged=false expect=remove\n  corrupt-marker-aged  marker=corrupt JSON aged=true  expect=keep\n\n== sweepOrphanedBundleMcpTempDirs (real defaults) ==\nremoved: [ 'openclaw-cli-mcp-dead-owner-FRESH', 'openclaw-cli-mcp-dead-owner-aged' ]\nkept:    [ 'openclaw-cli-mcp-corrupt-marker-aged', 'openclaw-cli-mcp-live-owner-aged' ]\n\n== Verification (on disk vs expectation) ==\n  live-owner-aged      expect=keep   got=keep   PASS\n  dead-owner-aged      expect=remove got=remove PASS\n  dead-owner-FRESH     expect=remove got=remove PASS\n  corrupt-marker-aged  expect=keep   got=keep   PASS\n\nRESULT: PASS\n```\n\n- `live-owner-aged` (queued run of a live gateway) → **kept**\n- `dead-owner-aged` (true orphan) → **removed**\n- `dead-owner-FRESH` (crash debris younger than the grace window) → **removed** — owner death bypasses grace\n- `corrupt-marker-aged` (unreadable ownership) → **kept** — fail-closed\n\n## Tests\n\n`bundle-mcp-sweep.test.ts` covers: gateway death with runs in flight (orphan removed), a live CLI child keeping its dir (#73244 control), a concurrent gateway's child, the spawn-grace window, fail-closed on empty process scan, legacy empty dirs, non-matching entries/missing roots, a live-owner queued dir kept, a dead-owner dir removed, a rebooted-owner dir removed, a same-boot live-owner kept, a **fresh** dead-owner reclaimed despite the grace window, a **corrupt/unreadable marker kept** (fail-closed), and a child that **spawns between the argv scan and removal** being kept.\n\n`bundle-mcp.test.ts` adds an integration test that a **marker-write failure rolls the temp dir back** (prepare rejects and no `openclaw-cli-mcp-` dir survives). `bundle-mcp.resume.test.ts` still validates resume-hash stability with the marker present. `server-startup-post-attach.test.ts` mocks the sweep module so the startup test doesn't touch the real tmpdir; its assertions are unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01TiH8Npb28iWm4ZkXVrN4HJ\n\n\n\n\n",
+        "branch": "fix/bundle-mcp-temp-sweep",
+        "head_sha": "ba7a6a891296d1f91b911486d10b9cb1f673f47a",
+        "author": "totobusnello",
+        "labels": [
+          "gateway",
+          "agents",
+          "size: L",
+          "proof: sufficient",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
+        ],
+        "files": [
+          {
+            "path": "src/agents/cli-runner/bundle-mcp-sweep.test.ts",
+            "additions": 241,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/cli-runner/bundle-mcp-sweep.ts",
+            "additions": 351,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/cli-runner/bundle-mcp.test.ts",
+            "additions": 53,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/cli-runner/bundle-mcp.ts",
+            "additions": 40,
+            "deletions": 24,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-startup-post-attach.ts",
+            "additions": 18,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 707,
+        "deletions": 25,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105643",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105643.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 106,
+          "gatingTotal": 101,
+          "counts": {
+            "SUCCESS": 65,
+            "SKIPPED": 31,
+            "IN_PROGRESS": 6,
+            "FAILURE": 3,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "pending": [
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-whole-1:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-guards:FAILURE",
+            "check-prod-types:FAILURE",
+            "check-additional-extension-package-boundary:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-13T04:34:27.705Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 753,
+    "total_ms": 5575,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 393
+        "ms": 488
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2196
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -66,7 +240,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 336
+        "ms": 2790
       },
       {
         "name": "append_ledger",
