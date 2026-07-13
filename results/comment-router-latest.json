@@ -1,22 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-13T00:06:24.655Z",
+  "generated_at": "2026-07-13T00:06:38.670Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-12T21:06:24.319Z",
+  "since": "2026-07-12T21:06:36.202Z",
   "execute": true,
   "force_reprocess": false,
   "max_comments": 1000,
   "item_numbers": [
-    105764
+    105738
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "comment_ids": [
+    4953314695
+  ],
+  "status_comment_id": 4953314867,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -29,7 +31,184 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:105738:4953314695:2026-07-13T00:05:17Z:re_review",
+      "comment_id": "4953314695",
+      "comment_version_key": "4953314695:2026-07-13T00:05:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105738#issuecomment-4953314695",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 105738,
+      "author": "morluto",
+      "author_id": 76467478,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-13T00:05:17Z",
+      "comment_updated_at": "2026-07-13T00:05:17Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 4953314867,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 105738,
+          "dispatch_key": "router-926f63754c3f2f43",
+          "dispatched_at": "2026-07-13T00:06:39.402Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-13T00:06:40.304Z",
+          "response_comment_id": "4953314867",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(sessions): keep dirty transcript search from blocking the gateway",
+        "body": "Closes #105735\n\n## What Problem This Solves\n\nFixes an issue where searching a session with a dirty transcript index could block the Gateway event loop while the index was rebuilt.\n\nThe rebuild began synchronously inside `searchSessionTranscripts`. Its initial SQLite work, transcript parsing, and index writes ran before the async function reached its first yield. Deferring that same work with `setImmediate` would only move the stall to the next event-loop turn.\n\n## Why This Change Was Made\n\nDirty-index reconciliation now runs in a packaged worker, while transcript search returns promptly with `indexing: true`.\n\nThe worker plans outside transactions and applies short, bounded write batches protected by a database-owned claim generation. Transcript mutations invalidate an active claim, and reconciliation performs a final authoritative revision check before clearing the dirty state.\n\nA process-wide single-slot queue bounds worker concurrency. Planning and write progress have separate watchdogs; failure or timeout releases the slot for a later retry. There is no large synchronous fallback when worker startup fails.\n\nNormal clean-index searches and synchronous indexing of ordinary transcript appends are unchanged.\n\n## User Impact\n\nGateway requests and timers remain responsive while a dirty transcript index is rebuilt. Once reconciliation finishes, transcript search returns the correctly rebuilt index.\n\nConcurrent appends, rewinds, replacements, deletions, and reconciliation attempts cannot incorrectly mark stale index contents clean.\n\n## Evidence\n\nFocused regression and packaging tests:\n\n```text\nOPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs \\\n  src/config/sessions/session-transcript-search.test.ts \\\n  src/infra/tsdown-config.test.ts \\\n  --reporter=verbose \\\n  --maxWorkers=1\n```\n\nResult: 38 tests passed.\n\nThe regression coverage proves:\n\n- Event-loop heartbeats continue after reconciliation is actively underway.\n- Search eventually returns the rebuilt transcript index.\n- Two database connections cannot concurrently own the same rebuild.\n- Append, rewind, same-count replacement, and deletion races invalidate stale work.\n- Large unrelated FTS contents do not cause long write-lock scans.\n- Abandoned claims and nonresponding workers recover through bounded timeouts.\n- Source, stable distribution, and hashed distribution worker paths resolve correctly.\n\nAdditional validation:\n\n- `pnpm build` passed and emitted the transcript reconciliation worker.\n- `pnpm check` passed.\n- Fresh branch-mode autoreview against `origin/main` completed with no actionable findings.\n\n## Suggested Review Order\n\n1. `src/config/sessions/session-transcript-reconcile.ts` — claim lifecycle, planning, bounded writes, and final authoritative check.\n2. `src/config/sessions/session-transcript-search.ts` — worker queue, deduplication, watchdogs, and search behavior.\n3. `src/config/sessions/session-transcript-index.ts` — transcript mutations invalidating active claims.\n4. `src/config/sessions/session-transcript-search.test.ts` — responsiveness, concurrency, race, and recovery proof.\n5. `src/config/sessions/session-transcript-reconcile.worker.ts` — worker entry and message settlement.\n6. `tsdown.config.ts`, `scripts/release-check.ts`, and `src/infra/tsdown-config.test.ts` — packaging and release inventory.\n\n## AI Assistance\n\nThis change was developed with Codex assistance. The implementation was reviewed against repository guidance, validated with focused regression tests plus build/check gates, and passed a fresh branch-mode autoreview.\n\n## Real behavior proof\n\nExact head `af68cb535507a379b18fe12c4c72c8b95b5f7f2f` was exercised through a real packaged Gateway process and its WebSocket RPC boundary using a temporary state directory. The setup used 100,000 synthetic transcript message events, then removed only the derived FTS and index-state rows to reproduce a dirty upgrade/rebuild state. No model or provider call was involved.\n\nRedacted client transcript:\n\n```text\n{\"event\":\"initial_search\",\"gatewayRpcMs\":687,\"indexing\":true,\"resultCount\":0}\n{\"event\":\"gateway_turn\",\"turn\":1,\"healthRpcMs\":194,\"healthResponded\":true,\"searchRpcMs\":351,\"indexing\":true,\"resultCount\":0}\n{\"event\":\"gateway_turn\",\"turn\":2,\"healthRpcMs\":5,\"healthResponded\":true,\"searchRpcMs\":311,\"indexing\":true,\"resultCount\":0}\n{\"event\":\"gateway_turn\",\"turn\":3,\"healthRpcMs\":3,\"healthResponded\":true,\"searchRpcMs\":275,\"indexing\":true,\"resultCount\":0}\n{\"event\":\"gateway_turn\",\"turn\":4,\"healthRpcMs\":4,\"healthResponded\":true,\"searchRpcMs\":251,\"indexing\":true,\"resultCount\":0}\n{\"event\":\"gateway_turn\",\"turn\":5,\"healthRpcMs\":3,\"healthResponded\":true,\"searchRpcMs\":272,\"indexing\":true,\"resultCount\":0}\n{\"event\":\"initial_search\",\"gatewayRpcMs\":885,\"indexing\":false,\"resultCount\":1}\n{\"event\":\"gateway_turn\",\"turn\":1,\"healthRpcMs\":11,\"healthResponded\":true,\"searchRpcMs\":1068,\"indexing\":false,\"resultCount\":1}\n```\n\nThis demonstrates that unrelated Gateway health requests continued completing over multiple turns while reconciliation was actively reporting `indexing: true`, and that the same real RPC later converged to the rebuilt search result. The Gateway then shut down cleanly and the synthetic state was removed.",
+        "branch": "fix/transcript-search-gateway-freeze",
+        "head_sha": "af68cb535507a379b18fe12c4c72c8b95b5f7f2f",
+        "author": "morluto",
+        "labels": [
+          "scripts",
+          "size: L",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "config/knip.config.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/check-kysely-guardrails.mjs",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/release-check.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-transcript-index.ts",
+            "additions": 6,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-transcript-reconcile.ts",
+            "additions": 445,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/sessions/session-transcript-reconcile.worker.ts",
+            "additions": 34,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/config/sessions/session-transcript-search.test.ts",
+            "additions": 238,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/sessions/session-transcript-search.ts",
+            "additions": 170,
+            "deletions": 62,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/tsdown-config.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "test/release-check.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tsdown.config.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 11,
+        "additions": 902,
+        "deletions": 64,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105738",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105738.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 107,
+          "gatingTotal": 102,
+          "counts": {
+            "SUCCESS": 72,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-13T00:06:38.905Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -38,19 +217,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 587,
+    "total_ms": 4639,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 305
+        "ms": 401
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1999
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 2
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -66,7 +245,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 251
+        "ms": 2159
       },
       {
         "name": "append_ledger",
