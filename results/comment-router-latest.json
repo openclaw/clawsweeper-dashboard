@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-14T17:01:13.782Z",
+  "generated_at": "2026-07-14T17:02:46.442Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T14:01:11.803Z",
+  "since": "2026-07-14T14:02:45.974Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    107367
+    107557
   ],
   "comment_ids": [
-    4971821453
+    4971696391
   ],
   "status_comment_id": 4971821805,
   "max_autoclose_targets": 8,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:107367:4971821453:2026-07-14T16:59:02Z:re_review",
-      "comment_id": "4971821453",
-      "comment_version_key": "4971821453:2026-07-14T16:59:02Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/107367#issuecomment-4971821453",
+      "idempotency_key": "comment-router:openclaw/openclaw:107557:4971696391:2026-07-14T16:44:31Z:re_review",
+      "comment_id": "4971696391",
+      "comment_version_key": "4971696391:2026-07-14T16:44:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/107557#issuecomment-4971696391",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 107367,
-      "author": "edenfunf",
-      "author_id": 146086744,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-14T16:59:02Z",
-      "comment_updated_at": "2026-07-14T16:59:02Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 4971821805,
+      "target_branch": null,
+      "issue_number": 107557,
+      "author": "mjnkao",
+      "author_id": 224045620,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-14T16:44:31Z",
+      "comment_updated_at": "2026-07-14T16:44:31Z",
+      "comment_body_sha256": "6991da9a66842d6535d25c3eeaed503d91841c11bee23facd5121e5a2b380355",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -73,150 +73,28 @@
       "expected_source_revision": null,
       "expected_review_activity_cursor": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 107367,
-          "dispatch_key": "router-2740a73cc3037d5e",
-          "dispatched_at": "2026-07-14T17:01:14.538Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-14T17:01:15.781Z",
-          "response_comment_id": "4971821805",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(line): keep group history recorded during a mention turn",
-        "body": "Closes #107363\n\n## What Problem This Solves\n\nIn a LINE group with `requireMention`, ambient (unmentioned) messages are buffered as context for the next mention turn. That buffer was cleared with a **whole-key delete** after each mention turn. Webhook dispatch is fire-and-forget, so a plain message sent while the agent is still handling a mention gets recorded mid-turn — and the post-turn clear then wipes the whole window, silently dropping that message from the next turn's context. In a busy group this loses ambient context on every answered turn.\n\n## Why This Change Was Made\n\n`handleMessageEvent` snapshots the history window (a copy), `await`s the agent, then clears the whole key. The unmentioned-record path runs on a concurrent dispatch, so a message recorded during the `await` is lost.\n\nThe fix reads the window and captures the identity keys it consumes in **one synchronous step** (`snapshotLineGroupHistory`), passes the materialized `inboundHistory` into `buildLineMessageContext` (which no longer touches the live map), and clears **only those keys** after the turn. Because the consumed set is derived from the exact entries the turn read, an entry is either in the turn's context and cleared afterwards, or recorded later and retained — there is no boundary where both can be true.\n\nThat single read boundary matters: an earlier revision captured the keys before media download and context construction, and a message arriving in that window would have been included in the turn's `InboundHistory` yet retained by cleanup — duplicated context on the next turn. The review round caught this; the snapshot and the context read are now the same operation.\n\nThe unmentioned-record path stamps the LINE message id so entries have a stable identity (with a `timestamp/sender/body` fallback). Cleanup stays **after** the turn, so a failed turn still leaves history intact for the retry — the failure semantics are unchanged.\n\nThe snapshot/clear helpers live in `group-history.ts` (next to `group-keys.ts` / `group-policy.ts`), mirroring how Telegram keeps its group-history retention in its own module; `bot-handlers.ts` (a size-capped file) calls them and stays net-negative.\n\n**Distinct from #101316** (per-user in-flight guard in `monitor.ts` / `in-flight-feedback.ts`, which governs concurrent-message *admission*): this PR is about the group history window's post-turn *cleanup* — a different mechanism in a different file.\n\n## User Impact\n\nBusy `requireMention` groups keep ambient messages that arrive while the bot is answering a mention, so the next turn sees the full recent context instead of a wiped window — and never sees an already-consumed message twice. No change for non-group chats or when there is no concurrency. A failed mention turn still preserves history for retry (unchanged).\n\n## Evidence\n\n### Red↔green\n\nDegrading the helper back to a whole-key clear (the original behavior) fails the concurrency e2e and the helper's retention test. Reverting the snapshot to the earlier placement (keys captured before media download and context construction) fails the two new boundary assertions:\n\n```\n × keeps a group message recorded during a mention turn instead of clearing it\n × keeps a message arriving between the history snapshot and context construction for the next mention\n      Tests  2 failed | 29 passed (31)\n```\n\nWith the fix restored, the full LINE extension suite is green:\n\n```\n Test Files  27 passed (27)\n      Tests  327 passed | 1 skipped (328)\n```\n\n### Tests\n\n```\ngroup-history.test.ts (helper unit):\n ✓ snapshotLineGroupHistory > reads the window and captures the identity keys of exactly the read entries\n ✓ snapshotLineGroupHistory > consumes only the entries inside the window limit\n ✓ snapshotLineGroupHistory > returns an empty snapshot without a map, key, or positive limit\n ✓ clearConsumedLineGroupHistory > keeps entries recorded after the snapshot and drops the consumed ones\n ✓ clearConsumedLineGroupHistory > deletes the key when every entry was consumed\n ✓ clearConsumedLineGroupHistory > no-ops without consumed keys\n ✓ clearConsumedLineGroupHistory > falls back to timestamp/sender/body identity when messageId is absent\n\nbot-handlers.test.ts (concurrency e2e):\n ✓ keeps a group message recorded during a mention turn instead of clearing it\n   (also asserts the turn's context received exactly the pre-mention window)\n ✓ keeps a message arriving between the history snapshot and context construction for the next mention\n   (parks the turn inside context construction, records an ambient message mid-window, asserts it stays\n    out of that turn's context, survives cleanup, and is consumed exactly once by the next mention)\n ✓ keeps group history intact when a mention turn fails, so the retry still has context\n\nbot-message-context.test.ts:\n ✓ passes the caller-provided inbound history through to the context payload\n```\n\n### Live behavior proof (real LINE `requireMention` group)\n\nRun from this branch on a real LINE channel (gateway + ngrok webhook, default `requireMention`, ids redacted). Gateway verbose log timeline:\n\n```\n00:26:13 line: skipping group message (requireMention, not mentioned)   <- ambient: \"Otter says the picnic moved to Sunday\"\n00:26:16 line: skipping group message (requireMention, not mentioned)   <- ambient chatter\n00:26:26 line: skipping group message (requireMention, not mentioned)   <- ambient chatter\n00:26:32 line inbound: from=line:group:C...7c6 \"...@openclaw please summarize what everyone discussed recently\"\n00:27:12 line: skipping group message (requireMention, not mentioned)   <- ambient MID-TURN: \"Correction: it is Monday, not Sunday\"\n00:27:22 [line] embedded run agent end: isError=false                   <- turn 1 replies; identity-based cleanup runs\n00:28:11 line inbound: from=line:group:C...7c6 \"...@openclaw did anyone correct the picnic day? which day is it now?\"\n00:28:24 [line] embedded run agent end: isError=false                   <- turn 2 replies\n```\n\nAgent replies (from the agent session transcript, `transcript_events`):\n\n- **Turn 1** (the correction arrived while this turn was running): *\"I can see … I only have access to the **last 3 messages** in the history provided … The picnic has been moved to **Sunday**\"* — the mid-turn correction is not in this turn's context; it arrived after the snapshot.\n- **Turn 2**: *\"Yes, there was a correction: **The picnic is now Monday**, not Sunday. Someone corrected it in the most recent message.\"* — the mid-turn ambient message survived the post-turn cleanup and reached the next mention exactly once. With the whole-key clear on `main`, turn 1's cleanup wipes this message and turn 2 cannot know about it.\n\nEnvironment note: current `main` rejects every LINE inbound agent turn with `GatewayDrainingError` (the post-ack fire-and-forget webhook dispatch inherits the released HTTP work admission; regression window opened Jul 12). The live run needed a 3-line local admission patch — `src/process/gateway-work-admission.ts` only, unrelated to this PR's diff and not part of it. A separate report with a deterministic repro is being prepared.\n\n### Static checks\n\n```\n$ pnpm tsgo:extensions          -> exit 0   (prod typecheck)\n$ pnpm tsgo:extensions:test     -> exit 0   (test typecheck)\n$ pnpm lint:extensions          -> exit 0   (oxlint)\n$ oxfmt --check <touched files> -> All matched files use the correct format.\n$ node scripts/check-max-lines-ratchet.mjs --base origin/main\n  max-lines ratchet OK: 1231 grandfathered suppressions.\n```\n\n`bot-handlers.ts` stays net-negative; the snapshot/clear logic lives in `group-history.ts`. Merged with current `main`.\n",
-        "branch": "fix/line-group-history-clear-race",
-        "head_sha": "2c0e7bbfab193df6e09a1c470f61e88475f9df95",
-        "author": "edenfunf",
-        "labels": [
-          "channel: line",
-          "size: M",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/line/src/bot-handlers.test.ts",
-            "additions": 251,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/bot-handlers.ts",
-            "additions": 14,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/bot-message-context.test.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/bot-message-context.ts",
-            "additions": 4,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/group-history.test.ts",
-            "additions": 81,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/line/src/group-history.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 6,
-        "additions": 422,
-        "deletions": 33,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-107367",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107367.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 79,
-          "gatingTotal": 74,
-          "counts": {
-            "SUCCESS": 42,
-            "QUEUED": 3,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 5,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan shared kit from iOS:QUEUED",
-            "Scan iOS dead code:QUEUED",
-            "Scan shared kit from macOS:QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan shared kit from iOS:QUEUED",
-            "Scan iOS dead code:QUEUED",
-            "Scan shared kit from macOS:QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-14T17:01:13.986Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4674,
+    "total_ms": 1796,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 378
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1441
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
@@ -224,7 +102,7 @@
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -236,11 +114,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2685
+        "ms": 1329
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
