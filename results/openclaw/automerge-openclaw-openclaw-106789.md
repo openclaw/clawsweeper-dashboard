@@ -2,21 +2,21 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-106789"
 mode: "autonomous"
-run_id: "29282949805"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29282949805"
-head_sha: "7cc5ef46d1b280410a97a82f6b9f53aea824f582"
+run_id: "29341671826"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29341671826"
+head_sha: "41ea43be6d257f1fa48f0b7b9e45fc5f503e1b08"
 workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-13T21:01:50.513Z"
+published_at: "2026-07-14T15:15:58.880Z"
 canonical: "#106789"
 canonical_issue: null
 canonical_pr: "#106789"
 actions_total: 1
 fix_executed: 0
-fix_failed: 1
-fix_blocked: 1
+fix_failed: 0
+fix_blocked: 0
 apply_executed: 0
-apply_blocked: 0
+apply_blocked: 1
 apply_skipped: 0
 needs_human_count: 0
 ---
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29282949805](https://github.com/openclaw/clawsweeper/actions/runs/29282949805)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29341671826](https://github.com/openclaw/clawsweeper/actions/runs/29341671826)
 
 Workflow conclusion: success
 
@@ -43,10 +43,10 @@ Make PR #106789 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 1 |
-| Fix blocked | 1 |
+| Fix failed | 0 |
+| Fix blocked | 0 |
 | Applied executions | 0 |
-| Apply blocked | 0 |
+| Apply blocked | 1 |
 | Apply skipped | 0 |
 | Needs human | 0 |
 
@@ -54,15 +54,13 @@ Make PR #106789 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| repair_contributor_branch | failed |  |  | Codex /review did not pass after final base synchronization: The Crabbox documentation change is safe and addresses the prior provider-routing concern, but the final base sync made the two-line test workaround obsolete. Restore those two test fields so the PR returns to its intended two-file `.agents` scope. |
-| execute_fix | blocked |  |  | Codex /review did not pass after final base synchronization: The Crabbox documentation change is safe and addresses the prior provider-routing concern, but the final base sync made the two-line test workaround obsolete. Restore those two test fields so the PR returns to its intended two-file `.agents` scope. |
-| automerge_repair_outcome_comment | updated | #106789 |  |  |
+| repair_contributor_branch | pushed | https://github.com/openclaw/openclaw/pull/106789 |  |  |
 
 ## Apply Actions
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| #106789 | merge_canonical | blocked | fix_pr | job does not allow merge |
 
 ## Worker Action Matrix
 
