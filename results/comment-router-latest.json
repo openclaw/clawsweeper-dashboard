@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-14T10:46:43.172Z",
+  "generated_at": "2026-07-14T10:49:14.569Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T07:46:42.619Z",
+  "since": "2026-07-14T07:49:12.522Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    106241
+    105863
   ],
   "comment_ids": [
-    4968189013
+    4968215115
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:106241:4968189013:2026-07-14T10:31:34Z:re_review",
-      "comment_id": "4968189013",
-      "comment_version_key": "4968189013:2026-07-14T10:31:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/106241#issuecomment-4968189013",
+      "idempotency_key": "comment-router:openclaw/openclaw:105863:4968215115:2026-07-14T10:34:48Z:re_review",
+      "comment_id": "4968215115",
+      "comment_version_key": "4968215115:2026-07-14T10:34:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/105863#issuecomment-4968215115",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 106241,
+      "issue_number": 105863,
       "author": "xialonglee",
       "author_id": 22994703,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-14T10:31:34Z",
-      "comment_updated_at": "2026-07-14T10:31:34Z",
-      "comment_body_sha256": "90073982553a5b1f9201c1506054321f10d5be98f761000a6d53593f345e96a0",
+      "comment_created_at": "2026-07-14T10:34:48Z",
+      "comment_updated_at": "2026-07-14T10:34:48Z",
+      "comment_body_sha256": "19985a465a67b3ab60596f17d31245a98e6352bce06fa67a4f4ec589bc28f767",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,7 +74,87 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): restore terminal state before exit in logs and hooks commands",
+        "body": "## What Problem This Solves\n\n`process.exit(1)` in `logs-cli.ts:685` and `hooks-cli.ts:153` bypasses the CLI's standard exit path (`runtime.exit()`), which calls `restoreTerminalState()` before terminating. This means the terminal state (raw mode, cursor visibility, ANSI reset sequences, active progress line) is not cleaned up when these commands exit on error.\n\nAdditionally, the hooks-cli replacement (`defaultRuntime.exit(1)`) breaks the `never` type contract because `defaultRuntime.exit()` returns `void`, not `never`.\n\n## Why This Change Was Made\n\nEvery other CLI command uses `runtime.exit()` → `restoreTerminalState()` → `process.exit()` as defined in `src/runtime.ts:89-96`. These two call sites were the only exceptions.\n\nThis revision routes both error paths through the canonical `defaultRuntime.exit(1)`:\n- **hooks-cli.ts**: Added `throw new Error(\"unreachable\")` after `defaultRuntime.exit(1)` — matches the same pattern in `src/runtime.ts:94` that preserves the `never` return type contract and satisfies tests when `process.exit` is mocked\n- **logs-cli.ts**: Replaced manual `restoreTerminalState()` + `process.exit(1)` with `defaultRuntime.exit(1)`, eliminating the duplicated cleanup and the now-unused `restoreTerminalState` import\n\n## User Impact\n\nVery low in practice — `logs follow` does not set raw mode itself, and `restoreTerminalState()` operations all have TTY guards. But it is a defensive fix to ensure terminal state is always restored on exit, consistent with the rest of the CLI contract.\n\n## Evidence\n\n- **Contract**: `src/runtime.ts:89-96` — `defaultRuntime.exit()` calls `restoreTerminalState(\"runtime exit\", ...)` before `process.exit()`\n- **Consistency**: All other CLI commands (config, plugins-search, devices, gateway run-loop) use `runtime.exit()`\n- **Commit history**: `git blame` confirms the raw `process.exit(1)` was added in the initial monorepo import commit with no subsequent discussion or adjustment\n\n### Tests\n- `pnpm test src/cli/hooks-cli.test.ts` — 5/5 passed\n- `pnpm test src/cli/logs-cli.test.ts` — 37/37 passed\n- `pnpm tsgo:core` — passed (prod type check)\n- `pnpm tsgo:core:test` — passed (test type check)\n- `node_modules/.bin/oxlint` — clean\n- `pnpm format:check` — passed\n\n### Real Behavior Proof\n\n**Setup**: Built CLI from branch, verified against real terminal.\n\n**Proof 1 — logs --follow fatal error path**:\n```\n$ openclaw logs --follow --url ws://127.0.0.1:18789\nGateway not reachable. Is it running and accessible?\nGateway target: ws://127.0.0.1:18789\nSource: cli --url\nConfig: /home/0668000452/.openclaw/openclaw.json\nHint: run `openclaw doctor`.\nEXIT=1\n```\nAfter error exit: terminal is in normal state — stdin echo works, no raw mode leakage, cursor/keyboard respond normally.\n\n**Proof 2 — hooks enable nonexistent-hook**:\n```\n$ openclaw hooks enable nonexistent-hook\nError: Hook \"nonexistent-hook\" not found\nEXIT=1\n```\nAfter error exit: terminal is in normal state — stdin/cursor normal, no raw mode leakage.\n\n### What Was Not Tested\n\n- `hooks` relay command error paths (requires a running agent session)\n- `hooks install` / `hooks update` error paths (require plugin registry)\n- TTY with actual raw mode set before error (the `restoreTerminalState()` path is already covered by `runtime.ts` tests; these error paths enter without raw mode, so the test primarily confirms no regression in terminal state management)\n\n## Changes\n\n| File | Change |\n|------|--------|\n| `src/cli/hooks-cli.ts` | Add `throw new Error(\"unreachable\")` after `defaultRuntime.exit(1)` to preserve `never` type contract |\n| `src/cli/logs-cli.ts` | Replace manual `restoreTerminalState` + `process.exit(1)` with canonical `defaultRuntime.exit(1)` |\n| `src/cli/logs-cli.test.ts` | Add `vi.mock(\"../runtime.js\")` to prevent runtime's unreachable throw from escaping when tests mock `process.exit` |\n",
+        "branch": "fix/logs-cli-restore-terminal-on-exit",
+        "head_sha": "1d762528fd8fda7188229b9221a5749e57ab62a1",
+        "author": "xialonglee",
+        "labels": [
+          "cli",
+          "size: XS",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/hooks-cli.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/logs-cli.test.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/logs-cli.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 19,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-105863",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-105863.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "gatingTotal": 97,
+          "counts": {
+            "FAILURE": 6,
+            "SUCCESS": 61,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Detect shared OpenClawKit scan scope:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "checks-fast-loc-ratchet:FAILURE",
+            "check-dependencies:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Detect shared OpenClawKit scan scope:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "checks-fast-loc-ratchet:FAILURE",
+            "check-dependencies:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,19 +165,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2081,
+    "total_ms": 2302,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 462
+        "ms": 587
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1375
       },
       {
         "name": "classify_comment_commands",
-        "ms": 57
+        "ms": 12
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +193,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1529
+        "ms": 255
       },
       {
         "name": "append_ledger",
