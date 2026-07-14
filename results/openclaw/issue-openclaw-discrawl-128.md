@@ -2,12 +2,12 @@
 repo: "openclaw/discrawl"
 cluster_id: "issue-openclaw-discrawl-128"
 mode: "autonomous"
-run_id: "29329278115"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29329278115"
+run_id: "29330452817"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29330452817"
 head_sha: "ecc6d03d1ec73267d434cb1905cfc216c78fcd70"
 workflow_conclusion: "failure"
-result_status: "blocked"
-published_at: "2026-07-14T11:39:37.551Z"
+result_status: "planned"
+published_at: "2026-07-14T11:58:13.269Z"
 canonical: "https://github.com/openclaw/discrawl/issues/128"
 canonical_issue: "https://github.com/openclaw/discrawl/issues/128"
 canonical_pr: null
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/discrawl
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29329278115](https://github.com/openclaw/clawsweeper/actions/runs/29329278115)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29330452817](https://github.com/openclaw/clawsweeper/actions/runs/29330452817)
 
 Workflow conclusion: failure
 
-Worker result: blocked
+Worker result: planned
 
 Canonical: https://github.com/openclaw/discrawl/issues/128
 
 ## Summary
 
-Issue #128 remains valid on main at 0dc6a87cad9a4652b944eb7366ef020371832f20. Required-service commands load configuration through internal/cli/cli.go and currently return the raw os.ErrNotExist error. A narrow fix and regression plan are ready, but the managed checkout and Go cache are read-only, so no branch changes or local validation could be completed.
+Issue #128 remains valid on current main SHA 0dc6a87cad9a4652b944eb7366ef020371832f20. The narrow fix is to improve only os.ErrNotExist returned by the shared required-service configuration loader, with focused CLI coverage using isolated HOME/XDG paths. No security or product-direction blocker exists; the executor can implement and validate a new fix PR.
 
 ## Impact
 
@@ -66,9 +66,9 @@ Issue #128 remains valid on main at 0dc6a87cad9a4652b944eb7366ef020371832f20. Re
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #128 | fix_needed | planned | canonical | The issue is a narrow, non-security CLI error-experience bug with no active implementation PR. |
-| cluster:issue-openclaw-discrawl-128 | build_fix_artifact | planned |  | The patch surface and validation contract are sufficiently narrow for a new fix PR. |
-| cluster:issue-openclaw-discrawl-128 | open_fix_pr | blocked |  | Opening a PR is blocked until the executor applies the fix in a writable checkout and completes the declared validation. |
+| #128 | fix_needed | planned | canonical | The bug is reproducible from the current code path, narrowly implementable, and has no viable canonical PR. |
+| cluster:issue-openclaw-discrawl-128 | build_fix_artifact | planned |  | The expected implementation and test surfaces are explicit and limited to two CLI files. |
+| cluster:issue-openclaw-discrawl-128 | open_fix_pr | planned |  | A new narrow PR is authorized after the executor applies and validates the fix artifact. |
 
 ## Needs Human
 
