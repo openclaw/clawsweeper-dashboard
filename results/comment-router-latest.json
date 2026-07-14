@@ -1,25 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-14T03:04:34.200Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-14T03:04:52.942Z",
+  "repo": "steipete/oracle",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T00:04:31.640Z",
+  "since": "2026-07-14T00:04:50.926Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
-  "item_numbers": [
-    83933
-  ],
-  "comment_ids": [
-    4964988303
-  ],
-  "status_comment_id": 4964988491,
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 6,
+  "commands_seen": 2,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +30,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:4964988303:2026-07-14T03:02:33Z:re_review",
-      "comment_id": "4964988303",
-      "comment_version_key": "4964988303:2026-07-14T03:02:33Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-4964988303",
-      "repo": "openclaw/openclaw",
+      "idempotency_key": "comment-router:steipete/oracle:320:4964901270:2026-07-14T02:44:18Z:re_review",
+      "comment_id": "4964901270",
+      "comment_version_key": "4964901270:2026-07-14T02:44:18Z",
+      "comment_url": "https://github.com/steipete/oracle/pull/320#issuecomment-4964901270",
+      "repo": "steipete/oracle",
       "target_branch": "main",
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 320,
+      "author": "jung0han",
+      "author_id": 27123002,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-14T03:02:33Z",
-      "comment_updated_at": "2026-07-14T03:02:33Z",
-      "comment_body_sha256": "64e0caea6bbb6c94ce8abc9e8b7cdca8f47577979ae9adeb9ece527f1714c8b0",
-      "status_comment_id": 4964988491,
+      "comment_created_at": "2026-07-14T02:44:18Z",
+      "comment_updated_at": "2026-07-14T02:44:18Z",
+      "comment_body_sha256": "2ef8e70e01a4f1288f1657886f37114eb9264f1b74941df87b1e8c980c263837",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -95,209 +91,105 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## What Problem This Solves\n\n`openclaw cron run` (a manual/operator run) on a `deleteAfterRun` one-shot (\"at\") job used to delete the job on success — consuming the one-shot so its scheduled fire never happened (issue #83538). Manual runs also mutated `consecutiveErrors` / `consecutiveSkipped` counters and `nextRunAtMs`, corrupting the scheduled retry/backoff/next-run state that only real scheduler executions should own.\n\nThe root cause is that `applyJobResult()` had no notion of *who* triggered a run: manual, scheduled (timer), and the gateway on-exit watcher all shared one finalization path, so `shouldDelete` and the counter mutations fired for every successful run regardless of origin.\n\n## Why This Change Was Made\n\nInstead of inferring \"manual vs scheduled\" from run outcome (fragile) or a single boolean, this PR threads an explicit `CronRunOrigin` (`\"timer\" | \"watcher-terminal\" | \"operator\"`) from the run entry point through the whole finalization path. Origin is the accurate ownership model:\n\n- `applyJobResult` derives `consumesOneShot` and `ownsSchedulerState` as `origin !== \"operator\"`, and records `lastRunWasManual = origin === \"operator\"`.\n- Operator runs record the outcome only — they never consume a `deleteAfterRun` one-shot and never touch scheduler counters / `nextRunAtMs` / enabled state.\n- `timer` and `watcher-terminal` runs keep consuming the run and owning scheduler state, preserving the merged on-exit `deleteAfterRun` contract from #104550 (a successful watcher-terminal one-shot is still deleted).\n\nThe invalid-persisted-run path (`skipInvalidPersistedManualRun` in `ops.ts`) previously hard-coded `origin: \"operator\"`. Because the gateway on-exit watcher reaches that path with `origin: \"watcher-terminal\"`, an invalid persisted watcher run was mis-attributed as operator, diverging scheduler-owned counters/alerts/terminal state from other watcher executions. The caller origin is now forwarded through preflight into that finalization so every path carries the true origin.\n\n## User Impact\n\n- Debugging/manually running a scheduled `deleteAfterRun` job no longer silently cancels its upcoming scheduled fire.\n- Manual runs no longer corrupt retry backoff, auto-disable, or next-run timing of scheduled jobs.\n- Gateway on-exit watcher-terminal one-shots continue to be consumed exactly as before (no behavior regression for the #104550 contract).\n- Invalid persisted watcher-terminal runs are now classified with scheduler-owned semantics instead of operator semantics, keeping counters/alerts consistent.\n\n## Evidence\n\nReal-behavior proof at the current head, driving the **unmodified git-tracked source** — `applyJobResult()` in `src/cron/service/timer.ts` and the store mutation in `applyOutcomeToStoredJob()` — through all three origins on a `deleteAfterRun` one-shot. Run inside a `node:24-bookworm-slim` container (container node v24.18.0, the supported runtime floor is 24.15.0) with the repo's own vitest, and corroborated by the committed regression suite.\n\n```\nHEAD: 28b206ff7d61aa313005031177b79cb7416ae931\nLoaded code:\n  src/cron/service/timer.ts :: applyJobResult()\n    consumesOneShot    = origin !== \"operator\"\n    ownsSchedulerState = origin !== \"operator\"\n    lastRunWasManual   = origin === \"operator\"\n    shouldDelete       = wouldDelete && consumesOneShot\n  src/cron/service/timer.ts :: applyOutcomeToStoredJob()\n    if (shouldDelete) store.jobs = jobs.filter(e => e.id !== job.id)\n  src/cron/service/ops.ts   :: skipInvalidPersistedManualRun()\n    applyJobResult(..., { origin: params.origin })   // caller origin forwarded\n\nPART A — OPERATOR PRESERVATION (deleteAfterRun one-shot, origin \"operator\", ok)\n  shouldDelete=false  jobPresentInStore=true\n  nextRunAtMs 1770372000000 -> 1770372000000 (unchanged)\n  consecutiveErrors 0 -> 0   enabled=true   lastRunWasManual=true\n  => one-shot NOT consumed, job preserved, scheduler state untouched      PASS\n\nPART B — WATCHER-TERMINAL CONSUMPTION (same one-shot, origin \"watcher-terminal\", ok)\n  shouldDelete=true   jobPresentInStore=false   lastRunWasManual=false\n  => successful on-exit one-shot IS consumed/deleted (#104550 kept)       PASS\n\nPART B2 — TIMER BASELINE (origin \"timer\", ok)\n  shouldDelete=true   jobPresentInStore=false   => consumes/deletes identically  PASS\n\nPART C — INVALID PERSISTED RUN, ORIGIN FORWARDING (status \"skipped\")\n  watcher-terminal: lastRunWasManual=false  consecutiveSkipped 0 -> 1 (scheduler-owned)\n  operator:         lastRunWasManual=true   consecutiveSkipped stays 0 (operator-attributed)\n  => invalid runs now carry the true caller origin                       PASS\n\nHarness result (container node v24.18.0, vitest 4.1.9): 4 passed (4)\nCommitted regression suite src/cron/service/ops.regression.test.ts: 21 passed (21)\nOVERALL: PASS\n```\n\nThe regression suite adds parametrized coverage asserting watcher-terminal invalid runs keep scheduled/consuming scheduler-state semantics while operator invalid runs stay operator-attributed.\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "28b206ff7d61aa313005031177b79cb7416ae931",
-        "author": "jerry-xin",
+        "title": "fix(browser): support GPT-5.6 Sol Pro effort",
+        "body": "## Summary\n\n- treat GPT-5.6 Sol version selection and the independent Pro effort control as separate browser state\n- add explicit CLI support for `--browser-thinking-time pro` with exact-label, fail-closed verification\n- reject explicit `pro` before browser submission unless GPT-5.6 Sol is selected with model strategy `select`\n- keep persistent config and MCP inputs on their existing `light|standard|extended|heavy` contract\n\n## Reproduction\n\nOn current `main`, this failed after the UI showed GPT-5.6 Sol with Pro selected:\n\n```text\nUnable to find model option matching \"GPT-5.6 Sol\"... Available: ... Pro, GPT-5.6 Sol.\n```\n\nThe picker now verifies the Sol version independently from the Pro effort pill, but only when Pro was explicitly requested. A carried-over Pro pill remains incompatible with base Sol.\n\n## Scope and compatibility\n\n`pro` is intentionally CLI/browser-only. One normalization boundary opts CLI parsing and browser configuration into `pro`; persistent `browser.thinkingTime` defaults and MCP schemas retain the existing four-level contract. This avoids expanding unrelated public surfaces for a UI-specific compatibility fix.\n\nThe PR does not edit `CHANGELOG.md`; release notes remain owned by the release process.\n\n## Verification\n\n- `pnpm check`\n- focused CLI/browser/MCP-boundary regressions — 225 passed\n- `pnpm vitest run`\n- `pnpm build`\n- live Chrome smoke of the unchanged picker mechanics with `--model gpt-5.6-sol --browser-thinking-time pro`\n  - `Thinking time: Pro (already selected)`\n  - `requested=GPT-5.6 Sol; resolved=GPT-5.6 Sol; verified=yes`\n  - exact response marker: `SOL PRO REVIEW SMOKE OK`\n- guarded non-Sol CLI smoke with `--model gpt-5.4 --browser-thinking-time pro`\n  - exited 1 before browser acquisition\n  - `Browser thinking time \"pro\" requires GPT-5.6 Sol with model strategy \"select\".`\n- prior Oracle review of the unchanged browser selection mechanics: `BLOCKERS None`, `VERDICT APPROVE`\n\nThis is a focused picker/effort compatibility fix and does not attempt the broader model-inventory redesign discussed in #319.\n",
+        "branch": "codex/gpt56-sol-picker-regression",
+        "head_sha": "ea8b1b57f140f2c641a2a8a9cc1dd10bd03bdb18",
+        "author": "jung0han",
         "labels": [
-          "app: web-ui",
-          "gateway",
-          "size: XL",
-          "proof: supplied",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "P2"
         ],
         "files": [
           {
-            "path": "packages/gateway-protocol/src/schema/cron.ts",
-            "additions": 2,
-            "deletions": 0,
+            "path": "src/browser/actions/modelSelection.ts",
+            "additions": 14,
+            "deletions": 8,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service-contract.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 87,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.removal-postcommit.test.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.restart-catchup.test.ts",
-            "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
-            "additions": 146,
-            "deletions": 47,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.trigger-eval.test.ts",
-            "additions": 12,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.regression.test.ts",
-            "additions": 186,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 28,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/state.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.backoff-config-readback.test.ts",
-            "additions": 7,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 835,
-            "deletions": 64,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 339,
-            "deletions": 270,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 8,
-            "deletions": 1,
+            "path": "tests/browser/modelSelection.test.ts",
+            "additions": 26,
+            "deletions": 8,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 16,
-        "additions": 1729,
-        "deletions": 427,
+        "changedFiles": 2,
+        "additions": 40,
+        "deletions": 16,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
+        "automerge_cluster_id": "automerge-steipete-oracle-320",
+        "automerge_job_path": "jobs/steipete/inbox/automerge-steipete-oracle-320.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 99,
-          "gatingTotal": 94,
+          "total": 4,
+          "gatingTotal": 4,
           "counts": {
-            "SUCCESS": 46,
-            "IN_PROGRESS": 23,
-            "SKIPPED": 26,
-            "FAILURE": 3,
-            "NEUTRAL": 1
+            "SUCCESS": 3,
+            "QUEUED": 1
           },
           "blockers": [
-            "Scan shared kit from iOS:IN_PROGRESS",
-            "Scan iOS dead code:IN_PROGRESS",
-            "Scan shared kit from macOS:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "checks-fast-loc-ratchet:FAILURE",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:FAILURE",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-docs:FAILURE"
+            "build (macos-latest):QUEUED"
           ],
           "pending": [
-            "Scan shared kit from iOS:IN_PROGRESS",
-            "Scan iOS dead code:IN_PROGRESS",
-            "Scan shared kit from macOS:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/2):IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "build (macos-latest):QUEUED"
           ],
-          "terminalBlockers": [
-            "checks-fast-loc-ratchet:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-docs:FAILURE"
-          ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-14T03:04:34.516Z"
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "comment-router:steipete/oracle:320:4964827316:2026-07-14T02:28:18Z:re_review",
+      "comment_id": "4964827316",
+      "comment_version_key": "4964827316:2026-07-14T02:28:18Z",
+      "comment_url": "https://github.com/steipete/oracle/pull/320#issuecomment-4964827316",
+      "repo": "steipete/oracle",
+      "target_branch": "main",
+      "issue_number": 320,
+      "author": "jung0han",
+      "author_id": 27123002,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-14T02:28:18Z",
+      "comment_updated_at": "2026-07-14T02:28:18Z",
+      "comment_body_sha256": "41ef1d32ccdf4b994b4858da9f9920b87b8c9a9fb0f57dec15f2b3a1e5672b2a",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -308,19 +200,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6055,
+    "total_ms": 2244,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 503
+        "ms": 970
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1949
+        "ms": 776
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 27
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -336,7 +228,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3484
+        "ms": 229
       },
       {
         "name": "append_ledger",
