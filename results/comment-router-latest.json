@@ -1,23 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-14T11:06:17.491Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-14T11:10:00.102Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T08:06:16.476Z",
+  "since": "2026-07-14T08:09:57.633Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
-  "item_numbers": [
-    106963
-  ],
-  "comment_ids": [
-    4968411043
-  ],
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
+  "scanned_comments": 10,
   "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
@@ -34,19 +30,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:106963:4968411043:2026-07-14T10:59:16Z:re_review",
-      "comment_id": "4968411043",
-      "comment_version_key": "4968411043:2026-07-14T10:59:16Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/106963#issuecomment-4968411043",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 106963,
-      "author": "SunnyShu0925",
-      "author_id": 265248434,
+      "idempotency_key": "comment-router:openclaw/crabbox:1063:4966862325:2026-07-14T08:19:34Z:re_review",
+      "comment_id": "4966862325",
+      "comment_version_key": "4966862325:2026-07-14T08:19:34Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1063#issuecomment-4966862325",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1063,
+      "author": "steipete",
+      "author_id": 58493,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-14T10:59:16Z",
-      "comment_updated_at": "2026-07-14T10:59:16Z",
-      "comment_body_sha256": "df32535068370a951a3f28b474f5fb96fab9a5aa485a123b2a3ce33ce2d0e2e2",
+      "comment_created_at": "2026-07-14T08:19:34Z",
+      "comment_updated_at": "2026-07-14T08:19:34Z",
+      "comment_body_sha256": "c02a41e8483cea4936f5de5e06f716c439d2cc124b0cc1ebff4533205710b65b",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,7 +70,98 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "admin",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): honor context cancel in provider IP wait loops",
+        "body": "## What Problem This Solves\n\nHetzner `waitForServerIP`, AWS `waitForServerIP`, DigitalOcean `waitForDropletIP`, and `waitForLoopbackVNC` waited between polls with bare `time.Sleep`, which ignores `ctx.Done()`. GCP and Azure already use `select` on context vs timer. A cancelled acquire/bootstrap could sit on the sleep for the full interval (3–5s, or 2s for VNC) even after the parent context was cancelled.\n\n## Evidence\n\nSibling implementations already correct:\n\n- `internal/cli/gcp.go` `WaitForServerIP` uses `select { case <-ctx.Done(); case <-time.After(...) }`\n- `internal/cli/azure.go` same pattern\n- Proxmox uses ticker + `deadlineCtx.Done()`\n\nBefore this change, Hetzner/AWS/DO used `time.Sleep` with no select.\n\n### Unit tests\n\n```bash\ngo test ./internal/cli/ -run TestSleepContext -count=1\ngo test ./internal/providers/digitalocean/ -run TestSleepContext -count=1\n```\n\n`TestSleepContextHonorsCancellation` fails to return promptly if sleep ignores context (hangs until the delay); with `sleepContext` it returns `context.Canceled` immediately.\n\n### Related\n\n- https://github.com/openclaw/crabbox/pull/1053 (AWS bootstrap host selection)\n- Pattern mirror of GCP/Azure IP wait loops in-tree\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Provider IP wait loops (Hetzner/AWS/DigitalOcean) and VNC wait used bare `time.Sleep`, so context cancel during the delay was ignored until the full sleep elapsed.\n- **Real environment tested:** macOS arm64, Go toolchain, branch `fix/wait-ip-context-cancel` at worktree `/private/tmp/crabbox-ip-wait`.\n- **Exact steps or command run after this patch:**\n\n  ```bash\n  cd /private/tmp/crabbox-ip-wait\n  go test ./internal/cli/ ./internal/providers/digitalocean/ -count=1 -run 'SleepContext|Sleep'\n  go run /tmp/crabbox-cancel-demo.go   # waitForIP-shaped loop: 3s poll, cancel after 50ms\n  ```\n\n- **Evidence after fix:** terminal output from the patched build:\n\n  ```console\n  === CONT  TestSleepContextHonorsCancellation\n  --- PASS: TestSleepContextHonorsCancellation (0.00s)\n  PASS\n  ok  github.com/openclaw/crabbox/internal/cli\n  ok  github.com/openclaw/crabbox/internal/providers/digitalocean\n\n  $ go run /tmp/crabbox-cancel-demo.go\n  waitForIP returned err=context canceled after 51ms\n  OK: cancelled wait returned promptly instead of blocking on 3s Sleep\n  ```\n\n- **Observed result after fix:** Cancelled waits return in ~50ms with `context.Canceled` instead of blocking for the full 3s sleep interval used by the IP poll loop.\n- **What was not tested:** Live cloud provider lease acquisition with real Hetzner/AWS/DO credentials and a real VNC tunnel cancel mid-wait.\n\n\n## Summary\n\n- Add `sleepContext` helper in `internal/cli` and DigitalOcean package.\n- Use it in Hetzner/AWS IP waits, DO droplet IP wait, and loopback VNC wait.\n- Tests for immediate cancel and normal completion.\n\n## Test plan\n\n- [x] `go test ./internal/cli/ -run TestSleepContext -count=1`\n- [x] `go test ./internal/providers/digitalocean/ -run TestSleepContext -count=1`\n- [x] `go build ./cmd/crabbox`\n- [x] `gofmt` clean\n\n",
+        "branch": "fix/wait-ip-context-cancel",
+        "head_sha": "8e74beabeaa59338f20dc9328727d7e6d0d0315c",
+        "author": "sebtardif",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦐 gold shrimp"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/aws.go",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/capabilities.go",
+            "additions": 9,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/run.go",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/sleep_context.go",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/cli/sleep_context_test.go",
+            "additions": 62,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "internal/providers/digitalocean/backend.go",
+            "additions": 14,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/providers/digitalocean/sleep_context_test.go",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 8,
+        "additions": 140,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-1063",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1063.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "REVIEW_REQUIRED",
+        "checks": {
+          "total": 12,
+          "gatingTotal": 12,
+          "counts": {
+            "SUCCESS": 12
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "re_review already completed after this command"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -83,21 +170,21 @@
   },
   "short_circuited": false,
   "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 4141,
+    "total_ms": 2711,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 536
+        "ms": 1139
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1242
       },
       {
         "name": "classify_comment_commands",
-        "ms": 102
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,11 +200,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3126
+        "ms": 231
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
