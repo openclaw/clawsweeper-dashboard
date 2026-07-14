@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-14T16:35:14.373Z",
+  "generated_at": "2026-07-14T16:36:11.074Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T13:35:11.788Z",
+  "since": "2026-07-14T13:36:08.281Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    107650
+    107005
   ],
   "comment_ids": [
-    4971530944
+    4971424598
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:107650:4971530944:2026-07-14T16:27:48Z:re_review",
-      "comment_id": "4971530944",
-      "comment_version_key": "4971530944:2026-07-14T16:27:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/107650#issuecomment-4971530944",
+      "idempotency_key": "comment-router:openclaw/openclaw:107005:4971424598:2026-07-14T16:16:02Z:re_review",
+      "comment_id": "4971424598",
+      "comment_version_key": "4971424598:2026-07-14T16:16:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/107005#issuecomment-4971424598",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 107650,
+      "issue_number": 107005,
       "author": "wangmiao0668000666",
       "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-14T16:27:48Z",
-      "comment_updated_at": "2026-07-14T16:27:48Z",
+      "comment_created_at": "2026-07-14T16:16:02Z",
+      "comment_updated_at": "2026-07-14T16:16:02Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -75,63 +75,76 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "admin",
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(ollama): preserve caller AbortSignal alongside request timeout",
-        "body": "## What Problem This Solves\n\nThe internal `requestOllamaJson` helper at `extensions/ollama/src/node-inference.ts:131` built its fetch init as `{ ...params.init, signal: AbortSignal.timeout(params.timeoutMs) }`. The spread put `params.init?.signal` in the object first, then `AbortSignal.timeout(...)` **silently replaced it**. Any caller that passed a caller signal — e.g. an `ollama.chat` node-host command invoked by a tool execution the agent has since abandoned, or a sub-agent run killed by `openclaw cancel` — saw its `AbortController.abort()` ignored; the fetch ran to the full `timeoutMs` (default 120s) before the runtime declared the request failed.\n\n## Why This Change Was Made\n\nMirrors the merged `createRequestSignal` pattern from Alix-007 #104290 (Discord directory lookups: the same `AbortSignal.timeout` override class for a `requestXxx` helper that already accepts a caller signal). The owner boundary is `requestOllamaJson`; the fix adds a focused `createOllamaRequestSignal({ callerSignal, timeoutMs })` helper that returns `{ signal, cleanup }`, merges caller signal + timeout controller via `AbortSignal.any([caller, controller])`, and clears the timer on every exit path. `runOllamaNodeChat` accepts an optional `callerSignal` and threads it into `requestOllamaJson`, and is exposed via `__testing` (matching the `telegram/thread-bindings` and `googlechat/google-auth.runtime` pattern) so the controlled-runtime test exercises the real production path. No new SDK surface, no public API change. `init?.signal` continues to work as a fallback source for any existing caller.\n\n## User Impact\n\nCaller-driven cancel now wins for ollama node-inference fetches. A node-inference chat run whose parent agent run is cancelled fails fast in ~200ms rather than waiting for the full `timeoutMs` to elapse. No behavior change when no caller signal is passed (existing discovery and chat fetches that rely on the timeout still work identically). No external plugin depends on the override-the-caller-signal behavior, and the new `callerSignal` parameter is optional, so no `merge-risk: 🚨 compatibility` is warranted.\n\n## Evidence\n\n### Root cause\n\n```text\n$ node --import tsx /tmp/ollama-production-before-proof.mts\nBUG REPRODUCED in production runtime: caller abort at 200ms was silently\noverridden; the fetch ran to the full 30s timeout (30043ms).\n```\n\nThe loopback is a real `node:http.createServer` listening on `127.0.0.1:<port>`, the fetch is real Node `fetch`, and the abort controller is a real `AbortController`. No mock of `globalThis.fetch`, no spy on internal timers. Production-shape call sequence: `/api/tags` → `/api/show` → `/api/chat` (only the last hangs).\n\n### Real production-runtime proof (after fix, rebased onto `d092feaf63`)\n\nSame loopback, same 200ms abort, same 30s timeout, same call sequence:\n\n```text\n$ node --import tsx /tmp/ollama-production-after-proof.mts\nPASS: caller abort honored in production runtime at 212ms\n```\n\n`createOllamaRequestSignal` merges the caller signal with the timeout controller, so the caller abort at 200ms reaches the fetch and aborts it at 212ms.\n\n### Controlled-runtime vitest (3 modes, no mock)\n\nThree production-runtime modes drive the real `runOllamaNodeChat` helper through a real `node:http.createServer` loopback that dispatches `/api/tags` and `/api/show` normally and applies the test mode to `/api/chat`. Each mode asserts the server-side `response.on(\"close\")` timestamp.\n\n```text\n$ node scripts/run-vitest.mjs run extensions/ollama/src/node-inference.test.ts\n\n RUN  v4.1.9 /media/vdc/OpenClaw\n\n Test Files  1 passed (1)\n      Tests  10 passed (10)\n   Duration   3.44s\n```\n\n- `normal mode`: server returns a chat payload, `result.response === \"local answer\"`, `elapsedMs < 2000ms`.\n- `caller-abort mode`: `/api/chat` hangs, caller aborts at 200ms, task rejects, `elapsedMs < 2000ms`, server-side `requestClosedAt - callStart < 2000ms`.\n- `timeout mode`: `/api/chat` hangs, 100ms `timeoutMs` aborts without any caller signal, task rejects, `elapsedMs >= 80ms` and `< 2000ms`, server-side close in `< 2000ms`.\n\n### Validation\n\n```text\n$ git diff HEAD --stat\n extensions/ollama/src/node-inference.test.ts | 151 +++++++++++++++++++++++++++\n extensions/ollama/src/node-inference.ts      |  39 ++++++-\n 2 files changed, 189 insertions(+), 1 deletion(-)\n\n$ node_modules/.bin/oxlint --threads=1 --config .oxlintrc.json \\\n    extensions/ollama/src/node-inference.ts \\\n    extensions/ollama/src/node-inference.test.ts\n   (clean)\n\n$ node_modules/.bin/tsgo -p tsconfig.json --noEmit 2>&1 | grep -E 'ollama'\n   (clean — no errors in extensions/ollama/*)\n```\n\n2 files / 1 commit (`986763f072`), 10/10 vitest pass, oxlint clean. Tests : src = 151 : 39 ≈ 4×. Necessity check: no open or recent PR targets the same `AbortSignal.timeout` override class for the ollama plugin (#96635 / #98079 / #94495 are all stream-stall / reader-leak issues).\n",
-        "branch": "fix/ollama-preserve-caller-signal",
-        "head_sha": "986763f072e87ae462d08e5e35deecf1b85bef2a",
+        "title": "fix(discord): voice roster prompt corrupts boundary emoji",
+        "body": "<!--\nRequired PR title (user-visible symptom):\nfix(discord): drop lone-surrogate nick at MAX_LABEL_CODE_UNITS boundary\n-->\n\n<details>\n<summary>Additional instructions</summary>\n\n**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers\ncan help update the branch when needed.\n\n</details>\n\n## What Problem This Solves\n\nDiscord voice roster prompts can render replacement glyphs when a Discord\nuser's `nick`, `global_name`, or `username` contains a supplementary-plane\nemoji whose UTF-16 surrogate pair straddles the 100-code-unit truncation\nboundary in `extensions/discord/src/voice/participant-context.ts:21` (pre-fix).\n`String.prototype.slice(0, 100)` cuts between the high and low surrogate,\nleaving a lone high surrogate in `extraSystemPrompt`. Downstream consumers\nrender the dangling surrogate as `�` in operator-visible transcripts.\n\nThe boundary is reachable: Discord nicks can be up to 32 UTF-8 bytes, an\nemoji is 4 UTF-8 bytes / 2 UTF-16 code units, and several emoji can sit at\nthe 99-100 boundary.\n\n## Why This Change Was Made\n\n`extensions/discord/src/voice/participant-context.ts:21` (`normalizeLabel`)\nnow uses `truncateUtf16Safe` from `openclaw/plugin-sdk/text-utility-runtime`\n— the same helper the discord plugin already imports at five sibling call\nsites (`outbound-adapter.ts:61`, `voice/log-preview.ts:10`,\n`send.webhook.ts:59`, `send.outbound.ts:121`, `monitor/thread-title.ts:136`).\nThe helper pulls `end` back by one code unit when truncation would split\na surrogate pair, dropping the partial pair whole. No new SDK surface, no\npublic API change, no config schema change, no touched files outside\n`extensions/discord/src/voice/`.\n\nThe 100-code-unit display budget, trim/collapse-whitespace normalization,\nfallback to `userId`, sort-by-`userId` ordering, and 20-participant cap\nare byte-identical to the pre-fix code.\n\n## User Impact\n\nDiscord voice sessions now keep emoji-bearing display names well-formed in\nthe roster prompt shown to the agent. Short nicknames and emoji inside the\n100-unit window are unchanged. Lone-surrogate rendering glitches in\noperator-visible transcripts of voice sessions are eliminated.\n\n## Evidence\n\n### 4.1 Focused vitest output — fix mode vs baseline\n\nThe committed regression test drives the real\n`appendDiscordVoiceParticipantContext` end-to-end through\n`resolveDiscordVoiceIngressContextWithParticipants` (only the gateway\nplugin client is stubbed because `listVoiceChannelStates` is the only\nway to inject voice state without a real Discord connection; the\nupstream `resolveDiscordVoiceIngressContext`, the real\n`DiscordVoiceSpeakerContextResolver`, the real\n`authorizeDiscordVoiceIngress`, and the real\n`buildDiscordGroupSystemPrompt` all run live). The distinguishing\nmetric is the parsed `display_name=` value out of the rendered\n`extraSystemPrompt`.\n\n| # | Case (boundary) | Default fix mode | `LABEL_TRUNCATION_MODE=baseline` |\n|---|---|:---:|:---:|\n| 1 | 99 ASCII + 🦞 at 99/100 (single pair straddles) | ✅ pass (99 ASCII, emoji dropped whole) | ❌ fail (lone high surrogate `D83E` at tail) |\n| 2 | 99 ASCII + 🦞 trailing edge of the 100th code unit | ✅ pass (99 ASCII, emoji dropped whole) | ❌ fail (lone high surrogate `D83E` at tail) |\n| 3 | 95 ASCII + 5 emoji (last pair straddles 99/100) | ✅ pass (95 ASCII + 2 emoji, three pairs dropped whole) | ❌ fail (lone high surrogate `D83D` at tail) |\n| 4 | 2 emoji (no cut, sanity baseline) | ✅ pass (unchanged) | ✅ pass (unchanged, both modes agree) |\n\nTests 1-3 are the sole distinguishers — they assert the bug shape (lone\nsurrogate vs clean). Test 4 is the no-cut baseline (sanity check that\nthe helper does not over-truncate).\n\n### 4.2 Reproduction command and outputs\n\n```bash\n# Fix mode (current head) — 4/4 pass\nnode scripts/run-vitest.mjs extensions/discord/src/voice/participant-context.test.ts\n\n# Baseline mode (control-red) — 3 failed, 1 passed\nLABEL_TRUNCATION_MODE=baseline node scripts/run-vitest.mjs \\\n  extensions/discord/src/voice/participant-context.test.ts\n```\n\nBaseline output:\n\n```text\nTest Files  1 failed (1)\n     Tests  3 failed | 1 passed (4)\n```\n\nThe baseline mode reverts the SDK `truncateUtf16Safe` to raw\n`String.prototype.slice(0, 100)` via a test-only `vi.mock` factory\n(`LABEL_TRUNCATION_MODE` is read inside the factory, not from the\nproduction `participant-context.ts`). The production import path is\nunaffected.\n\n### 4.3 What I checked\n\n- **Current-main defect**: `extensions/discord/src/voice/participant-context.ts:21` (pre-fix, on `origin/main`) still has `normalized.slice(0, 100)` in `normalizeLabel`; the regression test reproduces the lone high surrogate at the 99/100 boundary in three of four cases.\n- **Proposed runtime repair**: `normalizeLabel` calls `truncateUtf16Safe(normalized, MAX_LABEL_CODE_UNITS)` instead of `normalized.slice(0, MAX_LABEL_CODE_UNITS)`. The helper is the existing shared UTF-16-safe truncation helper from `openclaw/plugin-sdk/text-utility-runtime`.\n- **Sibling / owner pattern**: the same shape is already used by [PR #106328](https://github.com/openclaw/openclaw/pull/106328) (`fix(chat): large paste preview corrupts boundary emoji`, zhangguiping-xydt, merged 2026-07-13) on the Control UI large-paste preview surface and by `extensions/discord/src/voice/log-preview.test.ts` (3 it blocks, 19 lines, no mock, no proof dump — the existing sibling test for the same helper in the same directory). The fix shape here is a one-line + import + named-constant patch; no new helper pattern is invented.\n- **Test mock scope**: the only mocked collaborator is the gateway plugin client (the only way to inject `listVoiceChannelStates` state without a real Discord connection). The upstream `resolveDiscordVoiceIngressContext`, the production `appendDiscordVoiceParticipantContext` → `memberLabel` → `normalizeLabel` → `truncateUtf16Safe` chain, `DiscordVoiceSpeakerContextResolver`, `authorizeDiscordVoiceIngress`, and `buildDiscordGroupSystemPrompt` all run live.\n- **`LABEL_TRUNCATION_MODE` scope**: the env var is read inside the test file's `vi.mock` factory via `vi.hoisted`; the production `participant-context.ts` imports the real helper unconditionally. The env var cannot affect production.\n\n### 4.4 Impact-surface review\n\nThe only production change is one line in `normalizeLabel` (slice → `truncateUtf16Safe`) plus one named constant and one import. Nothing else in the production file is touched.\n\n| Site | Status |\n|---|---|\n| `participant-context.ts:21` `normalizeLabel` (the slice → helper swap) | **fixed** — `truncateUtf16Safe(normalized, MAX_LABEL_CODE_UNITS)` replaces `normalized.slice(0, MAX_LABEL_CODE_UNITS)` |\n| `participant-context.ts:35-41` `memberLabel` (nick → global_name → username fallback chain) | unchanged (still calls `normalizeLabel` on each candidate) |\n| `participant-context.ts:200-240` `appendDiscordVoiceParticipantContext` (the roster builder) | unchanged (calls `memberLabel` and `normalizeLabel` as before; the new helper is transparent to callers) |\n| `participant-context.ts:242-274` `resolveDiscordVoiceIngressContextWithParticipants` (the entry point) | unchanged (same signature, same `extraSystemPrompt` shape) |\n| Five other `truncateUtf16Safe` call sites in the discord plugin (`outbound-adapter.ts:61`, `voice/log-preview.ts:10`, `send.webhook.ts:59`, `send.outbound.ts:121`, `monitor/thread-title.ts:136`) | unchanged (already use the helper) |\n| `openclaw/plugin-sdk/text-utility-runtime` (the helper itself) | unchanged (no new export, no signature change) |\n| `extensions/discord/src/voice/ingress.ts` (upstream owner/allowlist gate) | unchanged (real production function is called by the regression test, not mocked) |\n\n### 4.5 Sibling reference\n\nThis PR is part of the same UTF-16 boundary wave zhangguiping-xydt and\nmushuiyu886 have been driving since 2026-07-09. The pattern (existing\nshared helper + one-line call-site swap + colocated regression test) is\nconsistent across the family:\n\n- [PR #106328](https://github.com/openclaw/openclaw/pull/106328) `fix(chat): large paste preview corrupts boundary emoji` (zhangguiping-xydt, merged 2026-07-13) — Control UI large-paste preview surface, same one-line + test pattern, same helper, 🦞 diamond lobster.\n- [PR #102949](https://github.com/openclaw/openclaw/pull/102949) `fix(nextcloud-talk): keep error snippets UTF-16 safe` (mushuiyu886, merged 2026-07-09) — local HTTP server proof, 🦀 challenger crab.\n- [PR #102969](https://github.com/openclaw/openclaw/pull/102969) `fix(sandbox): keep redacted session keys UTF-16 safe` (mushuiyu886, merged 2026-07-09) — three run URLs, 🦞 diamond lobster.\n- `extensions/discord/src/voice/log-preview.test.ts` (existing sibling test for the same helper in the same directory) — 3 it blocks, 19 lines, no mock, no proof dump; the canonical minimal shape.\n\nThis PR is the discord-voice variant of the same wave. It is the simplest\nof the family: a 1-line + import + named-constant production change, a\ncolocated regression test, and no touched files outside\n`extensions/discord/src/voice/`.\n\n### 4.6 Verification commands\n\n```bash\n# Format\nnode_modules/.bin/oxfmt --check --threads=1 \\\n  extensions/discord/src/voice/participant-context.ts \\\n  extensions/discord/src/voice/participant-context.test.ts\n\n# Lint\nnode_modules/.bin/oxlint --threads=1 --config .oxlintrc.json \\\n  extensions/discord/src/voice/participant-context.ts \\\n  extensions/discord/src/voice/participant-context.test.ts\n\n# Test (4 cases pass in default fix mode)\nnode scripts/run-vitest.mjs \\\n  extensions/discord/src/voice/participant-context.test.ts\n\n# Test (3 of 4 fail in baseline control-red mode; proves the test catches the bug)\nLABEL_TRUNCATION_MODE=baseline node scripts/run-vitest.mjs \\\n  extensions/discord/src/voice/participant-context.test.ts\n\ngit diff --check\n```\n\n### Known limits\n\n- **No live Discord voice session**: the regression test exercises the\n  production `resolveDiscordVoiceIngressContext` +\n  `appendDiscordVoiceParticipantContext` chain end-to-end against a stub\n  gateway plugin client (the only way to inject `listVoiceChannelStates`\n  state without a real Discord connection). It does not exercise a live\n  Discord voice session, the public `discord.com` Gateway WebSocket, real\n  REST quotas, or the production `.unref()` path. The proof is\n  **controlled-local** with a real `extraSystemPrompt` rendered by the\n  real production functions, not **live Discord** with a real bot in a\n  real channel.\n\n- **`LABEL_TRUNCATION_MODE=baseline` is test-only**: the env var only\n  changes the `vi.mock` factory's resolved binding for `truncateUtf16Safe`.\n  The production `participant-context.ts` imports the real helper\n  unconditionally; the env var cannot affect production.\n",
+        "branch": "fix/discord-voice-participant-label-utf16-boundary",
+        "head_sha": "108f255426437a8fd5a2b0a91fdfb4b131b062ea",
         "author": "wangmiao0668000666",
         "labels": [
+          "channel: discord",
           "size: S",
-          "extensions: ollama"
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/ollama/src/node-inference.test.ts",
-            "additions": 157,
+            "path": "extensions/discord/src/voice/participant-context.test.ts",
+            "additions": 127,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "extensions/ollama/src/node-inference.ts",
-            "additions": 38,
+            "path": "extensions/discord/src/voice/participant-context.ts",
+            "additions": 7,
             "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 195,
+        "additions": 134,
         "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-107650",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107650.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-107005",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107005.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 87,
-          "gatingTotal": 82,
+          "total": 100,
+          "gatingTotal": 95,
           "counts": {
-            "SUCCESS": 43,
-            "SKIPPED": 41,
-            "FAILURE": 3
+            "SUCCESS": 59,
+            "SKIPPED": 34,
+            "QUEUED": 3,
+            "IN_PROGRESS": 1,
+            "FAILURE": 2,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "checks-fast-loc-ratchet:FAILURE",
-            "check-dependencies:FAILURE",
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:IN_PROGRESS",
+            "Scan shared kit from macOS:QUEUED",
+            "check-test-types:FAILURE",
             "openclaw/ci-gate:FAILURE"
           ],
-          "pending": [],
+          "pending": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:IN_PROGRESS",
+            "Scan shared kit from macOS:QUEUED"
+          ],
           "terminalBlockers": [
-            "checks-fast-loc-ratchet:FAILURE",
-            "check-dependencies:FAILURE",
+            "check-test-types:FAILURE",
             "openclaw/ci-gate:FAILURE"
           ],
           "externalBlockers": []
@@ -150,19 +163,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2859,
+    "total_ms": 3020,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 642
+        "ms": 486
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1857
+        "ms": 2097
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 17
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -178,7 +191,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 274
+        "ms": 228
       },
       {
         "name": "append_ledger",
