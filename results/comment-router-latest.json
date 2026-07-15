@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-15T00:55:06.874Z",
+  "generated_at": "2026-07-15T00:59:47.580Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T21:55:03.943Z",
+  "since": "2026-07-14T21:59:45.272Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    107384
+    107285
   ],
   "comment_ids": [
-    4975634640
+    4975669655
   ],
-  "status_comment_id": 4975634964,
+  "status_comment_id": 4975669981,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:107384:4975634640:2026-07-15T00:52:49Z:re_review",
-      "comment_id": "4975634640",
-      "comment_version_key": "4975634640:2026-07-15T00:52:49Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/107384#issuecomment-4975634640",
+      "idempotency_key": "comment-router:openclaw/openclaw:107285:4975669655:2026-07-15T00:57:37Z:re_review",
+      "comment_id": "4975669655",
+      "comment_version_key": "4975669655:2026-07-15T00:57:37Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/107285#issuecomment-4975669655",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 107384,
-      "author": "maweibin",
-      "author_id": 18023423,
+      "issue_number": 107285,
+      "author": "xydt-tanshanshan",
+      "author_id": 291969148,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-15T00:52:49Z",
-      "comment_updated_at": "2026-07-15T00:52:49Z",
-      "comment_body_sha256": "2ffb916c017c1c5a5b56c39e0e847d9ea499352cf5bc83b8cffeb3d84a6ab6b7",
-      "status_comment_id": 4975634964,
+      "comment_created_at": "2026-07-15T00:57:37Z",
+      "comment_updated_at": "2026-07-15T00:57:37Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 4975669981,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -80,125 +80,97 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 107384,
-          "dispatch_key": "router-e353a1d8bea7071e",
-          "dispatched_at": "2026-07-15T00:55:07.929Z"
+          "item_number": 107285,
+          "dispatch_key": "router-1ca836fb9cce390c",
+          "dispatched_at": "2026-07-15T00:59:48.750Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-15T00:55:09.117Z",
-          "response_comment_id": "4975634964",
+          "commented_at": "2026-07-15T00:59:50.595Z",
+          "response_comment_id": "4975669981",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(gateway): evict oldest rate-limit bucket by window age, not insertion order",
-        "body": "## What Problem This Solves\n\n`consumeControlPlaneWriteBudget()` uses `controlPlaneBuckets.keys().next().value` to pick the bucket to evict at the 10,000-entry hard cap. The variable is named `oldest`.\n\n`Map.keys().next()` returns the first key by **insertion order**, not the bucket whose **window was reset least recently** (the oldest by wall-clock time). These two orderings diverge because:\n\n- `Map.set(existingKey, value)` for an already-present key updates the value but **leaves the key's insertion-order position unchanged** (ECMAScript §23.1.3.9, step 5: \"If p is not present, append p to the end of the List\" — no repositioning for existing keys).\n- An active bucket that resets its window every ~60s stays in its original insertion-order slot indefinitely.\n- Newer buckets inserted later can have older windows while sitting behind the never-repositioned early bucket in insertion order.\n\nThe result: `keys().next()` can evict a **recently-reset, still-active** bucket while leaving genuinely older (expired) buckets in the map. The active client loses its rate-limit state and gets a free pass.\n\n## Why This Change Was Made\n\n**Strategy: fix the ordering invariant at window-reset time, not at eviction time.**\n\nWhen an existing bucket's window expires and is reset (line 72–74), the code now repositions the key:\n\n```typescript\nif (controlPlaneBuckets.has(key)) {\n  controlPlaneBuckets.delete(key);  // remove from old position\n}\ncontrolPlaneBuckets.set(key, { count: 1, windowStartMs: nowMs });  // append to end\n```\n\nThis guarantees that insertion order **always equals window-reset order**: the key at the front of `keys().next()` is always the bucket whose window was reset least recently — the true oldest by wall-clock time.\n\n**Why delete+set instead of a full-map scan:** The original submission (see PR history) used a `for-of` loop scanning all 10,000 entries at eviction time. That path is synchronous inside `consumeControlPlaneWriteBudget`, which runs in the gateway request loop before dispatch. Sustained identity churn keeps the map full, causing every new-identity request to scan 10,000 entries. The repositioning approach is O(1) for both the common path and eviction: `Map.delete` + `Map.set` are both amortized O(1), and eviction stays the original `keys().next()`.\n\nThis matches the same file's own `pruneStaleControlPlaneBuckets()` design, which walks the map by `windowStartMs` in a **periodic maintenance timer** (not in the synchronous request path).\n\n## User Impact\n\nAt the 10,000 unique device/IP capacity limit, recently-active clients are no longer evicted in favor of genuinely stale buckets. No API or config changes. The latency per `consumeControlPlaneWriteBudget` call is unchanged (O(1) in all paths).\n\n## Evidence\n\n### Negative control (upstream main source + new regression test)\n\nThe new saturation test (`\"preserves a recently-reset entry through saturated eviction\"`) applied to `upstream/main` source:\n\n```\n$ node scripts/run-vitest.mjs src/gateway/control-plane-rate-limit.test.ts --run\n\n FAIL  control-plane-rate-limit > preserves a recently-reset entry through saturated eviction\nAssertionError: expected { allowed: true, remaining: 2 } to match { allowed: true, remaining: 1 }\n\n- Expected  |  + Received\n  \"remaining\": 1  |  \"remaining\": 2\n```\n\n`remaining: 2` means the survivor was **evicted** — its bucket was treated as a new entry with a fresh budget (count=1 → remaining=2 on first consume). This is because `Map.set()` never repositioned it, so despite its window being 70s newer than every other entry in the map, it was still at the front of insertion order (inserted first at t=0).\n\n### After fix (this branch)\n\n```\n$ node scripts/run-vitest.mjs src/gateway/control-plane-rate-limit.test.ts --run\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\n`remaining: 1` means the survivor **kept its bucket**: the window-reset repositioned it to the end of insertion order before eviction. Two budget units are consumed (the reset at t=70s + this verification call).\n\n### O(1) complexity proof\n\nThe eviction path remains the original single `keys().next()` call. The repositioning adds `has()` + `delete()` before `set()` only when an **existing** key's window is being reset — both are amortized O(1). No loop was added to any path.\n\n### Regression guard\n\nThe existing test `\"control-plane bucket map evicts the oldest identity at its hard cap\"` (insert \"oldest\" first, fill map, verify \"oldest\" was evicted) continues to pass unchanged. In that test \"oldest\" IS the correct eviction candidate — it was inserted first and never reset — so the O(1) repositioning does not alter the outcome.\n\n## Regression Test Plan\n\n```\n$ node scripts/run-vitest.mjs src/gateway/control-plane-rate-limit.test.ts --run\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n\n$ node scripts/run-oxlint.mjs src/gateway/control-plane-rate-limit.ts\nexit 0\n\n$ node scripts/run-oxlint.mjs src/gateway/control-plane-rate-limit.test.ts\nexit 0\n\n$ git diff --stat upstream/main..\n src/gateway/control-plane-rate-limit.test.ts | 39 ++++++++++++++++++++++++++++\n src/gateway/control-plane-rate-limit.ts      | 31 +++++++++++-----------\n 2 files changed, 55 insertions(+), 15 deletions(-)\n```\n\nNet source change: +7 lines of comments, +0 lines of logic (the repositioning is 3 lines: `if (has) delete;` — the existing `set()` was already there). Test change: +39 lines (one new saturation regression test).\n\n## Root Cause\n\nIn `consumeControlPlaneWriteBudget()`, the hard-cap eviction used `controlPlaneBuckets.keys().next().value` as a proxy for \"oldest bucket.\" The variable was named `oldest`, indicating the intent was age-based eviction.\n\n`Map.keys().next()` returns keys by insertion order. Per ECAMScript §23.1.3.9, `Map.set(key, value)` for an existing key updates the value but does **not** reposition the key. A bucket that resets its window via `set()` stays in its original insertion-order slot. Over many reset cycles, the insertion order drifts from window-age order.\n\nThe fix makes insertion order equal to window-reset order by repositioning at reset time (delete + set). This is O(1) and keeps eviction correct in all paths.\n\n## AI Assistance\n\nRoot cause analysis, implementation, test, and negative control were drafted with agent assistance. All commands were run locally.",
-        "branch": "fix/rate-limit-eviction-oldest-window",
-        "head_sha": "b655f3d75bbfac6fb49f69ed8e37019e570bffb1",
-        "author": "maweibin",
+        "title": "fix(doctor): preserve allowlist entries for version-bound runtime plugins during stale config scan",
+        "body": "## What Problem This Solves\r\n\r\nWhen a previously bundled `@openclaw/codex` plugin is externalized to an npm package, `doctor --fix` silently removes `\"codex\"` from `plugins.allow` during the first run after upgrade. The allowlist entry is pruned because `plugins.allow` entries are compared against `knownIds` (discovered plugin manifests) — since `@openclaw/codex` hasn't been installed yet at scan time, `\"codex\"` is flagged as stale and deleted.\r\n\r\nReported as issue #107226.\r\n\r\n## Why This Change Was Made\r\n\r\nThe stateful repair sequencing at `src/commands/doctor/repair-sequencing.ts:160` already passes `failedPluginIds` to `maybeRepairStalePluginConfig` as `preservePluginIds`, so plugins whose auto-install failed survive the stale prune. However, codex in `plugins.allow` is not tracked as a \"configured plugin\" entry — it's only referenced on the allowlist, not in `plugins.entries`. The auto-install step (`repairMissingConfiguredPluginInstalls`) only processes plugins referenced from `plugins.entries` or agent harness configurations, so `plugins.allow`-only entries are never in `failedPluginIds`.\r\n\r\nThe fix adds `VERSION_BOUND_RUNTIME_PLUGIN_IDS` (currently `new Set([\"codex\"])`) to the `preservePluginIds` spread at the call site. The protection lives in `repair-sequencing.ts`, not in the scanner — the scanner continues to flag codex as stale so diagnostics remain visible to users. This is a single-owner, scalar change in the repair sequencing coordinator.\r\n\r\n## User Impact\r\n\r\nTransparent — `plugins.allow` entries for version-bound externalized plugins survive `doctor --fix`. No configuration change needed.\r\n\r\n## Behavior Matrix\r\n\r\n| Scenario | Before | After | Changed? |\r\n|---|---|---|---|\r\n| `plugins.allow: [\"codex\"]` on first post-upgrade `doctor --fix` | `\"codex\"` removed (silent allowlist drop) | `\"codex\"` preserved (survives until release backfill install) | ✅ Fix |\r\n| `plugins.allow: [\"codex\"]` after `@openclaw/codex` is installed | `\"codex\"` kept (knownIds match) | `\"codex\"` kept (knownIds match) | ❌ No |\r\n| Non-version-bound stale plugin entry (e.g., retired channel) | Removed | Removed | ❌ No |\r\n\r\n## Evidence\r\n\r\n**Branch**: `xydt-tanshanshan:fix/preserve-allowlist-version-bound-107226-clean` (2 commits)\r\n\r\n**Commit 1** (`11c6ac0eb3`): Export `VERSION_BOUND_RUNTIME_PLUGIN_IDS`, merge into `preservePluginIds`, update test mocks and expectations.\r\n\r\n**Commit 2** (`05ec7037e3`): Restore codex to scanner stale expectation — `scanStalePluginConfig` flags codex in `plugins.allow` as stale; `repair-sequencing` preserves the entry via `preservePluginIds`.\r\n\r\n**Test results** (2026-07-15):\r\n\r\n| Test suite | Tests | Result |\r\n|---|---|---|\r\n| `stale-plugin-config.test.ts` | 18 | ✅ 18 passed |\r\n| `repair-sequencing.test.ts` | 16 | ✅ 16 passed |\r\n\r\n**Relevant code paths**:\r\n\r\n`src/commands/doctor/repair-sequencing.ts:160`:\r\n```ts\r\npreservePluginIds: new Set([...failedPluginIds, ...VERSION_BOUND_RUNTIME_PLUGIN_IDS]),\r\n```\r\n\r\n`VERSION_BOUND_RUNTIME_PLUGIN_IDS` is exported from `missing-configured-plugin-install.ts` as `new Set([\"codex\"])`.\r\n\r\n**Scanner vs repair layering** (verified by tests):\r\n\r\n- `scanStalePluginConfig` flags codex in `plugins.allow` as stale (codex is not in `knownIds`). No scanner-level exemption.\r\n- `maybeRepairStalePluginConfig` without `preservePluginIds` removes codex from allowlist.\r\n- `maybeRepairStalePluginConfig` called from `runDoctorRepairSequence` with `preservePluginIds` (including codex from `VERSION_BOUND_RUNTIME_PLUGIN_IDS`) preserves codex.\r\n- The `repair-sequencing.test.ts` tests verify `preservePluginIds` propagation: `[\"brave\", \"codex\"]` and `[\"whatsapp\", \"codex\"]`.\r\n- A new test `\"stale-plugin-config removes codex from allowlist when called without preservePluginIds\"` confirms the scanner alone removes codex; preservation is guaranteed at the coordinator layer.\r\n\r\n**What was not tested**: Full `v2026.6.11 → v2026.7.1` end-to-end upgrade with a real gateway restart and Codex agent turn. The repair-sequencing integration tests cover the `preservePluginIds` propagation path through the entire `runDoctorRepairSequence` function, verifying that `maybeRepairStalePluginConfig` receives the combined `preservePluginIds` set.\r\n",
+        "branch": "fix/preserve-allowlist-version-bound-107226-clean",
+        "head_sha": "05ec7037e3828af06b0620617a89ce66d1cc18be",
+        "author": "xydt-tanshanshan",
         "labels": [
-          "gateway",
-          "size: S",
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "commands",
+          "size: XS",
+          "P0"
         ],
         "files": [
           {
-            "path": "src/gateway/control-plane-rate-limit.test.ts",
-            "additions": 39,
-            "deletions": 0,
+            "path": "src/commands/doctor-config-flow.test.ts",
+            "additions": 4,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/gateway/control-plane-rate-limit.ts",
-            "additions": 13,
+            "path": "src/commands/doctor/repair-sequencing.test.ts",
+            "additions": 4,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/repair-sequencing.ts",
+            "additions": 5,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/missing-configured-plugin-install.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor/shared/stale-plugin-config.test.ts",
+            "additions": 17,
             "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 52,
-        "deletions": 0,
+        "changedFiles": 5,
+        "additions": 31,
+        "deletions": 7,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-107384",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107384.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-107285",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107285.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 106,
-          "gatingTotal": 101,
+          "total": 102,
+          "gatingTotal": 97,
           "counts": {
-            "SUCCESS": 46,
-            "SKIPPED": 34,
+            "SUCCESS": 69,
             "QUEUED": 4,
-            "IN_PROGRESS": 21,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
           "blockers": [
             "Scan shared kit from iOS:QUEUED",
             "Scan iOS dead code:QUEUED",
             "Scan macOS dead code:QUEUED",
-            "Scan shared kit from macOS:QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-sqlite-session-schema-baseline:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "Scan shared kit from macOS:QUEUED"
           ],
           "pending": [
             "Scan shared kit from iOS:QUEUED",
             "Scan iOS dead code:QUEUED",
             "Scan macOS dead code:QUEUED",
-            "Scan shared kit from macOS:QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-sqlite-session-schema-baseline:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
+            "Scan shared kit from macOS:QUEUED"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -206,7 +178,7 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-15T00:55:07.182Z"
+      "processed_at": "2026-07-15T00:59:47.821Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -217,19 +189,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5909,
+    "total_ms": 6052,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 494
+        "ms": 417
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2329
+        "ms": 1778
       },
       {
         "name": "classify_comment_commands",
-        "ms": 15
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -241,15 +213,15 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2965
+        "ms": 3732
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
