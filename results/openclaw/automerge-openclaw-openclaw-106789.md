@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-106789"
 mode: "autonomous"
-run_id: "29380960113"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29380960113"
+run_id: "29383075386"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29383075386"
 head_sha: "923797712890459a866dc7ec905320f34ce9c1c4"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-15T01:15:08.252Z"
+published_at: "2026-07-15T02:06:37.870Z"
 canonical: "#106789"
 canonical_issue: null
-canonical_pr: "#106789"
-actions_total: 1
+canonical_pr: "https://github.com/openclaw/openclaw/pull/106789"
+actions_total: 3
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29380960113](https://github.com/openclaw/clawsweeper/actions/runs/29380960113)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29383075386](https://github.com/openclaw/clawsweeper/actions/runs/29383075386)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #106789
 
 ## Summary
 
-Make PR #106789 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Keep the credited source PR #104485 closed and repair canonical PR #106789 in place. Current main still has the hardcoded Blacksmith Testbox behavior, while #106789 is writable and narrowly addresses that behavior. Direct merge and close actions are blocked by the job; exact-head validation must resolve the failing OpenClawKit dead-code check and unknown mergeability first.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,7 +66,9 @@ Make PR #106789 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #106789 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| https://github.com/openclaw/openclaw/pull/104485 | keep_closed | skipped | superseded | Historical source PR already replaced by the open, writable canonical PR #106789. |
+| https://github.com/openclaw/openclaw/pull/106789 | fix_needed | planned | canonical | Repair the adopted canonical branch against current main, preserve the reviewed provider-precedence behavior, and obtain clean exact-head validation. |
+| https://github.com/openclaw/openclaw/pull/106789 | build_fix_artifact | planned | canonical | Provide the deterministic executor with a bounded in-place repair and validation contract. |
 
 ## Needs Human
 
