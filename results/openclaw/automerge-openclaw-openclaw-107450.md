@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-107450"
 mode: "autonomous"
-run_id: "29410966601"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29410966601"
+run_id: "29413322696"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29413322696"
 head_sha: "ee2d523732fc97568c9395e0986c53922d1720f1"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-15T11:29:27.598Z"
+published_at: "2026-07-15T12:00:32.687Z"
 canonical: "#107450"
 canonical_issue: null
-canonical_pr: "#107450"
-actions_total: 1
+canonical_pr: "https://github.com/openclaw/openclaw/pull/107450"
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29410966601](https://github.com/openclaw/clawsweeper/actions/runs/29410966601)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29413322696](https://github.com/openclaw/clawsweeper/actions/runs/29413322696)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #107450
 
 ## Summary
 
-Make PR #107450 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Repair the writable contributor branch for #107450 by refreshing it onto main@d49e12eb3690f2cabb6578b10d5bfc545575250f, preserving the narrow dispatch-observer contract, rerunning focused validation and exact-head review, and leaving merge to the deterministic comment router. The linked #96230 is broader parent work and remains independently open.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,7 +66,8 @@ Make PR #107450 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #107450 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| https://github.com/openclaw/openclaw/pull/107450 | fix_needed | planned | canonical | The PR is a small, green, writable contributor change, but the automerge repair contract requires an exact-current-main branch and fresh exact-head review before the router may merge it. |
+| https://github.com/openclaw/openclaw/pull/96230 | keep_related | planned | related | Keep the broader parent PR open and separate; this cluster repairs only its extracted gateway-client prerequisite. |
 
 ## Needs Human
 
