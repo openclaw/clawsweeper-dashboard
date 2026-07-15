@@ -229,22 +229,26 @@ test("ledger loading rejects privacy-unsafe values outside attributes", () => {
   }
 });
 
-test("ledger loading accepts ordinary repository-relative path segments", () => {
+test("ledger loading accepts ordinary repository-relative path segments", (context) => {
   for (const recordPath of [
     "records/home/report.md",
     "docs/private/index.md",
     "tmp/report.md",
   ]) {
-    assert.doesNotThrow(() =>
-      actionEvent({
+    const baseline = actionEvent();
+    const event = actionEvent({
         subject: {
-          repository: "openclaw/openclaw",
-          kind: "pull_request",
-          number: 42,
+          ...baseline.subject,
           record_path: recordPath,
         },
-      }),
-    );
+        evidence: baseline.evidence.map((evidence) => ({
+          ...evidence,
+          report_path: recordPath,
+        })),
+      });
+    const root = tempRoot(context);
+    writeShard(root, [event]);
+    assert.doesNotThrow(() => loadActionLedger(root));
   }
 });
 
