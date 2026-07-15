@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-15T00:38:02.735Z",
+  "generated_at": "2026-07-15T00:38:35.001Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-14T21:38:00.681Z",
+  "since": "2026-07-14T21:38:34.259Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    99064
+    101777
   ],
   "comment_ids": [
-    4975451804
+    4975408813
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:99064:4975451804:2026-07-15T00:26:24Z:re_review",
-      "comment_id": "4975451804",
-      "comment_version_key": "4975451804:2026-07-15T00:26:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/99064#issuecomment-4975451804",
+      "idempotency_key": "comment-router:openclaw/openclaw:101777:4975408813:2026-07-15T00:20:18Z:re_review",
+      "comment_id": "4975408813",
+      "comment_version_key": "4975408813:2026-07-15T00:20:18Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101777#issuecomment-4975408813",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99064,
+      "issue_number": 101777,
       "author": "sunlit-deng",
       "author_id": 253064511,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-15T00:26:24Z",
-      "comment_updated_at": "2026-07-15T00:26:24Z",
+      "comment_created_at": "2026-07-15T00:20:18Z",
+      "comment_updated_at": "2026-07-15T00:20:18Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -74,113 +74,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(copilot): bound BYOK proxy request bodies",
-        "body": "## What Problem This Solves\n\nFixes an issue where Copilot BYOK users could have the local provider proxy buffer an unbounded request body before forwarding when the SDK sent an unexpectedly large POST. Also fixes a correctness defect where chunked requests that overflowed the limit (or timed out) were torn down with `ECONNRESET` instead of receiving a deterministic 413 HTTP response.\n\n## Why This Change Was Made\n\nThe BYOK proxy now applies the same bounded request-body guard pattern used by other plugin HTTP ingress paths. That guard rejects declared-length and streaming overflow before the request can be forwarded upstream, while keeping the fix inside the existing plugin SDK surface.\n\n## User Impact\n\nUsers keep the same BYOK provider behavior for normal SDK requests. Declared-length and chunked overflow now both return proper 413 responses instead of silent `ECONNRESET`.\n\n## Evidence\n\n- Declared-length overflow returns 413 (existing gate, unchanged).\n- Chunked overflow returns 413 (new streaming-reader path, previously `ECONNRESET`).\n- Normal requests pass the body-size guard and reach the upstream fetch.\n\n```text\n$ npx tsx byok-proof.ts\ndeclared-length-overflow status=413\ndeclared-length-overflow body=Payload too large\nchunked-overflow status=413\nchunked-overflow body=Payload too large\nnormal-path reached-guard=status=502\n```\n\n<details>\n<summary>byok-proof.ts</summary>\n\n```ts\nimport { createCopilotByokProxy } from \"./extensions/copilot/src/byok-proxy.js\";\nimport { resolveCopilotProvider } from \"./extensions/copilot/src/provider-bridge.js\";\n\nasync function main() {\n  const resolvedProvider = resolveCopilotProvider({\n    model: {\n      provider: \"custom-proxy\",\n      api: \"openai-responses\",\n      id: \"proxy-model\",\n      baseUrl: \"https://proxy.example/v1\",\n    },\n  });\n  const proxy = await createCopilotByokProxy(resolvedProvider);\n  if (!proxy) throw new Error(\"proxy creation failed\");\n\n  try {\n    // --- Declared-length overflow (existing gate) ---\n    const r1 = await fetch(`${proxy.provider.provider?.baseUrl}/responses`, {\n      method: \"POST\",\n      body: \"x\".repeat(16 * 1024 * 1024 + 1),\n    });\n    console.log(`declared-length-overflow status=${r1.status}`);\n    console.log(`declared-length-overflow body=${await r1.text()}`);\n\n    // --- Chunked overflow (streaming reader gate, the fix) ---\n    const r2 = await fetch(`${proxy.provider.provider?.baseUrl}/responses`, {\n      method: \"POST\",\n      headers: { \"content-type\": \"application/octet-stream\" },\n      body: new ReadableStream({\n        start(controller) {\n          const totalBytes = 16 * 1024 * 1024 + 1;\n          let sent = 0;\n          while (sent < totalBytes) {\n            const size = Math.min(1024 * 1024, totalBytes - sent);\n            controller.enqueue(new Uint8Array(size));\n            sent += size;\n          }\n          controller.close();\n        },\n      }),\n      duplex: \"half\",\n    } as RequestInit);\n    console.log(`chunked-overflow status=${r2.status}`);\n    console.log(`chunked-overflow body=${await r2.text()}`);\n\n    // --- Normal forwarding (sanity) ---\n    const r3 = await fetch(`${proxy.provider.provider?.baseUrl}/responses`, {\n      method: \"POST\",\n      headers: { \"content-type\": \"application/json\" },\n      body: JSON.stringify({ model: \"proxy-model\", prompt: \"hello\" }),\n    }).catch((err) => err);\n    console.log(`normal-path reached-guard=${r3 instanceof Error ? \"yes\" : `status=${(r3 as Response).status}`}`);\n  } finally {\n    await proxy.close();\n  }\n}\n\nmain().catch((err) => { console.error(\"PROOF FAILED:\", err); process.exit(1); });\n```\n\n</details>\n\nAI-assisted: built with Codex\n",
-        "branch": "sunlit/fix/copilot-byok-body-limit",
-        "head_sha": "a491dfb1d3ba120f23f2f12cb52e4204253f57c6",
-        "author": "sunlit-deng",
-        "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "status: ⏳ waiting on author",
-          "extensions: copilot"
-        ],
-        "files": [
-          {
-            "path": "extensions/copilot/src/byok-proxy.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/copilot/src/byok-proxy.ts",
-            "additions": 53,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 121,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99064",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99064.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 81,
-          "gatingTotal": 76,
-          "counts": {
-            "SUCCESS": 47,
-            "SKIPPED": 34
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 2/2):IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-whole-1:IN_PROGRESS",
-            "checks-node-compact-small-whole-2:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -195,15 +89,15 @@
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 510
+        "ms": 570
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1462
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 18
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -215,11 +109,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 305
+        "ms": 1618
       },
       {
         "name": "append_ledger",
