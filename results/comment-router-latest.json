@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-15T14:19:23.597Z",
+  "generated_at": "2026-07-15T14:21:57.429Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-15T11:19:20.975Z",
+  "since": "2026-07-15T11:21:56.676Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -15,7 +15,7 @@
   "comment_ids": [
     4981608250
   ],
-  "status_comment_id": 4981608850,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -39,15 +39,15 @@
       "comment_version_key": "4981608250:2026-07-15T14:17:03Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/107605#issuecomment-4981608250",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 107605,
-      "author": "lee-xydt",
-      "author_id": 304883714,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-15T14:17:03Z",
-      "comment_updated_at": "2026-07-15T14:17:03Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 4981608850,
+      "target_branch": null,
+      "issue_number": 107375,
+      "author": "mjnkao",
+      "author_id": 224045620,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-15T14:15:23Z",
+      "comment_updated_at": "2026-07-15T14:15:23Z",
+      "comment_body_sha256": "ac4a05b413a6cf4c97edfcf322bbfe65bade4c1ffaee8928d60c4c4e419260f1",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -74,95 +74,30 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents,cron): remove pattern field from model-facing cron tool schema",
-        "body": "## What Problem This Solves\n\nFixes https://github.com/openclaw/openclaw/issues/107449\n\nThe model-facing cron tool JSON Schema includes `pattern: \"\\\\S\"` on the `declarationKey` field. llama.cpp rejects unanchored regex patterns in JSON Schemas — its grammar parser (`json-schema-to-grammar.cpp:348-352`) requires patterns to start with `^` and end with `$`. This breaks cron tool availability for any agent running through a llama.cpp backend.\n\n## User Impact\n\n- llama.cpp users can now use cron tools without schema parse errors\n- `minLength: 1` still guarantees the field is non-empty (same effect as `pattern: \"\\\\S\"`)\n- Gateway-side whitespace guard (`declarationKey.trim().length === 0`) is unchanged — stricter validation at the gateway layer\n- Net change: 1 line removed in 1 file\n\n## Evidence\n\n### Proof 1: llama.cpp runtime validation — BEFORE vs AFTER\n\nThis uses the **exact same `nlohmann::ordered_json` library and the exact same validation logic** as llama.cpp's `json-schema-to-grammar.cpp:348-352`:\n\n```cpp\n// llama.cpp common/json-schema-to-grammar.cpp:348-352 (verbatim)\nstd::string _visit_pattern(const std::string & pattern, const std::string & name) {\n    if (!(pattern.front() == '^' && pattern.back() == '$')) {\n        _errors.push_back(\"Pattern must start with '^' and end with '$'\");\n        return \"\";\n    }\n    // ...\n}\n```\n\nCompiling and running against the actual nlohmann JSON library used by llama.cpp:\n\n```\n$ g++ -std=c++17 -I llama-src/vendor -o grammar-test grammar-test.cpp && ./grammar-test\n============================================================\nllama.cpp JSON Schema Regex Validation — Real Source Logic\nSource: json-schema-to-grammar.cpp:348-352 (_visit_pattern)\n============================================================\n\n[BEFORE FIX: pattern: \\\\S (unanchored)]\n  pattern: \"\\S\"\n  VALIDATION: Pattern must start with '^' and end with '$'\n  llama.cpp RESPONSE: HTTP 400 Bad Request\n  BEFORE FIX: pattern: \\\\S (unanchored) → REJECTED ✓\n\n[AFTER FIX:  no pattern field]\n  pattern: (none)\n  llama.cpp RESPONSE: 200 OK (grammar generated)\n  AFTER FIX:  no pattern field → ACCEPTED ✓\n\n============================================================\nCONCLUSION\n============================================================\n  BEFORE: llama.cpp REJECTS → cron tool unavailable\n  AFTER:  llama.cpp ACCEPTS → cron tool works\n  minLength: 1 preserves non-empty guarantee\n  Gateway side .trim() guard unchanged (cron-tool.ts:1037)\n```\n\n### Proof 2: Schema comparison — BEFORE vs AFTER (TypeBox runtime)\n\n```\n$ node --version\nv22.22.3\n\n$ node --import tsx _proof-cron.ts\n[BEFORE] TypeBox schema serialization:\n  minLength: 1\n  maxLength: 200\n  pattern: \\S\n  → JSON Schema: { \"type\": \"string\", \"minLength\": 1, \"maxLength\": 200, \"pattern\": \"\\\\S\" }\n  → llama.cpp REJECTS: unanchored regex\n\n[AFTER] TypeBox schema serialization:\n  minLength: 1\n  maxLength: 200\n  pattern: undefined (removed)\n  → JSON Schema: { \"type\": \"string\", \"minLength\": 1, \"maxLength\": 200 }\n  → llama.cpp ACCEPTS: no unanchored regex\n```\n\n### Proof 3: Gateway-level guard preserved (unchanged)\n\nSource: `src/agents/tools/cron-tool.ts:1037-1041`:\n```typescript\nif (typeof canonicalJob.declarationKey === \"string\" &&\n    canonicalJob.declarationKey.trim().length === 0) {\n  throw new Error(\"declarationKey must be a non-empty string\");\n}\n```\n\nTest coverage: `cron-tool.test.ts:879-887` — `declarationKey: \"   \"` → rejects.\n\n### Evidence Summary\n\n| Scenario | llama.cpp Behavior |\n|---|---|\n| `pattern: \"\\S\"` (unanchored) | HTTP 400 — REJECTED |\n| no pattern (minLength: 1 only) | 200 OK — ACCEPTED |\n| `pattern: \"^\\\\S+$\"` (anchored) | 200 OK — ACCEPTED |\n\n## Tests\n\n```\n$ node scripts/test-projects.mjs src/agents/tools/cron-tool.test.ts\n Test Files  1 passed (1)\n      Tests  64 passed (64)\n```\n\nAll 64 tests pass. The existing test at cron-tool.test.ts:879-887 confirms gateway whitespace guard is preserved.\n\n## Code Changes\n\n1. **Removed `pattern: \"\\\\S\"`** from `declarationKey` in `createCronJobObjectSchema()` — llama.cpp cannot parse unanchored regex patterns\n2. **`minLength: 1` stays** — guarantees non-empty string at schema level\n3. **Gateway whitespace guard unchanged** (`cron-tool.ts:1037-1041`) — `declarationKey.trim().length === 0` check catches whitespace-only keys at the gateway layer\n",
-        "branch": "fix/issue-107449-json-schema-pattern",
-        "head_sha": "7b85727841771828f667275ac51bfa57d8d46aaa",
-        "author": "lee-xydt",
-        "labels": [
-          "agents",
-          "size: XS",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/tools/cron-tool.ts",
-            "additions": 0,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 0,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-107605",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107605.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 109,
-          "gatingTotal": 104,
-          "counts": {
-            "FAILURE": 4,
-            "SUCCESS": 71,
-            "SKIPPED": 33,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan changed paths (precise):FAILURE",
-            "checks-node-compact-small-7:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "openclaw/ci-gate:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Scan changed paths (precise):FAILURE",
-            "checks-node-compact-small-7:FAILURE",
-            "check-additional-boundaries-a:FAILURE",
-            "openclaw/ci-gate:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3178,
+    "total_ms": 3017,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 543
+        "ms": 667
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1964
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -178,7 +113,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 557
+        "ms": 2265
       },
       {
         "name": "append_ledger",
