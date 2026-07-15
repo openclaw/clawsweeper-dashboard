@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-15T13:42:41.086Z",
+  "generated_at": "2026-07-15T13:44:34.943Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-15T10:42:40.215Z",
+  "since": "2026-07-15T10:44:32.278Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    97646
+    107978
   ],
   "comment_ids": [
-    4981205926
+    4981018538
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,22 +34,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97646:4981205926:2026-07-15T13:37:27Z:re_review",
-      "comment_id": "4981205926",
-      "comment_version_key": "4981205926:2026-07-15T13:37:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97646#issuecomment-4981205926",
+      "idempotency_key": "comment-router:openclaw/openclaw:107978:4981018538:2026-07-15T13:18:05Z:re_review",
+      "comment_id": "4981018538",
+      "comment_version_key": "4981018538:2026-07-15T13:18:05Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/107978#issuecomment-4981018538",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97646,
-      "author": "xydt-tanshanshan",
-      "author_id": 291969148,
+      "issue_number": 107978,
+      "author": "yetval",
+      "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-15T13:37:27Z",
-      "comment_updated_at": "2026-07-15T13:37:27Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "comment_created_at": "2026-07-15T13:18:05Z",
+      "comment_updated_at": "2026-07-15T13:18:05Z",
+      "comment_body_sha256": "ce1d337ba18cef0a3da7d8f0e19df90facc9383935e0260bbb4ac4a7ef1b7646",
       "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review",
+      "command": "re-run",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -74,7 +74,73 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(shared): block prototype-polluting keys in JSON schema default hydration",
+        "body": "## Summary\nA plugin whose manifest `configSchema` declares a `__proto__` property can pollute `Object.prototype` process-wide the moment its config is validated. Plugin config validation hydrates JSON Schema defaults automatically for every discovered plugin, so no operator action beyond loading the plugin is required. After the malicious plugin loads, every plain object in the process carries the attacker-supplied property.\n\n## Root cause\n`src/shared/json-schema-defaults.ts`, `applyObjectPropertyDefaults`. The property-defaults loop iterates schema-controlled keys and dereferences the matching value slot with no blocked-key guard, unlike the codebase's centralized `isBlockedObjectKey` used at other untrusted object-write boundaries.\n\nPlugin manifests arrive as parsed JSON, so a `__proto__` entry in `properties` is an own key that `Object.entries` yields. For a config value with no own `__proto__`, `value[\"__proto__\"]` reads the inherited `Object.prototype`, and the nested default hydration then writes defaults straight onto it.\n\nbefore:\n```ts\nfor (const [key, propertySchema] of Object.entries(properties)) {\n  const currentValue = value[key];\n  const defaultedValue = applySchemaDefaults(\n    propertySchema as JsonSchemaValue,\n    currentValue,\n    ...\n  );\n  if (defaultedValue !== currentValue || currentValue === undefined) {\n    if (defaultedValue !== undefined) {\n      value[key] = defaultedValue;\n    }\n  }\n}\n```\n\n## Fix\nSkip blocked keys (`__proto__`, `prototype`, `constructor`) at each write site in `applyObjectPropertyDefaults`, reusing the existing `isBlockedObjectKey` helper from `src/infra/prototype-keys.ts`.\n\nafter:\n```ts\nfor (const [key, propertySchema] of Object.entries(properties)) {\n  if (isBlockedObjectKey(key)) {\n    continue;\n  }\n  const currentValue = value[key];\n  ...\n}\n```\n\n## Why this is the right boundary\n`applyObjectPropertyDefaults` is the single function that writes default values into a caller-supplied object using schema-derived and value-derived keys, and it routes every plugin/SDK default-hydration call (`applyJsonSchemaDefaults` -> `applySchemaDefaults`). Guarding its three write loops here fixes the vector for every caller rather than at one call site. The `properties` loop is the live global-pollution path (the added regression test fails on pristine `main`); the `patternProperties` and `additionalProperties` loops key off own value keys so they do not globally pollute today, but guarding all three keeps the whole function consistent with `isBlockedObjectKey` usage elsewhere and prevents the vector from reappearing under refactoring. Legitimate config keys named `__proto__`/`constructor`/`prototype` are unrepresentable through a prototype chain anyway, so skipping their default hydration changes no valid behavior.\n\n## Verification\n- `node scripts/run-vitest.mjs run src/shared/json-schema-defaults.test.ts src/plugins/config-schema.test.ts src/infra/prototype-keys.test.ts` passes (17 tests).\n- New `applyJsonSchemaDefaults prototype safety` case fails on pristine `main` (`expected 'yes' to be undefined`) and passes with the patch.\n- `./node_modules/.bin/oxlint src/shared/json-schema-defaults.ts src/shared/json-schema-defaults.test.ts` clean; `./node_modules/.bin/oxfmt --check` clean.\n- `tsgo` on the changed files reports no new diagnostics (unrelated pre-existing module-resolution errors from broken workspace symlinks in the local checkout are not touched by this diff).\n\n## Real behavior proof\nBehavior addressed: a plugin manifest `configSchema` with a `__proto__` property pollutes `Object.prototype` for the whole process during ordinary plugin config validation.\nReal environment tested: drove the real plugin config validation builder `buildJsonPluginConfigSchema(...).safeParse({})` from `src/plugins/config-schema.ts` (the same call the plugin loader makes on a discovered plugin), on pristine `origin/main` abfdfd65 and on the patched tree with an identical manifest configSchema; the real default-hydration path, the real TypeBox validation, and the real `Object.prototype` stayed live, nothing mocked.\nExact steps or command run after this patch: `./node_modules/.bin/tsx` on a driver that builds the plugin config schema from the manifest JSON and calls `safeParse({})`, then reads a freshly created object.\nEvidence after fix:\n```\n# BEFORE (pristine origin/main abfdfd65)\nsafeParse.success: true\nObject.prototype.polluted: pwned\nfreshObject.polluted: pwned\nverdict: PROTOTYPE POLLUTED process-wide\n# AFTER (this patch, identical inputs)\nsafeParse.success: true\nObject.prototype.polluted: undefined\nfreshObject.polluted: undefined\nverdict: prototype clean\n```\nObserved result after fix: validating the same plugin manifest leaves `Object.prototype` and newly created objects free of the attacker property, while config validation still succeeds.\nWhat was not tested: no live end-to-end plugin discovery from disk was exercised (the real config-schema builder was driven directly with the manifest JSON); full repo build was not run.\n",
+        "branch": "fix/json-schema-defaults-proto-pollution",
+        "head_sha": "ff41c35f3ce29845d30648a2883515c148e951a8",
+        "author": "yetval",
+        "labels": [
+          "size: S"
+        ],
+        "files": [
+          {
+            "path": "src/shared/json-schema-defaults.test.ts",
+            "additions": 48,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/shared/json-schema-defaults.ts",
+            "additions": 10,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 58,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-107978",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107978.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 109,
+          "gatingTotal": 104,
+          "counts": {
+            "SUCCESS": 63,
+            "SKIPPED": 41,
+            "FAILURE": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "checks-fast-max-lines-ratchet:FAILURE",
+            "checks-node-compact-small-7:FAILURE",
+            "check-test-types:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "checks-fast-max-lines-ratchet:FAILURE",
+            "checks-node-compact-small-7:FAILURE",
+            "check-test-types:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,19 +151,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3455,
+    "total_ms": 3000,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 608
+        "ms": 517
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2055
       },
       {
         "name": "classify_comment_commands",
-        "ms": 40
+        "ms": 16
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +179,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2585
+        "ms": 335
       },
       {
         "name": "append_ledger",
