@@ -20,6 +20,7 @@ export function loadActionLedger(root) {
   const sourceRoot = path.resolve(root);
   const eventsRoot = path.join(sourceRoot, "ledger", "v1", "events");
   const shardFiles = listShardFiles(eventsRoot, sourceRoot);
+  validateMultipartShardSets(shardFiles, sourceRoot);
   const shards = [];
   const occurrences = [];
   const partitionByProducer = new Map();
@@ -57,7 +58,10 @@ export function loadActionLedger(root) {
     });
   }
 
-  const deduped = dedupeEvents(occurrences);
+  // Immutable shard bytes retain the producer's historical occurrence ordering. The aggregate
+  // projection can honor phase ordinals without redefining that durable storage contract.
+  const deduped = dedupeEvents(occurrences, { phaseAware: true, validatePhase: true });
+  validateCompleteCausalParents(deduped.events);
   const source = {
     schema: "clawsweeper.state-ledger-source.v1",
     schema_version: 1,
@@ -72,33 +76,46 @@ export function loadActionLedger(root) {
   return { events: deduped.events, source };
 }
 
-export function actionEventShardRelativePath(identity, events) {
+export function actionEventShardRelativePath(identity, events, shardIndex, shardCount) {
   if (!events.length) throw new LedgerValidationError("action event shard requires events");
   const normalizedIdentity = normalizeShardIdentity(identity);
   const normalized = dedupeEvents(
     events.map((event, index) => ({ event, path: "candidate", line: index + 1 })),
   ).events;
-  const ordered = [...normalized].sort(compareEvents);
+  const ordered = sortActionEventsCausally(normalized);
   for (const event of ordered) {
     assertSameShardIdentity(event, normalizedIdentity, "candidate shard");
   }
   const day = normalizedIdentity.partitionDate.split("-");
-  const identityDigest = sha256(
-    stableJson({
-      producer: normalizedIdentity.producer,
-      workflow: normalizedIdentity.workflow,
-      job: normalizedIdentity.job,
-      runId: normalizedIdentity.runId,
-      runAttempt: normalizedIdentity.runAttempt,
-      partitionDate: normalizedIdentity.partitionDate,
-    }),
-  ).slice(0, 12);
-  const filename = [
+  const identityDigest = sha256(stableJson(normalizedIdentity)).slice(0, 12);
+  const filenameBase = [
     safePathSegment(normalizedIdentity.runId),
     String(normalizedIdentity.runAttempt),
     safePathSegment(normalizedIdentity.job),
     identityDigest,
   ].join("-");
+  if ((shardIndex === undefined) !== (shardCount === undefined)) {
+    throw new LedgerValidationError(
+      "action event shard index and count must be provided together",
+    );
+  }
+  const normalizedShardIndex =
+    shardIndex === undefined ? undefined : shardPart(shardIndex, "action event shard index");
+  const normalizedShardCount =
+    shardCount === undefined ? undefined : shardPart(shardCount, "action event shard count");
+  if (
+    normalizedShardIndex !== undefined &&
+    normalizedShardCount !== undefined &&
+    normalizedShardIndex > normalizedShardCount
+  ) {
+    throw new LedgerValidationError("action event shard index cannot exceed shard count");
+  }
+  const filename =
+    normalizedShardIndex === undefined
+      ? filenameBase
+      : `${filenameBase}-part-${String(normalizedShardIndex).padStart(6, "0")}-of-${String(
+          normalizedShardCount,
+        ).padStart(6, "0")}`;
   return path.posix.join(
     "ledger",
     "v1",
@@ -106,7 +123,8 @@ export function actionEventShardRelativePath(identity, events) {
     day[0],
     day[1],
     day[2],
-    safePathSegment(normalizedIdentity.producer),
+    boundedPathSegment(repositorySlug(normalizedIdentity.repository), 120),
+    boundedPathSegment(normalizedIdentity.producer, 120),
     `${filename}.jsonl`,
   );
 }
@@ -289,10 +307,12 @@ function assertNoDuplicateJsonMembers(source, location) {
 
 function validateShardIdentity(events, relativePath) {
   if (!events.length) throw new LedgerValidationError(`${relativePath}: empty action ledger shard`);
-  for (let index = 1; index < events.length; index += 1) {
-    if (compareEvents(events[index - 1], events[index]) > 0) {
-      throw new LedgerValidationError(`${relativePath}: events are not in canonical order`);
-    }
+  const eventsForOrder = events.filter(
+    (event, index) => index === 0 || stableJson(event) !== stableJson(events[index - 1]),
+  );
+  const ordered = sortActionEventsCausally(eventsForOrder);
+  if (eventsForOrder.some((event, index) => event.event_id !== ordered[index].event_id)) {
+    throw new LedgerValidationError(`${relativePath}: events are not in canonical causal order`);
   }
   const partitionDate = partitionDateFromPath(relativePath);
   const identity = { ...shardIdentity(events[0]), partitionDate };
@@ -305,7 +325,13 @@ function validateShardIdentity(events, relativePath) {
       );
     }
   }
-  const expected = actionEventShardRelativePath(identity, events);
+  const part = /-part-(\d{6})-of-(\d{6})\.jsonl$/.exec(relativePath);
+  const expected = actionEventShardRelativePath(
+    identity,
+    events,
+    part ? Number(part[1]) : undefined,
+    part ? Number(part[2]) : undefined,
+  );
   if (relativePath !== expected) {
     throw new LedgerValidationError(
       `${relativePath}: shard path does not match producer identity; expected ${expected}`,
@@ -314,8 +340,54 @@ function validateShardIdentity(events, relativePath) {
   return partitionDate;
 }
 
+function validateMultipartShardSets(shardFiles, sourceRoot) {
+  const groups = new Map();
+  for (const file of shardFiles) {
+    const relativePath = toPosixPath(path.relative(sourceRoot, file));
+    const match = /^(.*?)(?:-part-(\d{6})-of-(\d{6}))?\.jsonl$/.exec(relativePath);
+    if (!match) continue;
+    const base = match[1];
+    const group = groups.get(base) ?? { whole: null, count: null, parts: new Map() };
+    if (!match[2]) {
+      group.whole = relativePath;
+    } else {
+      const index = Number(match[2]);
+      const count = Number(match[3]);
+      if (group.count !== null && group.count !== count) {
+        throw new LedgerValidationError(
+          `${relativePath}: multipart shard count ${count} conflicts with ${group.count}`,
+        );
+      }
+      group.count = count;
+      group.parts.set(index, relativePath);
+    }
+    groups.set(base, group);
+  }
+
+  for (const [base, group] of groups) {
+    if (group.whole && group.parts.size > 0) {
+      throw new LedgerValidationError(
+        `${group.whole}: unsplit shard conflicts with multipart shard set ${base}`,
+      );
+    }
+    if (group.count === null) continue;
+    for (let index = 1; index <= group.count; index += 1) {
+      if (!group.parts.has(index)) {
+        throw new LedgerValidationError(
+          `${base}: incomplete multipart shard set; missing part ${index} of ${group.count}`,
+        );
+      }
+    }
+    if (group.parts.size !== group.count) {
+      throw new LedgerValidationError(`${base}: invalid multipart shard set`);
+    }
+  }
+}
+
 function shardIdentity(event) {
   return {
+    repository: event.producer.repository,
+    sha: event.producer.sha,
     producer: event.producer.component,
     workflow: event.producer.workflow,
     job: event.producer.job,
@@ -326,6 +398,8 @@ function shardIdentity(event) {
 
 function normalizeShardIdentity(identity) {
   return {
+    repository: requiredRepository(identity.repository, "shard repository"),
+    sha: machineText(identity.sha, "shard producer sha"),
     producer: machineText(identity.producer, "shard producer"),
     workflow: machineText(identity.workflow, "shard workflow", 128),
     job: machineText(identity.job, "shard job", 128),
@@ -337,7 +411,7 @@ function normalizeShardIdentity(identity) {
 
 function partitionDateFromPath(relativePath) {
   const match =
-    /^ledger\/v1\/events\/(\d{4})\/(\d{2})\/(\d{2})\/[^/]+\/[^/]+\.jsonl$/.exec(
+    /^ledger\/v1\/events\/(\d{4})\/(\d{2})\/(\d{2})\/[^/]+\/[^/]+\/[^/]+\.jsonl$/.exec(
       relativePath,
     );
   if (!match) {
@@ -348,6 +422,8 @@ function partitionDateFromPath(relativePath) {
 
 function assertSameShardIdentity(event, identity, location) {
   if (
+    event.producer.repository !== identity.repository ||
+    event.producer.sha !== identity.sha ||
     event.producer.component !== identity.producer ||
     event.producer.workflow !== identity.workflow ||
     event.producer.job !== identity.job ||
@@ -360,7 +436,7 @@ function assertSameShardIdentity(event, identity, location) {
   }
 }
 
-function dedupeEvents(occurrences) {
+function dedupeEvents(occurrences, sortOptions) {
   const byId = new Map();
   let duplicateCount = 0;
   for (const occurrence of [...occurrences].sort(compareOccurrences)) {
@@ -392,7 +468,10 @@ function dedupeEvents(occurrences) {
     duplicateCount += 1;
   }
   return {
-    events: [...byId.values()].map(({ event }) => event).sort(compareEvents),
+    events: sortActionEventsCausally(
+      [...byId.values()].map(({ event }) => event),
+      sortOptions,
+    ),
     duplicateCount,
   };
 }
@@ -402,14 +481,178 @@ function compareOccurrences(left, right) {
 }
 
 function compareEvents(left, right) {
-  return (
-    compareCanonicalTimestamps(left.occurred_at, right.occurred_at) ||
-    left.event_id.localeCompare(right.event_id)
-  );
+  if (left.occurred_at_source === "source" && right.occurred_at_source === "source") {
+    return (
+      compareCanonicalTimestamps(left.occurred_at, right.occurred_at) ||
+      compareLedgerText(left.event_id, right.event_id)
+    );
+  }
+  if (left.occurred_at_source !== right.occurred_at_source) {
+    return left.occurred_at_source === "source" ? -1 : 1;
+  }
+  return compareLedgerText(left.event_id, right.event_id);
+}
+
+export function sortActionEventsCausally(
+  events,
+  { phaseAware = false, validatePhase = false } = {},
+) {
+  const byId = new Map();
+  const childIds = new Map();
+  const inDegree = new Map();
+  const addEdge = (parentId, childId) => {
+    inDegree.set(childId, (inDegree.get(childId) ?? 0) + 1);
+    const children = childIds.get(parentId) ?? [];
+    children.push(childId);
+    childIds.set(parentId, children);
+  };
+  for (const event of events) {
+    if (byId.has(event.event_id)) {
+      throw new LedgerValidationError(`action event shard contains duplicate event: ${event.event_id}`);
+    }
+    byId.set(event.event_id, event);
+    inDegree.set(event.event_id, 0);
+  }
+  for (const event of events) {
+    const parentId = event.parent_event_id;
+    if (!parentId || !byId.has(parentId)) continue;
+    if (validatePhase) {
+      const parent = byId.get(parentId);
+      if (parent.operation_id !== event.operation_id || parent.attempt_id !== event.attempt_id) {
+        throw new LedgerValidationError(
+          `action event ${event.event_id} has a causal parent outside its operation attempt`,
+        );
+      }
+      if (parent.attempt_id === event.attempt_id && parent.phase_seq >= event.phase_seq) {
+        throw new LedgerValidationError(
+          `action event ${event.event_id} does not advance its causal parent phase sequence`,
+        );
+      }
+    }
+    addEdge(parentId, event.event_id);
+  }
+  if (phaseAware) {
+    const phasesByAttempt = new Map();
+    for (const event of events) {
+      const attemptScope = `${event.operation_id}:${event.attempt_id}`;
+      const phases = phasesByAttempt.get(attemptScope) ?? new Map();
+      const phaseEvents = phases.get(event.phase_seq) ?? [];
+      phaseEvents.push(event.event_id);
+      phases.set(event.phase_seq, phaseEvents);
+      phasesByAttempt.set(attemptScope, phases);
+    }
+    for (const [attemptScope, phases] of phasesByAttempt) {
+      const orderedPhases = [...phases.keys()].sort((left, right) => left - right);
+      for (let index = 0; index + 1 < orderedPhases.length; index += 1) {
+        // A virtual barrier keeps the heap comparator globally transitive while ensuring every
+        // event in one phase finishes before any event in the next phase becomes ready.
+        const barrierId = `phase-barrier:${attemptScope}:${orderedPhases[index]}`;
+        inDegree.set(barrierId, 0);
+        for (const eventId of phases.get(orderedPhases[index])) addEdge(eventId, barrierId);
+        for (const eventId of phases.get(orderedPhases[index + 1])) addEdge(barrierId, eventId);
+      }
+    }
+  }
+
+  const ready = [];
+  for (const event of events) {
+    if (inDegree.get(event.event_id) === 0) pushReadyEvent(ready, event);
+  }
+  const sorted = [];
+  let processedNodes = 0;
+  const release = (nodeId) => {
+    processedNodes += 1;
+    for (const childId of childIds.get(nodeId) ?? []) {
+      const remaining = (inDegree.get(childId) ?? 0) - 1;
+      inDegree.set(childId, remaining);
+      if (remaining !== 0) continue;
+      const child = byId.get(childId);
+      if (child) pushReadyEvent(ready, child);
+      else release(childId);
+    }
+  };
+  while (ready.length > 0) {
+    const event = popReadyEvent(ready);
+    sorted.push(event);
+    release(event.event_id);
+  }
+  if (sorted.length !== events.length || processedNodes !== inDegree.size) {
+    throw new LedgerValidationError("action event shard contains a causal cycle");
+  }
+  return sorted;
+}
+
+function validateCompleteCausalParents(events) {
+  const ids = new Set(events.map((event) => event.event_id));
+  for (const event of events) {
+    if (event.parent_event_id && !ids.has(event.parent_event_id)) {
+      throw new LedgerValidationError(
+        `action event ${event.event_id} references missing causal parent ${event.parent_event_id}`,
+      );
+    }
+  }
+}
+
+function pushReadyEvent(heap, event) {
+  heap.push(event);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (compareEvents(heap[parent], event) <= 0) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = event;
+}
+
+function popReadyEvent(heap) {
+  const first = heap[0];
+  const last = heap.pop();
+  if (heap.length === 0) return first;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= heap.length) break;
+    const right = left + 1;
+    const child =
+      right < heap.length && compareEvents(heap[right], heap[left]) < 0 ? right : left;
+    if (compareEvents(last, heap[child]) <= 0) break;
+    heap[index] = heap[child];
+    index = child;
+  }
+  heap[index] = last;
+  return first;
 }
 
 function safePathSegment(value) {
-  return value.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+  const safe = value.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
+  return !safe || safe === "." || safe === ".." ? "unknown" : safe;
+}
+
+function boundedPathSegment(value, maxLength) {
+  let safe = safePathSegment(value);
+  const reservedDevice = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(safe);
+  const trailingDot = safe.endsWith(".");
+  if (!reservedDevice && !trailingDot && safe.length <= maxLength) return safe;
+  const digest = sha256(value).slice(0, 12);
+  if (reservedDevice) safe = `_${safe}`;
+  if (trailingDot) safe = safe.replace(/\.+$/, "");
+  return `${safe.slice(0, maxLength - digest.length - 1)}-${digest}`;
+}
+
+function repositorySlug(repository) {
+  return repository.replace(/[^A-Za-z0-9_.-]+/g, "-");
+}
+
+function shardPart(value, location) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 999_999) {
+    throw new LedgerValidationError(`${location}: must be an integer between 1 and 999999`);
+  }
+  return value;
+}
+
+function compareLedgerText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function machineText(value, location, maxLength = 256) {
@@ -420,6 +663,16 @@ function machineText(value, location, maxLength = 256) {
     !/^[A-Za-z0-9][A-Za-z0-9_.:/@+-]*$/.test(value)
   ) {
     throw new LedgerValidationError(`${location}: must be machine-readable text`);
+  }
+  return value;
+}
+
+function requiredRepository(value, location) {
+  if (
+    typeof value !== "string" ||
+    !/^[a-z0-9_][a-z0-9_.-]*\/[a-z0-9_][a-z0-9_.-]*$/.test(value)
+  ) {
+    throw new LedgerValidationError(`${location}: must be a canonical owner/repository name`);
   }
   return value;
 }

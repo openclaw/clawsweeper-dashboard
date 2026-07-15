@@ -9,34 +9,59 @@ export const ACTION_LEDGER_SCHEMA = JSON.parse(
   fs.readFileSync(path.join(scriptDir, "..", "schema", "state-ledger-event.schema.json"), "utf8"),
 );
 
-const POSITIVE_INTEGER_ATTRIBUTE_KEYS = new Set(["attempt", "shard_count"]);
+const POSITIVE_INTEGER_ATTRIBUTE_KEYS = new Set(["attempt", "batch_size", "shard_count"]);
 const NON_NEGATIVE_INTEGER_ATTRIBUTE_KEYS = new Set([
+  "action_count",
+  "batch_index",
   "candidate_count",
   "closed_count",
+  "comment_count",
   "cost_usd_micros",
   "duration_ms",
   "failed_count",
   "finding_count",
   "input_tokens",
   "item_count",
+  "lease_duration_ms",
+  "log_count",
   "output_tokens",
+  "processed_count",
+  "published_count",
+  "queue_depth",
   "result_count",
+  "retry_count",
+  "retry_delay_ms",
   "shard_index",
   "skipped_count",
+  "validation_count",
+  "wait_duration_ms",
+  "warning_count",
 ]);
-const BOOLEAN_ATTRIBUTE_KEYS = new Set(["cached", "coverage_complete"]);
+const BOOLEAN_ATTRIBUTE_KEYS = new Set([
+  "cached",
+  "coverage_complete",
+  "final_attempt",
+  "partial",
+]);
 const UNIT_INTERVAL_ATTRIBUTE_KEYS = new Set(["coverage_ratio"]);
 const MACHINE_TEXT_ATTRIBUTE_KEYS = new Set([
   "cache_mode",
   "completion_reason",
+  "delivery_kind",
   "dispatch_kind",
+  "log_kind",
   "model",
   "phase",
+  "publication_kind",
+  "queue_kind",
   "query_version",
   "reasoning_effort",
   "review_mode",
   "state",
+  "status_kind",
+  "validation_kind",
   "work_kind",
+  "workflow_phase",
 ]);
 const MAX_EVENT_COLLECTION_ITEMS = 64;
 
@@ -54,7 +79,16 @@ export function validateActionLedgerEvent(value, location = "action ledger event
   if (value.event_id !== expectedEventId) {
     throw new LedgerValidationError(`${location}: event_id does not match repository and event_key`);
   }
-  const expectedSemanticSha256 = sha256(stableJson(semantic));
+  const occurredAtSource = occurrenceSource(
+    value.occurred_at_source,
+    `${location}.occurred_at_source`,
+  );
+  const occurredAt = canonicalTimestamp(value.occurred_at, `${location}.occurred_at`);
+  const occurrence =
+    occurredAtSource === "source"
+      ? { occurred_at: occurredAt, occurred_at_source: occurredAtSource }
+      : { occurred_at_source: occurredAtSource };
+  const expectedSemanticSha256 = sha256(stableJson({ occurrence, semantic }));
   if (value.semantic_sha256 !== expectedSemanticSha256) {
     throw new LedgerValidationError(`${location}: semantic_sha256 does not match event payload`);
   }
@@ -64,7 +98,8 @@ export function validateActionLedgerEvent(value, location = "action ledger event
     event_id: value.event_id,
     event_key: requiredEventKey(value.event_key, `${location}.event_key`),
     semantic_sha256: value.semantic_sha256,
-    occurred_at: canonicalTimestamp(value.occurred_at, `${location}.occurred_at`),
+    occurred_at: occurredAt,
+    occurred_at_source: occurredAtSource,
     recorded_at: canonicalTimestamp(value.recorded_at, `${location}.recorded_at`),
     ...semantic,
   });
@@ -91,7 +126,18 @@ export function actionEventKey(scope, identity) {
 }
 
 export function actionEventSemanticSha256(event, location = "action ledger event") {
-  return sha256(stableJson(actionEventSemanticValue(event, location)));
+  const occurredAtSource = occurrenceSource(
+    event.occurred_at_source,
+    `${location}.occurred_at_source`,
+  );
+  const occurrence =
+    occurredAtSource === "source"
+      ? {
+          occurred_at: canonicalTimestamp(event.occurred_at, `${location}.occurred_at`),
+          occurred_at_source: occurredAtSource,
+        }
+      : { occurred_at_source: occurredAtSource };
+  return sha256(stableJson({ occurrence, semantic: actionEventSemanticValue(event, location) }));
 }
 
 export function stableJson(value) {
@@ -135,6 +181,17 @@ function actionEventSemanticValue(event, location) {
     );
   }
   const semantic = sortStable({
+    operation_id: requiredSha256(event.operation_id, `${location}.operation_id`),
+    attempt_id: requiredSha256(event.attempt_id, `${location}.attempt_id`),
+    parent_event_id:
+      event.parent_event_id === null
+        ? null
+        : requiredSha256(event.parent_event_id, `${location}.parent_event_id`),
+    phase_seq: safePositiveInteger(event.phase_seq, `${location}.phase_seq`),
+    idempotency_key_sha256: requiredSha256(
+      event.idempotency_key_sha256,
+      `${location}.idempotency_key_sha256`,
+    ),
     event_type: machineText(event.event_type, `${location}.event_type`),
     producer: {
       repository: requiredRepository(
@@ -198,6 +255,9 @@ function normalizeSubject(subject, location) {
   return {
     repository: requiredRepository(subject.repository, `${location}.subject.repository`),
     kind: subject.kind,
+    ...(subject.subject_id
+      ? { subject_id: machineText(subject.subject_id, `${location}.subject.subject_id`) }
+      : {}),
     ...(subject.number !== undefined
       ? { number: safePositiveInteger(subject.number, `${location}.subject.number`) }
       : {}),
@@ -568,6 +628,13 @@ function requiredSha256(value, location) {
     throw new LedgerValidationError(`${location}: must be a lowercase SHA-256 digest`);
   }
   return normalized;
+}
+
+function occurrenceSource(value, location) {
+  if (value !== "source" && value !== "generated") {
+    throw new LedgerValidationError(`${location}: must be source or generated`);
+  }
+  return value;
 }
 
 function canonicalTimestamp(value, location) {

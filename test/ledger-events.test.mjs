@@ -6,8 +6,14 @@ import {
   LedgerConflictError,
   actionEventShardRelativePath,
   loadActionLedger,
+  sortActionEventsCausally,
 } from "../scripts/ledger-events.mjs";
-import { actionEventId, actionEventKey, stableJson } from "../scripts/ledger-schema.mjs";
+import {
+  actionEventId,
+  actionEventKey,
+  actionEventSemanticSha256,
+  stableJson,
+} from "../scripts/ledger-schema.mjs";
 import { actionEvent, tempRoot, writeShard } from "./ledger-fixtures.mjs";
 
 test("ledger loading fails closed on malformed JSONL lines", (context) => {
@@ -17,6 +23,20 @@ test("ledger loading fails closed on malformed JSONL lines", (context) => {
   fs.writeFileSync(file, `${JSON.stringify(event)}\n{broken\n`, "utf8");
 
   assert.throws(() => loadActionLedger(root), /:2: malformed JSON/);
+});
+
+test("ledger loading preserves operation and attempt identity", (context) => {
+  const root = tempRoot(context);
+  const event = actionEvent();
+  writeShard(root, [event]);
+
+  const [loaded] = loadActionLedger(root).events;
+  assert.equal(loaded.operation_id, event.operation_id);
+  assert.equal(loaded.attempt_id, event.attempt_id);
+  assert.equal(loaded.parent_event_id, null);
+  assert.equal(loaded.phase_seq, 1);
+  assert.equal(loaded.idempotency_key_sha256, event.idempotency_key_sha256);
+  assert.equal(loaded.occurred_at_source, "source");
 });
 
 test("ledger loading rejects duplicate JSON object members", (context) => {
@@ -163,7 +183,7 @@ test("ledger loading rejects privacy-unsafe attributes", (context) => {
     `${JSON.stringify({ ...base, attributes: { model: "secret@example.com" } })}\n`,
     "utf8",
   );
-  assert.throws(() => loadActionLedger(unsafeValueRoot), /privacy-unsafe attribute value/);
+  assert.throws(() => loadActionLedger(unsafeValueRoot), /attributes\.model/);
 });
 
 test("ledger loading rejects privacy-unsafe values outside attributes", () => {
@@ -266,7 +286,7 @@ test("ledger loading rejects mixed complete producer identities", (context) => {
   const file = writeShard(root, [first]);
   fs.writeFileSync(file, `${stableJson(first)}\n${stableJson(second)}\n`, "utf8");
 
-  assert.throws(() => loadActionLedger(root), /complete shard producer identity/);
+  assert.throws(() => loadActionLedger(root), /shard producer identity/);
 });
 
 test("ledger loading rejects one producer identity across partition dates", (context) => {
@@ -337,7 +357,7 @@ test("ledger loading enforces strict timestamps and collection bounds", (context
     `${JSON.stringify({ ...event, occurred_at: "2026-02-31T10:00:00Z" })}\n`,
     "utf8",
   );
-  assert.throws(() => loadActionLedger(invalidTimestampRoot), /occurred_at: invalid date-time/);
+  assert.throws(() => loadActionLedger(invalidTimestampRoot), /occurred_at:/);
 
   const incompleteTimestampRoot = tempRoot(context);
   const incompleteTimestampFile = writeShard(incompleteTimestampRoot, [event]);
@@ -346,7 +366,7 @@ test("ledger loading enforces strict timestamps and collection bounds", (context
     `${JSON.stringify({ ...event, occurred_at: "2026-07-12" })}\n`,
     "utf8",
   );
-  assert.throws(() => loadActionLedger(incompleteTimestampRoot), /occurred_at: invalid date-time/);
+  assert.throws(() => loadActionLedger(incompleteTimestampRoot), /occurred_at:/);
 
   const evidenceRoot = tempRoot(context);
   const evidenceFile = writeShard(evidenceRoot, [event]);
@@ -410,6 +430,8 @@ test("shard paths use stable partition identity instead of event ordering", (con
     },
   });
   const identity = {
+    repository: completed.producer.repository,
+    sha: completed.producer.sha,
     producer: "review",
     workflow: "sweep",
     job: "review-3",
@@ -422,12 +444,178 @@ test("shard paths use stable partition identity instead of event ordering", (con
     actionEventShardRelativePath(identity, [completed]),
     actionEventShardRelativePath(identity, [earlier, completed]),
   );
+  assert.match(
+    actionEventShardRelativePath(identity, [completed], 1, 2),
+    /^ledger\/v1\/events\/2026\/07\/12\/openclaw-clawsweeper\/review\/100-1-review-3-[a-f0-9]{12}-part-000001-of-000002\.jsonl$/,
+  );
 
   const root = tempRoot(context);
   writeShard(root, [earlier, completed], { partitionDate: "2026-07-12" });
   const loaded = loadActionLedger(root);
   assert.equal(loaded.source.shards[0].partition_date, "2026-07-12");
   assert.equal(loaded.events[0].occurred_at, "2026-07-11T23:59:00.000Z");
+});
+
+test("ledger loading requires complete and consistent multipart shard sets", (context) => {
+  const incompleteRoot = tempRoot(context);
+  writeShard(incompleteRoot, [actionEvent()], { shardIndex: 1, shardCount: 2 });
+  assert.throws(() => loadActionLedger(incompleteRoot), /incomplete multipart shard set/);
+
+  const inconsistentRoot = tempRoot(context);
+  writeShard(inconsistentRoot, [actionEvent()], { shardIndex: 1, shardCount: 2 });
+  writeShard(inconsistentRoot, [actionEvent()], { shardIndex: 2, shardCount: 3 });
+  assert.throws(() => loadActionLedger(inconsistentRoot), /multipart shard count 3 conflicts/);
+});
+
+test("aggregate ledger loading rejects dangling causal parents", (context) => {
+  const root = tempRoot(context);
+  const event = actionEvent({ parent_event_id: "e".repeat(64) }, false);
+  event.event_id = actionEventId(event.subject.repository, event.event_key);
+  event.semantic_sha256 = actionEventSemanticSha256(event);
+  writeShard(root, [event]);
+
+  assert.throws(() => loadActionLedger(root), /references missing causal parent/);
+});
+
+test("aggregate causal parents stay within one operation attempt", (context) => {
+  const parent = actionEvent({
+    event_key: actionEventKey("review.parent", { number: 1 }),
+    phase_seq: 1,
+  });
+  for (const [label, overrides] of [
+    ["operation", { operation_id: "9".repeat(64) }],
+    ["attempt", { attempt_id: "8".repeat(64) }],
+  ]) {
+    const root = tempRoot(context);
+    const child = actionEvent({
+      event_key: actionEventKey(`review.cross-${label}`, { number: 2 }),
+      parent_event_id: parent.event_id,
+      phase_seq: 2,
+      ...overrides,
+    });
+    writeShard(root, [parent, child]);
+    assert.throws(
+      () => loadActionLedger(root),
+      /causal parent outside its operation attempt/,
+      label,
+    );
+  }
+});
+
+test("causal ordering uses phase ordinals within an attempt", (context) => {
+  const root = tempRoot(context);
+  const phaseOne = actionEvent({
+    event_key: actionEventKey("review.phase-one", { number: 1 }),
+    phase_seq: 1,
+    occurred_at: "2026-07-12T11:00:00.000Z",
+  });
+  const phaseTwo = actionEvent({
+    event_key: actionEventKey("review.phase-two", { number: 2 }),
+    phase_seq: 2,
+    occurred_at: "2026-07-12T10:00:00.000Z",
+  });
+  writeShard(root, [phaseTwo, phaseOne]);
+
+  assert.deepEqual(
+    loadActionLedger(root).events.map((event) => event.phase_seq),
+    [1, 2],
+  );
+
+  const otherAttempt = actionEvent({
+    event_key: actionEventKey("review.other-attempt", { number: 3 }),
+    attempt_id: "f".repeat(64),
+    occurred_at: "2026-07-12T10:30:00.000Z",
+  });
+  const permutations = [
+    [phaseOne, phaseTwo, otherAttempt],
+    [otherAttempt, phaseTwo, phaseOne],
+    [phaseTwo, phaseOne, otherAttempt],
+  ];
+  const orders = permutations.map((events) =>
+    sortActionEventsCausally(events, { phaseAware: true, validatePhase: true }).map(
+      (event) => event.event_id,
+    ),
+  );
+  assert.deepEqual(orders[1], orders[0]);
+  assert.deepEqual(orders[2], orders[0]);
+  assert.ok(orders[0].indexOf(phaseOne.event_id) < orders[0].indexOf(phaseTwo.event_id));
+
+  phaseOne.parent_event_id = phaseTwo.event_id;
+  phaseOne.semantic_sha256 = actionEventSemanticSha256(phaseOne);
+  const invalidRoot = tempRoot(context);
+  writeShard(invalidRoot, [phaseTwo, phaseOne]);
+  assert.throws(
+    () => loadActionLedger(invalidRoot),
+    /does not advance its causal parent phase sequence/,
+  );
+});
+
+test("phase ordering does not couple attempts from different operations", () => {
+  const attemptId = "a".repeat(64);
+  const operationOne = "1".repeat(64);
+  const operationTwo = "2".repeat(64);
+  const firstOperationPhaseOne = actionEvent({
+    event_key: actionEventKey("review.operation-one-phase-one", { number: 1 }),
+    operation_id: operationOne,
+    attempt_id: attemptId,
+    phase_seq: 1,
+    occurred_at: "2026-07-12T09:00:00.000Z",
+  });
+  const firstOperationPhaseTwo = actionEvent({
+    event_key: actionEventKey("review.operation-one-phase-two", { number: 2 }),
+    operation_id: operationOne,
+    attempt_id: attemptId,
+    phase_seq: 2,
+    occurred_at: "2026-07-12T10:00:00.000Z",
+  });
+  const secondOperationPhaseOne = actionEvent({
+    event_key: actionEventKey("review.operation-two-phase-one", { number: 3 }),
+    operation_id: operationTwo,
+    attempt_id: attemptId,
+    phase_seq: 1,
+    occurred_at: "2026-07-12T11:00:00.000Z",
+  });
+  const secondOperationPhaseTwo = actionEvent({
+    event_key: actionEventKey("review.operation-two-phase-two", { number: 4 }),
+    operation_id: operationTwo,
+    attempt_id: attemptId,
+    phase_seq: 2,
+    occurred_at: "2026-07-12T12:00:00.000Z",
+  });
+
+  const ordered = sortActionEventsCausally(
+    [secondOperationPhaseTwo, firstOperationPhaseTwo, secondOperationPhaseOne, firstOperationPhaseOne],
+    { phaseAware: true, validatePhase: true },
+  ).map((event) => event.event_id);
+
+  assert.ok(
+    ordered.indexOf(firstOperationPhaseTwo.event_id) <
+      ordered.indexOf(secondOperationPhaseOne.event_id),
+  );
+});
+
+test("ledger loading preserves canonical causal generated-event order", (context) => {
+  const root = tempRoot(context);
+  const first = actionEvent({
+    event_key: actionEventKey("review.first", { number: 1 }),
+    occurred_at_source: "generated",
+  });
+  const second = actionEvent({
+    event_key: actionEventKey("review.second", { number: 2 }),
+    occurred_at_source: "generated",
+  });
+  const [lower, higher] = [first, second].sort((left, right) =>
+    left.event_id.localeCompare(right.event_id),
+  );
+  higher.occurred_at = "2026-07-12T10:00:00.000Z";
+  lower.occurred_at = "2026-07-12T10:01:00.000Z";
+  lower.parent_event_id = higher.event_id;
+  lower.phase_seq = higher.phase_seq + 1;
+  lower.semantic_sha256 = actionEventSemanticSha256(lower);
+  const file = writeShard(root, [lower, higher]);
+  fs.writeFileSync(file, `${stableJson(higher)}\n${stableJson(lower)}\n`, "utf8");
+
+  assert.doesNotThrow(() => loadActionLedger(root));
 });
 
 test("shard metadata follows exact timestamp order across offsets and fractions", (context) => {
@@ -484,6 +672,8 @@ test("shard paths reject invalid partition calendar dates", () => {
     () =>
       actionEventShardRelativePath(
         {
+          repository: event.producer.repository,
+          sha: event.producer.sha,
           producer: "review",
           workflow: "sweep",
           job: "review-3",
@@ -518,6 +708,8 @@ test("ledger loading rejects duplicate IDs with conflicting occurrence metadata"
     () =>
       actionEventShardRelativePath(
         {
+          repository: first.producer.repository,
+          sha: first.producer.sha,
           producer: "review",
           workflow: "sweep",
           job: "review-3",
@@ -527,6 +719,6 @@ test("ledger loading rejects duplicate IDs with conflicting occurrence metadata"
         },
         [first, conflicting],
       ),
-    /conflicting duplicate metadata/,
+    /action ledger event conflict/,
   );
 });

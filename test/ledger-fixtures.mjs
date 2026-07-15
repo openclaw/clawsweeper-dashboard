@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { actionEventShardRelativePath } from "../scripts/ledger-events.mjs";
+import {
+  actionEventShardRelativePath,
+  sortActionEventsCausally,
+} from "../scripts/ledger-events.mjs";
 import {
   actionEventId,
   actionEventKey,
   actionEventSemanticSha256,
-  compareCanonicalTimestamps,
 } from "../scripts/ledger-schema.mjs";
 
 export function tempRoot(context) {
@@ -25,8 +27,14 @@ export function actionEvent(overrides = {}, seal = true) {
       number: 42,
       source_revision: "abc123",
     }),
+    operation_id: "b".repeat(64),
+    attempt_id: "c".repeat(64),
+    parent_event_id: null,
+    phase_seq: 1,
+    idempotency_key_sha256: "d".repeat(64),
     semantic_sha256: "",
     occurred_at: "2026-07-12T10:00:00.000Z",
+    occurred_at_source: "source",
     recorded_at: "2026-07-12T10:01:00.000Z",
     event_type: "review.completed",
     producer: {
@@ -79,12 +87,14 @@ export function actionEvent(overrides = {}, seal = true) {
 }
 
 export function writeShard(root, events, options = {}) {
-  const ordered = [...events].sort(
-    (left, right) =>
-      compareCanonicalTimestamps(left.occurred_at, right.occurred_at) ||
-      left.event_id.localeCompare(right.event_id),
+  const unique = [...new Map(events.map((event) => [event.event_id, event])).values()];
+  const rank = new Map(
+    sortActionEventsCausally(unique).map((event, index) => [event.event_id, index]),
   );
+  const ordered = [...events].sort((left, right) => rank.get(left.event_id) - rank.get(right.event_id));
   const identity = {
+    repository: ordered[0].producer.repository,
+    sha: ordered[0].producer.sha,
     producer: ordered[0].producer.component,
     workflow: ordered[0].producer.workflow,
     job: ordered[0].producer.job,
@@ -92,7 +102,12 @@ export function writeShard(root, events, options = {}) {
     runAttempt: ordered[0].producer.run_attempt,
     partitionDate: options.partitionDate ?? "2026-07-12",
   };
-  const relative = actionEventShardRelativePath(identity, ordered);
+  const relative = actionEventShardRelativePath(
+    identity,
+    ordered,
+    options.shardIndex,
+    options.shardCount,
+  );
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
