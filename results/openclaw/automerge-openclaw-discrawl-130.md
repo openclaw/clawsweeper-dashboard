@@ -2,12 +2,12 @@
 repo: "openclaw/discrawl"
 cluster_id: "automerge-openclaw-discrawl-130"
 mode: "autonomous"
-run_id: "29362399064"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29362399064"
-head_sha: "d769babcf78c4fb017a14ff1de5f3a2bef4e4430"
+run_id: "29378152321"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29378152321"
+head_sha: "6248fba9f8cdbea81b9ffb8aefb15a95cf0d3d3a"
 workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-14T19:40:17.089Z"
+published_at: "2026-07-15T00:13:52.749Z"
 canonical: "#130"
 canonical_issue: null
 canonical_pr: "#130"
@@ -25,7 +25,7 @@ needs_human_count: 0
 
 Repo: openclaw/discrawl
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29362399064](https://github.com/openclaw/clawsweeper/actions/runs/29362399064)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29378152321](https://github.com/openclaw/clawsweeper/actions/runs/29378152321)
 
 Workflow conclusion: failure
 
