@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-107691"
 mode: "autonomous"
-run_id: "29431617465"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29431617465"
-head_sha: "98c8c4bdc613bd452e8c55ccb8bf1ec29907b8fd"
-workflow_conclusion: "failure"
+run_id: "29434021623"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29434021623"
+head_sha: "cd68a14528558cbc26932629c4bce49f314269b0"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-15T16:36:36.022Z"
+published_at: "2026-07-15T16:53:33.146Z"
 canonical: "#107691"
-canonical_issue: null
+canonical_issue: "#107467"
 canonical_pr: "#107691"
-actions_total: 1
+actions_total: 3
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29431617465](https://github.com/openclaw/clawsweeper/actions/runs/29431617465)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29434021623](https://github.com/openclaw/clawsweeper/actions/runs/29434021623)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #107691
 
 ## Summary
 
-Make PR #107691 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Repair the writable contributor branch for #107691 before exact-head re-review. Latest main still handles only ENOENT in managed npm project-root enumeration. The PR is behind main and its hydrated head has failing lint, test-type, and aggregate CI checks. Preserve @LeonidasLux's narrow production fix, rebase it, replace the oversized failing test shape with concise real-filesystem ENOTDIR coverage, and leave merge and closure to the guarded router.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 3 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,7 +66,9 @@ Make PR #107691 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #107691 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #6792 | keep_independent | planned | independent | This is a separate plugin-install feature and product-decision cluster, not part of the bounded ENOTDIR repair. |
+| #107467 | keep_canonical | planned | canonical | Keep the canonical bug open until the repaired PR passes validation and exact-head ClawSweeper review. |
+| #107691 | fix_needed | planned | canonical | Rebase and repair the writable contributor branch, resolve its failing test and lint surface, validate, and request a fresh exact-head review. |
 
 ## Needs Human
 
