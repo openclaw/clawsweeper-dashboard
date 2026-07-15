@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-15T07:56:26.888Z",
+  "generated_at": "2026-07-15T08:08:36.706Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-15T04:56:24.002Z",
+  "since": "2026-07-15T05:08:35.007Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    93865
+    107574
   ],
   "comment_ids": [
-    4977990095
+    4978070522
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:93865:4977990095:2026-07-15T07:29:19Z:re_review",
-      "comment_id": "4977990095",
-      "comment_version_key": "4977990095:2026-07-15T07:29:19Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/93865#issuecomment-4977990095",
+      "idempotency_key": "comment-router:openclaw/openclaw:107574:4978070522:2026-07-15T07:40:25Z:re_review",
+      "comment_id": "4978070522",
+      "comment_version_key": "4978070522:2026-07-15T07:40:25Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/107574#issuecomment-4978070522",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 93865,
-      "author": "sunlit-deng",
-      "author_id": 253064511,
+      "issue_number": 107574,
+      "author": "IWhatsskill",
+      "author_id": 284122573,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-15T07:29:19Z",
-      "comment_updated_at": "2026-07-15T07:29:19Z",
+      "comment_created_at": "2026-07-15T07:40:25Z",
+      "comment_updated_at": "2026-07-15T07:40:25Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -77,82 +77,67 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(mattermost): backfill thread history from server when in-memory window is empty",
-        "body": "## What Problem This Solves\n\nFixes an issue where Mattermost users replying in an existing thread could lose earlier thread context after the OpenClaw monitor restarted or the agent session was reset.\n\nFixes #93204\n\n## Why This Change Was Made\n\nThe Mattermost monitor now backfills a cold local thread-history window from the Mattermost thread endpoint after inbound admission gates pass. The backfill marker is keyed by the stored thread `sessionId`, not the stable route session key, so a real `/new` or session reset in a thread gets its own recovery fetch while same-session follow-ups avoid repeated server fetches.\n\nWhen the first cold turn has no stored thread session entry yet, the monitor records a pending backfill marker and adopts it once `recordInboundSessionMeta` creates the stored session id. That keeps the marker stable for same-session follow-ups and failed-fetch no-retry, without blocking a later real session-id rotation.\n\nRecovery is now bounded on three axes flagged in review:\n\n- **Thread response size.** `fetchMattermostThreadPosts` requests only the newest `historyLimit + 1` posts via `?perPage=<limit>&direction=up`, then restores ascending chronological order. `GET /posts/{id}/thread` returns the entire thread at the Mattermost default (`perPage=0`), so an unbounded thread would otherwise allocate and parse on the inbound path. The endpoint reads camelCase `perPage` (not `per_page`), so the limit is actually applied.\n- **Marker lifecycle.** Backfill tracking uses one marker per thread history key (`Map<historyKey, sessionId>`) instead of a process-lifetime `Set` of `historyKey:session` compound keys. A plugin-local 1000-key LRU cap (`evictOldThreadBackfillMarkers`, matching the `channelHistories` window size) keeps the marker map from outgrowing the history window it accompanies; the cap stays in the plugin rather than touching core history internals. An evicted thread simply re-backfills on its next cold inbound turn. The stored session id is read only after the admission gates, so dropped pre-admission posts never touch the session store.\n- **Concurrent cold turns.** Under the default zero-debounce config, two first cold-thread messages can overlap on the awaited thread-history fetch. The first turn sets the completed-attempt marker and publishes a per-history-key in-flight promise; an overlapping same-session turn now awaits that one bounded fetch instead of seeing the marker and skipping into a context-free reply. The in-flight handle is cleared once the fetch settles, so afterward the marker alone governs the intentional one-attempt-per-session no-retry.\n\n## User Impact\n\nMattermost thread replies keep useful prior context after restart or `/new`, without repeated thread-history requests, unbounded thread fetches, or unbounded per-session marker growth on long-lived monitors. Concurrent first cold-thread messages under zero-debounce no longer race into a context-free reply.\n\n## Evidence\n\n- `node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts extensions/mattermost/src/mattermost/monitor.test.ts extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts`: **3 files, 115 passed**. Covers stored thread `sessionId` rotation, same-session no-refetch, failed-fetch no-retry, dropped pre-admission posts, adopt-pending-marker without blocking later rotation, the initially-missing session entry path, marker-map eviction, and the new concurrent-turn deferred-fetch case.\n- `oxlint` (repo binary) on the changed prod + test files: **passed**. `tsgo --noEmit -p extensions/mattermost/tsconfig.json`: **passed**.\n- Bounded fetch asserted (`client.test.ts`): a limited call issues `?perPage=2&direction=up` and re-sorts ascending so callers still build history oldest-first.\n- Bounded marker asserted (`monitor.test.ts`): the backfill requests `historyLimit + 1`, `threadBackfillMarkers.get(historyKey)` carries the current session marker across the rotation / no-refetch / no-retry / adopt paths, and the eviction test drives 1001 distinct threads to prove the marker map stays capped at 1000 (plugin-local LRU), the oldest key is evicted, and an evicted thread with a cold window re-backfills from the server.\n- Concurrency asserted (`monitor.test.ts`): with the first cold fetch gated open, an overlapping same-session turn stays pending until that fetch releases, exactly one server fetch runs, both turns observe the recovered window, and the in-flight handle is cleared afterward so the marker governs no-retry.\n- Rebased onto latest `origin/main` (0 behind). The only conflict was two independent `describe` blocks colliding in `client.test.ts` (`createMattermostDirectChannelWithRetry delay cap` from main and `fetchMattermostThreadPosts` from this branch); both were kept. Earlier exact-head repairs remain: the thread query uses Mattermost's documented camelCase `perPage` so the response bound is applied, and the chronological re-sort uses non-mutating `toSorted()` to satisfy the bundled-extension `unicorn/no-array-sort` lint lane.\n\nLive proof: local Docker Mattermost Team Edition 10.11.21 at `http://localhost:8065`, with tokens and Mattermost ids redacted. The proof used real Mattermost REST auth, posts, and `/api/v4/posts/<root>/thread` through `monitorMattermostProvider`; a fake websocket only injected `posted` events into the monitor. The route/thread session key stayed stable while the stored thread `sessionId` rotated. Cold start included prior root/thread context, same-session server-only context stayed absent, and stored-thread-session reset included new server-only prior context:\n\n```json\n{\n  \"mattermost\": \"10.11.21 local Docker, token/id redacted\",\n  \"routeSessionKey\": \"stable, redacted\",\n  \"threadSessionKey\": \"stable, redacted\",\n  \"threadSessionKeyStable\": true,\n  \"storedThreadSessionIds\": [\n    \"stored-session-before-reset\",\n    \"stored-session-after-reset\"\n  ],\n  \"dispatchCount\": 3,\n  \"firstColdStartContainsPriorThreadContext\": true,\n  \"firstColdStartContainsRootContext\": true,\n  \"sameSessionSkippedServerOnlyContext\": true,\n  \"storedThreadSessionIdResetContainsNewPriorContext\": true\n}\n```\n\nRecent validation after the squash/fix:\n\n```text\n$ node scripts/check-extension-package-tsc-boundary.mjs --mode=compile\nextension package boundary check passed\n\n$ node scripts/run-vitest.mjs extensions/mattermost/src/mattermost/client.test.ts extensions/mattermost/src/mattermost/monitor.test.ts extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts\nTest Files  3 passed (3)\nTests  115 passed (115)\n```\n\n<details>\n<summary>Recent proof commands</summary>\n\n```bash\nnode scripts/check-extension-package-tsc-boundary.mjs --mode=compile\nnode scripts/run-vitest.mjs \\\n  extensions/mattermost/src/mattermost/client.test.ts \\\n  extensions/mattermost/src/mattermost/monitor.test.ts \\\n  extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts\n```\n\n</details>\n\nAI-assisted: built with Codex\n",
-        "branch": "fix/issue-93204-Mattermost--thread-context-los",
-        "head_sha": "10de1f1a3b0544255195b4a57d759ce2b0638476",
-        "author": "sunlit-deng",
+        "title": "fix(android): wrap large segmented controls",
+        "body": "[AI-assisted]\n## What Problem This Solves\n\nThe shared Android segmented control normally keeps every option in one equal-width row. In Settings > Skill Workshop, the five filters Pending, Held, Applied, Rejected, and All are compressed until several labels are ellipsized, making the control difficult to scan.\n\n## Why This Change Was Made\n\nThis change makes multi-row layout an explicit caller choice instead of a global shared-component policy. Skill Workshop opts into balanced rows with at most four items, while every other segmented-control caller keeps the existing single-row default. Focused tests lock both the caller opt-in and the preserved default.\n\n## User Impact\n\nSkill Workshop shows all five filter labels across two balanced rows without truncation. Selection, enabled state, and click handling remain unchanged, and other segmented controls keep their current single-row layout unless they explicitly opt in.\n\n## Evidence\n\n> [!NOTE]\n> ### Validation\n>\n> - [x] `node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest --no-daemon --rerun-tasks --tests ai.openclaw.app.ui.design.ClawComponentsTest` — passed the focused default-and-opt-in row policy tests\n> - [x] `pnpm android:lint --no-daemon` — passed Android and benchmark ktlint checks\n> - [x] `pnpm android:assemble --no-daemon` — passed and produced the current patched Play debug APK\n> - [x] `pnpm run native:i18n:sync` — passed and refreshed generated source-line metadata\n> - [x] `pnpm run native:i18n:check` — passed with changed=false\n> - [x] `pnpm run android:i18n:check` — passed\n> - [x] `pnpm run apple:i18n:check` — passed\n> - [x] `git diff --check` — passed\n\n> [!TIP]\n> ### Real Behavior Proof\n>\n> Android emulator behavior verified with the exact patched APK.\n>\n> - [x] **Environment:** The public Before and After media were captured on an Android 36 emulator from the preceding visual head; the current scope-only follow-up was verified with a fresh focused test run and an exact-head Play debug build.\n> - [x] **Precondition:** Open Settings > Skill Workshop where Pending, Held, Applied, Rejected, and All are available.\n> - [x] **Before:** All five filters were compressed into one row and multiple labels were ellipsized.\n> - [x] **After:** The captured patched app rendered the five filters as balanced 3+2 rows with readable labels; the current head preserves that partition through the Skill Workshop opt-in while restoring the shared single-row default.\n> - [x] **Result:** The demonstrated Skill Workshop behavior remains covered without establishing a global wrapping policy for other segmented controls.\n> - [x] **Remaining proof gap:** The current scope-only follow-up APK was built and tested but was not recaptured on the emulator.\n\n<table>\n  <tr><th>Before</th><th>After</th></tr>\n  <tr>\n    <td><img width=\"260\" src=\"https://github.com/user-attachments/assets/c6ac4ab1-713e-49e2-83f2-898074b99f44\" alt=\"Before\" /></td>\n    <td><img width=\"260\" src=\"https://github.com/user-attachments/assets/8fcbe81a-d15f-4b34-bb8f-8f5b6d472563\" alt=\"After\" /></td>\n  </tr>\n</table>\n\nBefore behavior recording:\n\nhttps://github.com/user-attachments/assets/fbfbde0f-9ccc-4851-93d2-859fee253a8f\n\nAfter behavior recording:\n\nhttps://github.com/user-attachments/assets/07aa9322-3b56-4ec3-8ade-37d9df5a4632\n",
+        "branch": "fix/android-segmented-control-layout",
+        "head_sha": "bea669f37b97d7e4a4da3bb7b346415234235695",
+        "author": "iwhatsskill",
         "labels": [
-          "channel: mattermost",
-          "size: XL",
-          "proof: supplied",
+          "app: android",
+          "size: M",
           "proof: sufficient",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: ⏳ waiting on author"
+          "P3",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "proof: 🎥 video",
+          "merge-risk: 🚨 other"
         ],
         "files": [
           {
-            "path": "extensions/mattermost/src/mattermost/client.test.ts",
-            "additions": 82,
+            "path": "apps/.i18n/native-source.json",
+            "additions": 43,
+            "deletions": 43,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt",
+            "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/monitor-thread-backfill.ts",
-            "additions": 190,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts",
-            "additions": 308,
-            "deletions": 4,
+            "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
+            "additions": 56,
+            "deletions": 27,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/mattermost/src/mattermost/monitor.test.ts",
-            "additions": 476,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/monitor.ts",
-            "additions": 18,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/mattermost/src/mattermost/thread-posts.ts",
-            "additions": 19,
+            "path": "apps/android/app/src/test/java/ai/openclaw/app/ui/design/ClawComponentsTest.kt",
+            "additions": 46,
             "deletions": 0,
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 6,
-        "additions": 1093,
-        "deletions": 23,
+        "changedFiles": 4,
+        "additions": 146,
+        "deletions": 70,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-93865",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-93865.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-107574",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107574.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 82,
-          "gatingTotal": 77,
+          "total": 88,
+          "gatingTotal": 83,
           "counts": {
-            "SUCCESS": 41,
-            "SKIPPED": 33,
-            "FAILURE": 7,
-            "NEUTRAL": 1
+            "SUCCESS": 64,
+            "SKIPPED": 24
           },
           "blockers": [
             "checks-node-changed:FAILURE",
@@ -189,19 +174,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3119,
+    "total_ms": 1893,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1098
+        "ms": 431
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1692
+        "ms": 1046
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -217,7 +202,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 234
+        "ms": 195
       },
       {
         "name": "append_ledger",
