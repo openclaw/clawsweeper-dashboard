@@ -1,25 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T04:40:06.444Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-16T04:40:57.534Z",
+  "repo": "openclaw/crabbox",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T01:40:06.048Z",
+  "since": "2026-07-16T01:40:49.838Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
-  "item_numbers": [
-    94088
-  ],
-  "comment_ids": [
-    4988231777
-  ],
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 21,
+  "commands_seen": 9,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -32,7 +28,942 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1104:4988123528:2026-07-16T04:17:07Z:clawsweeper_auto_repair",
+      "comment_id": "4988123528",
+      "comment_version_key": "4988123528:2026-07-16T04:17:07Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1104#issuecomment-4988123528",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1104,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T04:17:07Z",
+      "comment_updated_at": "2026-07-16T04:17:07Z",
+      "comment_body_sha256": "afb92f00e73f74a66889661bb84c7a1317bf4e9fcf5bec28638ad48a0da20367",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=26950fef478b0e6d762401323d2134fc2717941b)",
+      "review_summary": "Registers client egress connections before remote open completion, gates inbound data until the local proxy handshake is written, preserves rejected-open responses, and adds deterministic concurrency tests plus a changelog entry.\n\nReproducibility: yes. at source level: current main has a clear `open_ok`-to-registration window in which `writeConn` drops an unknown ID, and the added deterministic test directly exercises that interleaving. A real endpoint reproduction was not provided.",
+      "review_followup": "- [P1] The contributor should remove the changelog edit and supply real after-fix egress evidence; this proof cannot be created reliably by an automated repair worker.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "26950fef478b0e6d762401323d2134fc2717941b",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-16T00:34:55.012Z",
+      "review_lease_owner": "github-run-29461618787-1",
+      "review_lease_comment_id": "4986688528",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "c765a65bfbb843c39ba40d957c81893304d9042f1983517d690416d66d9cfee8",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): deliver server-first egress banner racing the CONNECT handshake",
+        "body": "## Summary\n- **Problem:** in the egress client bridge, `handleProxyConn` registered `b.conns[id] = conn` only *after* `openRemote` returned. `clientReadLoop` unblocks `openRemote` via `finishOpen` (\"open_ok\") and can then immediately process the next inbound frame — a server-first banner `data` frame the host forwards right after open_ok — *before* `handleProxyConn` is rescheduled to register the conn.\n- **Why it matters:** in that window `writeConn` found `conns[id] == nil` and silently discarded the bytes (`egress.go:713`). Nothing retries a dropped frame, so a proxied CONNECT to any server-first protocol (SSH, SMTP, FTP, IMAP, MySQL) loses its greeting banner and the client hangs waiting for a handshake that never arrives.\n- **What changed:** register the conn up front, but hold it `notReady` until the handshake is written. `writeConn` — which runs on `clientReadLoop` — blocks on a `sync.Cond` while an id is `notReady`, then delivers the inbound bytes. `handleProxyConn` writes the CONNECT `200` (or forwards the non-CONNECT request) and calls `markReady`, which wakes the waiter to write the banner **in order, after the 200**. No buffering: because the blocker *is* `clientReadLoop`, TCP backpressure is preserved end-to-end (a banner that races the handshake is held on the read goroutine, not accumulated in memory).\n- **What did NOT change (scope boundary):** the host side (`serveHost`/`hostOpen`, which register conns directly and never set `notReady`, so they fall straight through `writeConn`), the open/timeout protocol, and the CONNECT/non-CONNECT relay semantics are untouched. The `200 Connection Established` is still written strictly before any tunneled banner.\n- **AI-assisted:** yes (Claude); found via a concurrency audit (`signalkrebs`), verified manually and reviewed (two rounds — the first design buffered early frames and was revised after review flagged it dropped TCP backpressure; see Review history).\n\nPart of openclaw/crabbox#1096.\n\n## What to review\n| File | Change |\n|---|---|\n| `internal/cli/egress.go` | `notReady` set + `ready *sync.Cond`; register-then-`markReady` in `handleProxyConn`; `writeConn` waits out the handshake window; `markReady`/`discardConn`; `closeConn` wakes waiters |\n| `internal/cli/egress_banner_buffer_test.go` | deterministic regression tests: barrier withholds banner pre-handshake then delivers in order; close-during-window wakes the waiter; unknown-id drop doesn't hang |\n\n## Real-behavior proof (base vs HEAD)\n```\n# base 808d96f — server-first banner is dropped, deterministically\n$ go test -run TestEgressBaseDropsServerFirstBanner -count=5 ./internal/cli/\n--- FAIL: TestEgressBaseDropsServerFirstBanner (1.00s)\n    BASE BUG REPRODUCED: server-first banner dropped by writeConn (conns[id]==nil\n    at egress.go:713 during the pre-registration window) and never delivered:\n    read 0 bytes, err=read pipe: i/o timeout\nFAIL   (5/5 iterations)\n\n# HEAD 948fcb7 — banner held through the handshake, delivered in order\n$ go test -race -run 'TestEgressServerFirstBannerWaitsForHandshakeThenDelivers|TestEgressCloseDuringHandshakeUnblocksWriteConn|TestEgressWriteConnDropsUnknownID' -count=30 ./internal/cli/\nok     github.com/openclaw/crabbox/internal/cli   (30/30)\n$ go vet ./... && go build ./... && go test -race ./internal/cli/\nok     github.com/openclaw/crabbox/internal/cli   200.952s   (0 failures)\n```\n\n## Regression test plan\nRather than depend on the scheduler hitting a sub-microsecond window (which made a naive end-to-end repro flaky ~4/5), the tests reproduce the interleaving in-process and deterministically: they register the conn as `notReady`, deliver the banner `data` frame via `writeConn` in a goroutine, and assert it is **neither delivered nor returned** until `markReady` — proving both the ordering barrier and the backpressure block — then assert in-order delivery and direct streaming afterwards. A second test tears the conn down mid-window and asserts `writeConn` is woken (no hung `clientReadLoop`); a third asserts an unknown id drops without blocking. All are `-race`-clean and 1-shot.\n\n## What was NOT tested\nNo live egress session against a real remote SSH/SMTP host; the drop and the fix are exercised through the real `writeConn`/`markReady`/`closeConn`/`discardConn` code paths with an in-process conn (`net.Pipe`).\n\n## Risks\n- Risk: `sync.Cond` misuse (lost wakeup / stuck waiter).\n  - Mitigation: the wait predicate is re-checked in a `for` loop; **every** state transition that can release a waiter (`markReady`, `discardConn`, `closeConn`) clears state and `Broadcast()`s under the lock, so a conn torn down mid-window wakes the waiter, which sees `conns[id]==nil` and drops the frame. Verified under `-race` including a close-during-window test.\n- Risk: deadlock between `handleProxyConn` and `clientReadLoop`.\n  - Mitigation: `clientReadLoop` is sequential and processes `open_ok` (unblocking `openRemote`) before it can read a banner frame and block in `writeConn`; `handleProxyConn` then writes the 200 and `markReady`s without depending on `clientReadLoop`. No cycle. Confirmed by review.\n\n## Not included (scope boundary / follow-up)\n- Head-of-line blocking is unchanged: a slow local client that stalls the `200`/relay write pauses `clientReadLoop` for the whole multiplexed websocket. This is an inherent property of the existing unbuffered single-socket design (base `writeConn`'s `conn.Write` already behaves this way) — not introduced here — so it is left as-is rather than reworked.\n- A `close` frame that lands during the open window still races registration (`closeConn` now wakes any waiter and scrubs state); this is the same pre-existing lifecycle race noted for the sibling egress fixes and is out of scope here.\n\n## Root cause\n- **Symbol/file:** `handleProxyConn` / `writeConn`, `internal/cli/egress.go`.\n- **Missing guardrail:** the conn was registered after the open completed, and `writeConn` treated \"not yet registered\" as \"drop\", so frames in the open→registration window were lost.\n- **Already correct:** the host side and the open protocol were fine — only the client-side registration window leaked frames.\n\n## Security impact\n- Auth/authorization path change? **No**\n- Exposes a credential/secret? **No**\n- Changes a trust boundary or network surface? **No**\n- Resource cleanup/lifetime in a security-relevant way? **No** (no buffer; state scrubbed and waiters woken on every exit path)\n- Parses untrusted input in a new way? **No**\n\n\n## Review history\n\nhttps://gist.github.com/bf4bcc1ec0d638828249eb0b105b4cf4\n",
+        "branch": "fix/egress-banner-drop-on-open",
+        "head_sha": "26950fef478b0e6d762401323d2134fc2717941b",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/egress.go",
+            "additions": 79,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/egress_banner_buffer_test.go",
+            "additions": 214,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 299,
+        "deletions": 8,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-1104",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1104.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "REVIEW_REQUIRED",
+        "checks": {
+          "total": 12,
+          "gatingTotal": 12,
+          "counts": {
+            "SUCCESS": 12
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1103:4988053452:2026-07-16T04:06:11Z:clawsweeper_auto_repair",
+      "comment_id": "4988053452",
+      "comment_version_key": "4988053452:2026-07-16T04:06:11Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1103#issuecomment-4988053452",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1103,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T04:06:11Z",
+      "comment_updated_at": "2026-07-16T04:06:11Z",
+      "comment_body_sha256": "05fef2b8026fc6eb31ef391ee497672c1520219091caa27c6e74ecb19fc449dc",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=edba88c05940b448465fa72370d23fbfd5c527f0)",
+      "review_summary": "Adds a per-lease file lock around egress host-daemon starts, a concurrent real-process regression test, and an unreleased changelog entry.\n\nReproducibility: yes. at source level: the unlocked stop-check-start-write sequence and the focused concurrent-process test define a high-confidence reproduction path. I did not independently execute the test, so the structured status remains source-reproducible rather than reproduced.",
+      "review_followup": "- [P1] The branch already contains the narrow code fix; the remaining merge actions are contributor-owned real behavior proof and a small release-note cleanup, not a separate ClawSweeper repair PR.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "edba88c05940b448465fa72370d23fbfd5c527f0",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-16T00:21:58.551Z",
+      "review_lease_owner": "github-run-29461019370-1",
+      "review_lease_comment_id": "4986596303",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "659fb4f4b253e12a18c722c872a9efa888779751879b71530802dbad33e6329f",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): lock egress host-daemon starts to prevent double-provision",
+        "body": "## Summary\n- **Problem:** `startEgressHostDaemon` runs stop-check → `cmd.Start()` → write pid-file with no per-lease lock.\n- **Why it matters:** two concurrent starts for the same lease (e.g. a retry script and an interactive shell) both stop-check (see no/stale pid), both start a supervisor, and both write the pid file — the losing write orphans a supervisor that `egress stop` can no longer find, so it keeps reconnecting/contending until manually killed.\n- **What changed:** hold a per-lease daemon lock (`acquireEgressDaemonLock`, an flock on the egress pid path + `.lock`) across the whole stop-check-start-write, so concurrent starts serialize instead of double-provisioning. Mirrors the webvnc daemon paths' `acquireWebVNCDaemonLock`.\n- **What did NOT change (scope boundary):** the supervisor script, `stopEgressHostDaemon` logic, and pid helpers are untouched. The internal `stopEgressHostDaemon` call runs *under* the start's lock (it does not itself lock), so there is no reentrant deadlock. The `.lock` file is never removed (`stop` removes only the pid file), so the lock inode stays stable.\n- **AI-assisted:** yes (Claude); found via a concurrency audit (`signalkrebs`), verified manually and reviewed.\n\nPart of openclaw/crabbox#1096.\n\n## What to review\n| File | Change |\n|---|---|\n| `internal/cli/egress.go` | `acquireEgressDaemonLock` + hold it across `startEgressHostDaemon` |\n| `internal/cli/egress_daemon_double_provision_test.go` | regression test (two concurrent starts, real supervisors) |\n\n## Real-behavior proof (base vs HEAD)\n```\n# base 808d96f\n$ go test -race -run TestEgressDaemonConcurrentStartDoubleProvision ./internal/cli/\n--- FAIL: ... 2 live egress daemon supervisors, but the pid file records only one — the other is orphaned\n# HEAD\n$ go test -race -run TestEgressDaemonConcurrentStartDoubleProvision ./internal/cli/   -> ok\n$ go vet ./... && go build ./... && go test -race ./internal/cli/                      -> ok\n```\n\n## What was NOT tested\nNo live egress session against a real remote host; the double-provision is exercised deterministically by two concurrent `startEgressHostDaemon` calls spawning real supervisor processes.\n\n## Regression test plan\nThe test starts the egress host daemon twice concurrently for one lease and asserts exactly one live supervisor and a matching pid file. FAILS on base (two supervisors, one orphaned), PASSES with the fix.\n\n## Risks\n- Risk: the lock could deadlock or leak across the spawned supervisor.\n  - Mitigation: the internal stop runs under the lock (no re-acquire); `defer unlock()` covers all returns; Go's `O_CLOEXEC` keeps the supervisor from inheriting the lock fd; the OS releases the flock on process exit. Verified under `-race`.\n\n## Not included (scope boundary / follow-up)\n- A standalone `egress stop` racing a `start` (stop reads a pid, start replaces it, stop removes the pid file) can still orphan a daemon. That is a distinct race from the concurrent-*start* double-provision fixed here; the clean fix is to have `stopEgressHostDaemon` take the same lock (via a locked/unlocked split). Noted as a follow-up rather than bundled.\n\n## Root cause\n- **Symbol/file:** `startEgressHostDaemon`, `internal/cli/egress.go`.\n- **Missing guardrail:** no per-lease lock around stop-check-start-write, unlike the sibling webvnc daemon paths.\n- **Already correct:** the supervisor + pid helpers were fine.\n\n## Security impact\n- Auth/authorization path change? **No**\n- Exposes a credential/secret? **No**\n- Changes a trust boundary or network surface? **No**\n- Resource cleanup/lifetime in a security-relevant way? **Yes — prevents orphaned daemon processes; no new exposure**\n- Parses untrusted input in a new way? **No**\n\n## Review history\n\nhttps://gist.github.com/f6b493e67ab15f5809d0961929e6e09f\n",
+        "branch": "fix/egress-daemon-double-provision",
+        "head_sha": "edba88c05940b448465fa72370d23fbfd5c527f0",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/egress.go",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/egress_daemon_double_provision_test.go",
+            "additions": 121,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 154,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-1103",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1103.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "REVIEW_REQUIRED",
+        "checks": {
+          "total": 12,
+          "gatingTotal": 12,
+          "counts": {
+            "SUCCESS": 12
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1100:4987986087:2026-07-16T03:54:41Z:clawsweeper_needs_human",
+      "comment_id": "4987986087",
+      "comment_version_key": "4987986087:2026-07-16T03:54:41Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1100#issuecomment-4987986087",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1100,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T03:54:41Z",
+      "comment_updated_at": "2026-07-16T03:54:41Z",
+      "comment_body_sha256": "a2ad245e126c022a2a0319955d3f0fa607efce7a368c206e3f9beb04ad425745",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Keep the active PR in review and require real after-fix code-server behavior proof before merge; no automated code repair is currently identified.; Cleared: The diff tightens connection lifetime and adds tests without changing authentication, secrets, permissions, dependencies, or trust boundaries. (sha=92359834035365a3508ebd9bb03e55440b797e8c)",
+      "review_summary": "The PR marks the code-server bridge closed during shutdown, rejects WebSocket dials that complete afterward, adds deterministic race regression coverage, and updates the unreleased changelog.\n\nReproducibility: yes. The PR supplies a deterministic current-main interleaving and reports the focused race test failing on base `808d96fc7235790b30ed1e1ce132e58be37af70d` and passing on the branch.",
+      "review_followup": "- [P1] Keep the active PR in review and require real after-fix code-server behavior proof before merge; no automated code repair is currently identified.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "92359834035365a3508ebd9bb03e55440b797e8c",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-16T00:03:25.308Z",
+      "review_lease_owner": "github-run-29460085427-1",
+      "review_lease_comment_id": "4986446921",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "538c6744bb3bfd2d7cec294be353ab17915b6362f3109249f7fb67a2877a0869",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): drop in-flight code-server upstream opened after bridge Close",
+        "body": "## Summary\n- **Problem:** `codeBridge` has no `closed` flag, so an `openUpstreamWebSocket` goroutine still dialing the code-server upstream when `Close` runs will register its conn in `b.upstream` and spawn `readUpstreamWebSocket` *after* `Close` has already swept the map.\n- **Why it matters:** `Close` runs once (via `defer` when `Serve` exits); a conn/reader registered after it is never cleaned up, leaking the upstream websocket + its reader goroutine for the process lifetime.\n- **What changed:** mark the bridge `closed` under `b.mu` in `Close`; when registering a freshly dialed upstream, if the bridge already closed, drop the conn (close it, don't register, don't spawn the reader).\n- **What did NOT change (scope boundary):** the success path, `readUpstreamWebSocket`, `Close`'s existing sweep, and frame handling are untouched. `pending`/`incomingFrames` are populated synchronously inside `Serve` and swept by `Close`, so they cannot leak after close.\n- **AI-assisted:** yes (Claude); found via a concurrency audit (`signalkrebs`), verified manually and independently reviewed.\n\nPart of openclaw/crabbox#1096.\n\n## What to review\n| File | Change |\n|---|---|\n| `internal/cli/code.go` | `closed` flag set in `Close`; drop late upstream registration |\n| `internal/cli/code_bridge_close_race_test.go` | regression test |\n\n## Real-behavior proof (base vs HEAD)\n```\n# base 808d96f\n$ go test -race -run TestCodeBridgeCloseOrphansInFlightUpstreamWebSocket ./internal/cli/\n--- FAIL: ... in-flight upstream registered after Close leaked (conn + reader goroutine)\n# HEAD\n$ go test -race -run TestCodeBridgeCloseOrphansInFlightUpstreamWebSocket ./internal/cli/   -> ok\n$ go vet ./... && go build ./... && go test -race ./internal/cli/                          -> ok\n```\n\n## What was NOT tested\nNo live code-server session; the race is exercised deterministically by driving the real `openUpstreamWebSocket`/`Close` sequence with an in-flight dial.\n\n## Regression test plan\nThe test starts an upstream open, lets `Close` run while it is mid-dial, and asserts the conn is not registered and no reader goroutine leaks. FAILS on base, PASSES with the fix.\n\n## Risks\n- Risk: closing the dropped conn could block while holding `b.mu`.\n  - Mitigation: the lock is released before `conn.Close`; verified under `-race`.\n\n## Not included (scope boundary)\n- A separate, pre-existing edge where a duplicate `ws_open` for the same id overwrites `b.upstream[id]` without closing the prior conn (a distinct leak, different trigger) — noted for a follow-up rather than bundled here.\n\n## Root cause\n- **Symbol/file:** `codeBridge.openUpstreamWebSocket` registration, `internal/cli/code.go`.\n- **Missing guardrail:** no closed-state check between the async dial and registration.\n- **Already correct:** `Close`'s sweep and the reader shutdown were fine.\n\n## Security impact\n- Auth/authorization path change? **No**\n- Exposes a credential/secret? **No**\n- Changes a trust boundary or network surface? **No**\n- Resource cleanup/lifetime in a security-relevant way? **Yes — fixes a conn/goroutine leak; no new exposure**\n- Parses untrusted input in a new way? **No**\n\n## Review history\n\nhttps://gist.github.com/84d13ace9dce05fa86451fed332049ee\n",
+        "branch": "fix/code-bridge-close-race",
+        "head_sha": "92359834035365a3508ebd9bb03e55440b797e8c",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish"
+        ],
+        "files": [
+          {
+            "path": "CHANGELOG.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/code.go",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "internal/cli/code_bridge_close_race_test.go",
+            "additions": 153,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 169,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-1100",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1100.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "REVIEW_REQUIRED",
+        "checks": {
+          "total": 14,
+          "gatingTotal": 14,
+          "counts": {
+            "SUCCESS": 14
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1099:4987966892:2026-07-16T03:51:13Z:clawsweeper_auto_repair",
+      "comment_id": "4987966892",
+      "comment_version_key": "4987966892:2026-07-16T03:51:13Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1099#issuecomment-4987966892",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1099,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T03:51:13Z",
+      "comment_updated_at": "2026-07-16T03:51:13Z",
+      "comment_body_sha256": "af21f2333952d68842c6c80e437091aecd8103be6e2cb56a9cd524c9e7ff901d",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=9ac7d8b7aae38e8c4a9fbb766bcc3f06bc3b1a18)",
+      "review_summary": "Updates the CLI egress bridge to remove timed-out or canceled opens, close successful late host connections asynchronously, and add a websocket-backed regression test plus a changelog entry.\n\nReproducibility: yes. at the source and regression-harness level: the focused test exercises the real client bridge over a websocket and is reported to fail on base and pass on head. It does not reproduce the result against a real remote host.",
+      "review_followup": "- [P1] No automated repair lane should run because the remaining merge gate is contributor-supplied proof from a real setup; the minor comment correction can be handled on the existing branch.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "9ac7d8b7aae38e8c4a9fbb766bcc3f06bc3b1a18",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-15T23:53:54.409Z",
+      "review_lease_owner": "github-run-29459654123-1",
+      "review_lease_comment_id": "4986385762",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "fc68cf4f2b8e00a4ed18825441aaf5efbe130f0586215daf07a5e4b3f34cc8b1",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1101:4987960365:2026-07-16T03:50:03Z:clawsweeper_needs_human",
+      "comment_id": "4987960365",
+      "comment_version_key": "4987960365:2026-07-16T03:50:03Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1101#issuecomment-4987960365",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1101,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T03:50:03Z",
+      "comment_updated_at": "2026-07-16T03:50:03Z",
+      "comment_body_sha256": "ec1ee20a61511c519294d680cbacd777fa7f1d14da0e90d8a2425c1ee0b8e18b",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No code repair is identified; human merge review should wait for contributor-supplied real behavior proof and the normal required checks.; Cleared: The diff changes local retry-counter scoping and test coverage only; it adds no dependency, secret, permission, trust-boundary, or supply-chain change. (sha=ba56563d73a56a23bb2a265fb362bfc3783ab9c0)",
+      "review_summary": "The PR preserves the WebVNC loop’s reconnect-attempt counter across connection failures, adds a focused regression test, and adds an unreleased changelog entry.\n\nReproducibility: yes. with high confidence from source: the block-scoped `:=` demonstrably discards the updated loop counter, and the supplied focused test transcript reports the expected failure on the exact current-main base. The reviewer did not independently execute it.",
+      "review_followup": "- [P1] No code repair is identified; human merge review should wait for contributor-supplied real behavior proof and the normal required checks.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "ba56563d73a56a23bb2a265fb362bfc3783ab9c0",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-15T22:56:27.376Z",
+      "review_lease_owner": "github-run-29456787317-1",
+      "review_lease_comment_id": "4986044247",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "587c32b19f22236aaabcdd6a373e70937b7f1d1902f55ad08e67aa2631b1681d",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1098:4987945761:2026-07-16T03:47:13Z:clawsweeper_auto_repair",
+      "comment_id": "4987945761",
+      "comment_version_key": "4987945761:2026-07-16T03:47:13Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1098#issuecomment-4987945761",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1098,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T03:47:13Z",
+      "comment_updated_at": "2026-07-16T03:47:13Z",
+      "comment_body_sha256": "753c92d2cc07fc3ed3d49221e6cfcb65cb92dcdd51801bf345445baba5ed0795",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=5c9f7928c0b8eed3c0e3d830b5874af6268018ab)",
+      "review_summary": "Adds telemetry-sampler shutdown to `runRecorder.Failed`, a focused regression test, and an unreleased changelog entry.\n\nReproducibility: no. live reproduction was performed in this review, but the source asymmetry and submitted base-versus-head race-test transcript provide a high-confidence deterministic reproduction path.",
+      "review_followup": "- [P1] A maintainer should hold merge for contributor-provided real runtime proof and removal of the release-owned changelog entry; automation cannot supply proof from the contributor's setup.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "5c9f7928c0b8eed3c0e3d830b5874af6268018ab",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-15T23:09:39.810Z",
+      "review_lease_owner": "github-run-29457503577-1",
+      "review_lease_comment_id": "4986125489",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "04484b40b602788082fbbd27bb8b053e3c90c6c5b48fed30b3284075852f9dae",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/crabbox:1092:4987768740:2026-07-16T03:10:12Z:re_review",
+      "comment_id": "4987768740",
+      "comment_version_key": "4987768740:2026-07-16T03:10:12Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1092#issuecomment-4987768740",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1092,
+      "author": "steipete",
+      "author_id": 58493,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T03:10:12Z",
+      "comment_updated_at": "2026-07-16T03:10:12Z",
+      "comment_body_sha256": "077f66091752a12be44df762ad60056b4760b23e5b84f02a60a95e5435678d9e",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/crabbox:1062:4951301007:2026-07-14T14:31:38Z:clawsweeper_auto_repair",
+      "comment_id": "4951301007",
+      "comment_version_key": "4951301007:2026-07-14T14:31:38Z",
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1062#issuecomment-4951301007",
+      "repo": "openclaw/crabbox",
+      "target_branch": "main",
+      "issue_number": 1062,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-12T13:11:56Z",
+      "comment_updated_at": "2026-07-14T14:31:38Z",
+      "comment_body_sha256": "5dc945f6e47881fa6f360769c25cc8705f7e10e670d4a69cf32a7ddb98de8026",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper marker: fix-required (finding=review-feedback sha=d34cb15fe31612421246f420d644a07a45f8d725)",
+      "review_summary": "The PR reorganizes Features and Provider documentation, adds a generated searchable capability explorer, and adds pinned Playwright browser-proof automation for the docs site.\n\nReproducibility: not applicable. This PR changes documentation information architecture and generated-site behavior rather than fixing a reported runtime bug. Exact-head browser proof directly exercises the changed behavior.",
+      "review_followup": "- A single mechanical removal of the release-owned changelog section resolves the remaining blocker without changing the proven documentation feature.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "d34cb15fe31612421246f420d644a07a45f8d725",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-14T14:29:49.967Z",
+      "review_lease_owner": "github-run-29340634089-1",
+      "review_lease_comment_id": "4970296134",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "3919290be28ea1418ab5415f3229161862256122ed95abfbc4ef2fccd1bf39ad",
+      "finding_id": "review-feedback",
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "repair-loop-label-sweep:openclaw/crabbox:automerge:1062",
+      "comment_id": "repair-loop-label-sweep:automerge:1062",
+      "comment_version_key": null,
+      "comment_url": "https://github.com/openclaw/crabbox/pull/1062",
+      "repo": "openclaw/crabbox",
+      "issue_number": 1062,
+      "author": "clawsweeper[bot]",
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-16T04:40:49.838Z",
+      "comment_updated_at": "2026-07-16T04:40:49.838Z",
+      "trigger": "trusted_bot",
+      "command": "automerge",
+      "intent": "automerge",
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "repair_loop_label_sweep",
+      "repair_reason": "automerge enabled; PR is behind or has merge conflicts and needs a cloud rebase repair before automerge",
+      "status": "executed",
+      "actions": [
+        {
+          "action": "label",
+          "label": "clawsweeper:automerge",
+          "status": "executed"
+        },
+        {
+          "action": "dispatch_repair",
+          "workflow": "repair-cluster-worker.yml",
+          "job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1062.md",
+          "mode": "autonomous",
+          "status": "executed",
+          "dispatched_at": "2026-07-16T04:41:11.688Z",
+          "run_url": "https://github.com/openclaw/clawsweeper/actions/runs/29471962133"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-16T04:41:13.226Z",
+          "response_comment_id": "4968578409",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "target": {
+        "kind": "pull_request",
+        "title": "docs: add Features capability explorer",
+        "body": "## Summary\n\n- Reframe the Features index around reusable capabilities rather than providers or command syntax.\n- Replace the long generated Markdown list with a polished, responsive capability explorer on `/features/`.\n- Add a strong product-oriented hero, a Lease → Sync → Run → Prove flow, live search, category filters, result counts, and linked capability cards.\n- Keep provider discovery in the canonical Provider Reference and command syntax in the Command Reference.\n- Preserve every existing feature document and URL; the enhancement runs after the normal docs build and only transforms the Features landing page.\n\n## Why\n\nThe docs now give Providers a first-class section, but the Features landing page still behaved like a dense Markdown inventory and duplicated adjacent information architecture. It was technically complete but difficult to scan, did not communicate the product workflow, and made dozens of capability guides feel flat and undifferentiated.\n\nThis change gives `/features/` one clear job: help a reader understand what Crabbox can do and quickly find the relevant capability contract.\n\n## UX and accessibility\n\n- Responsive three-, two-, and one-column card layouts.\n- Searchable capability titles and descriptions.\n- Filter pills for each capability area, with pressed state and live result counts.\n- Keyboard-friendly native links, buttons, labels, and search input.\n- Escape clears an active search.\n- Empty-result status is announced and category sections hide only when they have no visible cards.\n- Existing light/dark theme variables and reduced-motion behavior remain authoritative.\n- Provider and command CTAs create an explicit handoff to the correct top-level section.\n\n## Implementation\n\nThe shared Markdown renderer remains unchanged. `scripts/enhance-docs-site.mjs` deterministically post-processes only `dist/docs-site/features/index.html` after the normal build. This isolates the richer landing-page treatment from all other documentation pages and avoids committing generated output.\n\nThe Pages workflow and `scripts/check-docs.sh` both run the enhancement, so CI validates the same output that is deployed.\n\n## Visual proof\n\nThe `Docs UI Proof / Render visual proof` check builds the exact generated docs output from the PR head, runs the enhancer and regression tests, and renders browser screenshots with pinned Playwright/Chromium.\n\nIts downloadable artifact is named `features-ui-proof-<head-sha>` and contains:\n\n- `features-desktop-light.png` — full desktop layout in light mode.\n- `features-desktop-dark.png` — full desktop layout using the dark color scheme.\n- `features-mobile.png` — full responsive mobile layout using an iPhone viewport.\n- `SHA256SUMS` — digests binding each proof image to the workflow artifact.\n\nThe proof job also fails unless the generated page contains the capability explorer, product hero, provider handoff, and command-reference handoff. This makes the evidence reproducible rather than a manually edited screenshot.\n\n## Validation\n\n- `node --check scripts/enhance-docs-site.mjs`\n- `node --test scripts/enhance-docs-site.test.mjs`\n- Enhancer regression coverage verifies the hero, search/filter surface, capability-card generation, TOC/pager removal, idempotence, and no-op behavior for unrelated pages.\n- `Docs UI Proof / Render visual proof` publishes desktop light, desktop dark, and mobile screenshots from the exact built PR output.\n- Branch is based directly on upstream `main` (`6da7760693a820c53434b4774077f526d362c136`) with no unrelated files.\n\nGenerated site output remains uncommitted.",
+        "branch": "agent/separate-features-from-providers",
+        "head_sha": "d34cb15fe31612421246f420d644a07a45f8d725",
+        "author": "zozo123",
+        "labels": [
+          "P3",
+          "clawsweeper:automerge"
+        ],
+        "files": [
+          {
+            "path": ".github/workflows/docs-ui-proof.yml",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": ".github/workflows/pages.yml",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "CHANGELOG.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/README.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/architecture.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/cli.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/run.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/commands/vnc.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/README.md",
+            "additions": 20,
+            "deletions": 113,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/aws.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/azure.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/blacksmith-testbox.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/capacity-fallback.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/configuration.md",
+            "additions": 3,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/cost-usage.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/hermetic-agent-evidence.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/hetzner.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/marketplace-credits.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/namespace-devbox-setup.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/namespace-devbox.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/pond.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/runner-bootstrap.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/semaphore.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/sprites.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/features/tailscale.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/getting-started.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/provider-backends.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/README.md",
+            "additions": 31,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/blaxel.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/cloudflare-dynamic-workers.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/digitalocean.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/firecracker.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/gcp.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/lambda.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/linode.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/nebius.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/nvidia-brev.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/ovh.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/provider-metadata.json",
+            "additions": 48,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/proxmox.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/scaleway.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/superserve.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/vercel-sandbox.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/providers/vultr.md",
+            "additions": 0,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/refactor/provider.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/vision.md",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/build-docs-site.mjs",
+            "additions": 23,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/build-docs-site.test.js",
+            "additions": 64,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/check-docs.sh",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/docs-ui-proof.mjs",
+            "additions": 726,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/enhance-docs-site.mjs",
+            "additions": 93,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/enhance-docs-site.test.mjs",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/package-lock.json",
+            "additions": 59,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/package.json",
+            "additions": 4,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 54,
+        "additions": 1237,
+        "deletions": 171,
+        "is_clawsweeper_pr": false,
+        "cluster_id": "automerge-openclaw-crabbox-1062",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1062.md",
+        "source_job_path": null,
+        "has_automerge_job": true,
+        "automerge_cluster_id": "automerge-openclaw-crabbox-1062",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabbox-1062.md",
+        "mode": "autonomous",
+        "mergeable": "CONFLICTING",
+        "merge_state_status": "DIRTY",
+        "review_decision": "REVIEW_REQUIRED",
+        "checks": {
+          "total": 13,
+          "gatingTotal": 13,
+          "counts": {
+            "SUCCESS": 13
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "processed_at": "2026-07-16T04:40:57.839Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -41,27 +972,27 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 576,
+    "total_ms": 23418,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 361
+        "ms": 1832
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1118
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 3420
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1157
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 0
+        "ms": 12
       },
       {
         "name": "claim_dispatch_commands",
@@ -69,7 +1000,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 180
+        "ms": 15710
       },
       {
         "name": "append_ledger",
