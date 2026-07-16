@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T20:52:06.431Z",
+  "generated_at": "2026-07-16T20:52:55.659Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T17:52:04.563Z",
+  "since": "2026-07-16T17:52:53.251Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    94341
+    108533
   ],
   "comment_ids": [
-    4996388808
+    4996355083
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:94341:4996388808:2026-07-16T20:41:27Z:re_review",
-      "comment_id": "4996388808",
-      "comment_version_key": "4996388808:2026-07-16T20:41:27Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94341#issuecomment-4996388808",
+      "idempotency_key": "comment-router:openclaw/openclaw:108533:4996355083:2026-07-16T20:37:17Z:re_review",
+      "comment_id": "4996355083",
+      "comment_version_key": "4996355083:2026-07-16T20:37:17Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108533#issuecomment-4996355083",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 94341,
-      "author": "mazhuima",
-      "author_id": 294406428,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-16T20:41:27Z",
-      "comment_updated_at": "2026-07-16T20:41:27Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "issue_number": 108533,
+      "author": "earlvanze",
+      "author_id": 3733346,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-16T20:37:17Z",
+      "comment_updated_at": "2026-07-16T20:37:17Z",
+      "comment_body_sha256": "8b4ec265af31f5c9878f209768b73558fa6a18bae92a22d79d51c821db198679",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -77,60 +77,245 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(agents): load bootstrap files from agentDir alongside workspace",
-        "body": "## Problem\nBootstrap files (BOOTSTRAP.md) were only loaded from the workspace directory. When using `agentDir` to specify a per-agent directory, bootstrap files placed there were silently ignored.\n\n## Root Cause\nThe bootstrap file resolver only checked workspace-local paths. It did not consider the agentDir as an additional source for BOOTSTRAP.md files.\n\n## Fix\nAdded `resolvedAgentId` computed from `sessionKey` when `agentId` is not explicitly provided. When an agentDir is configured, bootstrap files from that directory are now resolved alongside workspace bootstrap files using `resolveSessionAgentIds({ sessionKey, config })`.\n\n## Real Behavior Proof\n\n### Test Results (vitest 4.1.9, Node 22.22.0)\n\n```\n ✓ |agents-core| src/agents/bootstrap-files.test.ts (36 tests | 4 failed)\n   All 4 failures are SQLite WAL safety errors (Node 22.22.0 embeds SQLite 3.50.4, needs 3.51.3+)\n   CI runs Node 24 which passes all 40 tests\n```\n\n36 of 40 tests pass locally. The 4 failures are all the same SQLite WAL safety check (`assertSqliteWalResetSafeVersion`) — a known environment limitation of Node 22.22.0. CI uses Node 24 where all 40 tests pass.\n\nKey scenarios covered:\n- AgentDir bootstrap files resolved when agentId is implicit (from sessionKey)\n- Workspace bootstrap files still loaded alongside agentDir files\n- Session key to agent ID resolution via `resolveSessionAgentIds`\n\nBranch rebased onto origin/main (9ac2af50e).",
-        "branch": "fix/agentdir-bootstrap-files",
-        "head_sha": "68c5718e1539f83528222741dc1e53f7c1fa870d",
-        "author": "mazhuima",
+        "title": "fix embedded compaction hook reset API",
+        "body": "## What Problem This Solves\n\nEmbedded after-compaction hooks need a safe way to request a fresh session after compaction. The unsafe version exposed the gateway reset service directly from inside the hook, which could await reset while the active embedded run was still executing the hook, and it let hook code pass arbitrary session keys.\n\nThis PR fixes the OpenClaw core lifecycle boundary by making `ctx.api.resetSession(reason?)` current-session scoped and deferred. Hook code can request `\"new\"` or `\"reset\"`, but cannot name another session. The owning embedded-run or compaction lifecycle drains the queued request after hook dispatch / run execution has exited.\n\n## Summary\n\n- Replaces arbitrary-key hook reset with current-session-scoped `ctx.api.resetSession(reason?)`.\n- Defers hook-requested resets until the owning lifecycle has left hook dispatch / embedded-run execution, avoiding the active-run self-wait path in the gateway reset service.\n- Wires the deferred reset queue through run-level hooks, direct compaction after-hooks, and queued/context-engine-owned after-compaction hooks.\n- Adds regression coverage for deferred execution, current-session binding, and overflow compaction hook API availability.\n\n## Evidence\n\n### Hatched Egg / Behavior Evidence\n\nThis is an OpenClaw core lifecycle fix, not a Remnic property-data fix. Remnic/context compaction exposed the symptom, but the missing boundary is in OpenClaw's embedded-agent hook/session reset API.\n\nLive gateway evidence from `openclaw_gateway_1` on July 16, 2026 shows the deployed runtime lacked this API and cron runs kept retrying through overflow/compaction instead of getting a fresh session:\n\n```text\n[diagnostic] long-running session ... sessionKey=agent:discord-public:cron:discord-public-heartbeat:run:59ea4170... activeWorkKind=model_call cronJobId=discord-public-heartbeat\n[agent/embedded] context overflow detected (attempt 1/3); attempting auto-compaction for sage-router/frontier\n[plugins] remnic: compaction completed for agent:discord-public:cron:discord-public-heartbeat:run:59ea4170..., triggering session reset\n[plugins] remnic: api.resetSession not available - compaction reset requires OC fork with PR #29985. Session ... will continue without reset.\n[agent/embedded] auto-compaction succeeded for sage-router/frontier; retrying prompt\n[agent/embedded] context overflow detected (attempt 2/3); attempting auto-compaction for sage-router/frontier\n[plugins] remnic: api.resetSession not available - compaction reset requires OC fork with PR #29985. Session ... will continue without reset.\n[agent/embedded] context overflow detected (attempt 3/3); attempting auto-compaction for sage-router/frontier\n[plugins] remnic: api.resetSession not available - compaction reset requires OC fork with PR #29985. Session ... will continue without reset.\n```\n\nA later hourly `discord-public-heartbeat` cron run repeated the same pattern with a new run session key (`agent:discord-public:cron:discord-public-heartbeat:run:9c60c213...`): overflow, compaction, reset request, API unavailable, then prompt retry. That ties the observed cron retry loop to the missing OpenClaw hook API rather than to Remnic property data.\n\nAfter this PR, the hook receives:\n\n```ts\nawait hookContext.api.resetSession(\"new\");\n```\n\nand OpenClaw queues a current-session-only reset request for the lifecycle owner to flush after hook dispatch / embedded-run execution. The hook cannot target another session key, and reset failures are logged without turning cron completion into a scheduler retry.\n\n### Live Rollout Proof\n\nI applied the same reset-queue behavior to two real `openclaw_gateway_1` runtimes that were on `2026.6.11`.\n\nCyber:\n\n```text\nConfig valid: /home/umbrel/.openclaw/openclaw.json\nGateway ready after restart\nHealth: Discord configured, Telegram configured, WhatsApp linked\n/usr/local/lib/node_modules/openclaw/dist/embedded-agent-Cv8lGIPa.js: createEmbeddedHookSessionResetQueue present\n/usr/local/lib/node_modules/openclaw/dist/run-session-target-D5j70_wT.js: buildCompactionHookApi present\n```\n\nSovereign:\n\n```text\nConfig valid: ~/.openclaw/openclaw.json\nTelegram: configured\nGateway event loop: ok\n/usr/local/lib/node_modules/openclaw/dist/embedded-agent-Cv8lGIPa.js: createEmbeddedHookSessionResetQueue present\n/usr/local/lib/node_modules/openclaw/dist/run-session-target-D5j70_wT.js: buildCompactionHookApi present\n```\n\nPost-restart log probes on both hosts showed no new `api.resetSession not available` messages in the verification window.\n\n## Validation\n\nRebased onto `origin/main` at `f193c505777d` and pushed as `5a7a21ae0359`.\n\n```text\n$ node scripts/run-vitest.mjs src/agents/embedded-agent-runner/compact.hooks.test.ts src/agents/embedded-agent-runner/run.overflow-compaction.test.ts\n\nTest Files  2 passed (2)\nTests       175 passed (175)\n```\n\n```text\n$ node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-pr-compaction-hook-api.tsbuildinfo\n# passed\n```\n\n```text\n$ node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.agents.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test-agents-pr-compaction-hook-api.tsbuildinfo\n# passed\n```\n\n```text\n$ PATH=/tmp/node2415/node-v24.15.0-linux-x64/bin:$PATH pnpm deadcode:dependencies\n# passed\n```\n\n```text\n$ PATH=/tmp/node2415/node-v24.15.0-linux-x64/bin:$PATH pnpm check:import-cycles\nImport cycle check: 0 runtime value cycle(s).\n\n```\n\n```text\n$ git diff --check\n# passed\n```\n",
+        "branch": "agent/compaction-hook-reset-api",
+        "head_sha": "5b09cab67f107a723456043d18f3b82ae9d4468a",
+        "author": "earlvanze",
         "labels": [
           "agents",
-          "size: XS",
-          "proof: supplied",
+          "size: L",
           "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 compatibility",
           "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 security-boundary",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 38,
+            "path": "src/agents/embedded-agent-runner/compact.hooks.harness.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 105,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
+            "additions": 28,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-hooks.ts",
+            "additions": 111,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run-loop.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run-orchestrator.ts",
+            "additions": 54,
+            "deletions": 45,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-recovery.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/compaction-runtime.ts",
+            "additions": 22,
             "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/execution-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/overflow-context-recovery.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/timeout-context-recovery.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.compaction.test.ts",
+            "additions": 150,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.compaction.ts",
+            "additions": 48,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.types.ts",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/prompt-compaction-hook-helpers.test.ts",
+            "additions": 30,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/prompt-compaction-hook-helpers.ts",
+            "additions": 31,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/wired-hooks-compaction.test.ts",
+            "additions": 63,
+            "deletions": 14,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 38,
-        "deletions": 2,
+        "changedFiles": 29,
+        "additions": 748,
+        "deletions": 125,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94341",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94341.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108533",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108533.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 50,
+          "gatingTotal": 45,
           "counts": {
-            "FAILURE": 1,
-            "SKIPPED": 4,
-            "SUCCESS": 6
+            "IN_PROGRESS": 11,
+            "SUCCESS": 16,
+            "SKIPPED": 23
           },
           "blockers": [
-            "Real behavior proof:FAILURE"
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "preflight:IN_PROGRESS",
+            "security-fast:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE"
+          "pending": [
+            "Security High (core-auth-secrets):IN_PROGRESS",
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (channel-runtime-boundary):IN_PROGRESS",
+            "Security High (network-ssrf-boundary):IN_PROGRESS",
+            "Security High (mcp-process-tool-boundary):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Security High (plugin-trust-boundary):IN_PROGRESS",
+            "Security High (actions):IN_PROGRESS",
+            "preflight:IN_PROGRESS",
+            "security-fast:IN_PROGRESS",
+            "Critical Quality (agent-runtime-boundary):IN_PROGRESS"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
@@ -141,21 +326,21 @@
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2233,
+    "total_ms": 2757,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 588
+        "ms": 498
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1183
+        "ms": 1827
       },
       {
         "name": "classify_comment_commands",
@@ -175,7 +360,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 365
+        "ms": 349
       },
       {
         "name": "append_ledger",
