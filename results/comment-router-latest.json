@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T20:20:52.837Z",
+  "generated_at": "2026-07-16T20:22:25.990Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T17:20:51.937Z",
+  "since": "2026-07-16T17:22:23.398Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    108590
+    108533
   ],
   "comment_ids": [
-    4996182778
+    4996174910
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:108590:4996182778:2026-07-16T20:16:25Z:re_review",
-      "comment_id": "4996182778",
-      "comment_version_key": "4996182778:2026-07-16T20:16:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/108590#issuecomment-4996182778",
+      "idempotency_key": "comment-router:openclaw/openclaw:108533:4996174910:2026-07-16T20:15:28Z:re_review",
+      "comment_id": "4996174910",
+      "comment_version_key": "4996174910:2026-07-16T20:15:28Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108533#issuecomment-4996174910",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 108590,
+      "issue_number": 108533,
       "author": "earlvanze",
       "author_id": 3733346,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-16T20:16:25Z",
-      "comment_updated_at": "2026-07-16T20:16:25Z",
-      "comment_body_sha256": "76b37dfd4bdb482ee44c8663425ecab2000ee9b8ea6de94f6a785a19c4afce0b",
+      "comment_created_at": "2026-07-16T20:15:28Z",
+      "comment_updated_at": "2026-07-16T20:15:28Z",
+      "comment_body_sha256": "3f6b7646a73d1a07e06f7d7befc127310656a992c35ba0d1165fc24a82222d1c",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,7 +74,224 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix embedded compaction hook reset API",
+        "body": "## What Problem This Solves\n\nEmbedded after-compaction hooks need a safe way to request a fresh session after compaction. The unsafe version exposed the gateway reset service directly from inside the hook, which could await reset while the active embedded run was still executing the hook, and it let hook code pass arbitrary session keys.\n\nThis PR fixes the OpenClaw core lifecycle boundary by making `ctx.api.resetSession(reason?)` current-session scoped and deferred. Hook code can request `\"new\"` or `\"reset\"`, but cannot name another session. The owning embedded-run or compaction lifecycle drains the queued request after hook dispatch / run execution has exited.\n\n## Summary\n\n- Replaces arbitrary-key hook reset with current-session-scoped `ctx.api.resetSession(reason?)`.\n- Defers hook-requested resets until the owning lifecycle has left hook dispatch / embedded-run execution, avoiding the active-run self-wait path in the gateway reset service.\n- Wires the deferred reset queue through run-level hooks, direct compaction after-hooks, and queued/context-engine-owned after-compaction hooks.\n- Adds regression coverage for deferred execution, current-session binding, and overflow compaction hook API availability.\n\n## Evidence\n\n### Hatched Egg / Behavior Evidence\n\nThis is an OpenClaw core lifecycle fix, not a Remnic property-data fix. Remnic/context compaction exposed the symptom, but the missing boundary is in OpenClaw's embedded-agent hook/session reset API.\n\nLive gateway evidence from `openclaw_gateway_1` on July 16, 2026 shows the deployed runtime lacked this API and cron runs kept retrying through overflow/compaction instead of getting a fresh session:\n\n```text\n[diagnostic] long-running session ... sessionKey=agent:discord-public:cron:discord-public-heartbeat:run:59ea4170... activeWorkKind=model_call cronJobId=discord-public-heartbeat\n[agent/embedded] context overflow detected (attempt 1/3); attempting auto-compaction for sage-router/frontier\n[plugins] remnic: compaction completed for agent:discord-public:cron:discord-public-heartbeat:run:59ea4170..., triggering session reset\n[plugins] remnic: api.resetSession not available - compaction reset requires OC fork with PR #29985. Session ... will continue without reset.\n[agent/embedded] auto-compaction succeeded for sage-router/frontier; retrying prompt\n[agent/embedded] context overflow detected (attempt 2/3); attempting auto-compaction for sage-router/frontier\n[plugins] remnic: api.resetSession not available - compaction reset requires OC fork with PR #29985. Session ... will continue without reset.\n[agent/embedded] context overflow detected (attempt 3/3); attempting auto-compaction for sage-router/frontier\n[plugins] remnic: api.resetSession not available - compaction reset requires OC fork with PR #29985. Session ... will continue without reset.\n```\n\nA later hourly `discord-public-heartbeat` cron run repeated the same pattern with a new run session key (`agent:discord-public:cron:discord-public-heartbeat:run:9c60c213...`): overflow, compaction, reset request, API unavailable, then prompt retry. That ties the observed cron retry loop to the missing OpenClaw hook API rather than to Remnic property data.\n\nAfter this PR, the hook receives:\n\n```ts\nawait hookContext.api.resetSession(\"new\");\n```\n\nand OpenClaw queues a current-session-only reset request for the lifecycle owner to flush after hook dispatch / embedded-run execution. The hook cannot target another session key, and reset failures are logged without turning cron completion into a scheduler retry.\n\n### Live Rollout Proof\n\nI applied the same reset-queue behavior to two real `openclaw_gateway_1` runtimes that were on `2026.6.11`.\n\nCyber:\n\n```text\nConfig valid: /home/umbrel/.openclaw/openclaw.json\nGateway ready after restart\nHealth: Discord configured, Telegram configured, WhatsApp linked\n/usr/local/lib/node_modules/openclaw/dist/embedded-agent-Cv8lGIPa.js: createEmbeddedHookSessionResetQueue present\n/usr/local/lib/node_modules/openclaw/dist/run-session-target-D5j70_wT.js: buildCompactionHookApi present\n```\n\nSovereign:\n\n```text\nConfig valid: ~/.openclaw/openclaw.json\nTelegram: configured\nGateway event loop: ok\n/usr/local/lib/node_modules/openclaw/dist/embedded-agent-Cv8lGIPa.js: createEmbeddedHookSessionResetQueue present\n/usr/local/lib/node_modules/openclaw/dist/run-session-target-D5j70_wT.js: buildCompactionHookApi present\n```\n\nPost-restart log probes on both hosts showed no new `api.resetSession not available` messages in the verification window.\n\n## Validation\n\nRebased onto `origin/main` at `f193c505777d` and pushed as `5a7a21ae0359`.\n\n```text\n$ node scripts/run-vitest.mjs src/agents/embedded-agent-runner/compact.hooks.test.ts src/agents/embedded-agent-runner/run.overflow-compaction.test.ts\n\nTest Files  2 passed (2)\nTests       175 passed (175)\n```\n\n```text\n$ node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-pr-compaction-hook-api.tsbuildinfo\n# passed\n```\n\n```text\n$ node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.agents.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test-agents-pr-compaction-hook-api.tsbuildinfo\n# passed\n```\n\n```text\n$ PATH=/tmp/node2415/node-v24.15.0-linux-x64/bin:$PATH pnpm deadcode:dependencies\n# passed\n```\n\n```text\n$ PATH=/tmp/node2415/node-v24.15.0-linux-x64/bin:$PATH pnpm check:import-cycles\nImport cycle check: 0 runtime value cycle(s).\n\n```\n\n```text\n$ git diff --check\n# passed\n```\n",
+        "branch": "agent/compaction-hook-reset-api",
+        "head_sha": "5b96736f49b8b189f7c25a5b5891cb4f2d386b6a",
+        "author": "earlvanze",
+        "labels": [
+          "agents",
+          "size: L",
+          "P1",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.harness.ts",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.hooks.test.ts",
+            "additions": 105,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.queued.ts",
+            "additions": 28,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compact.types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/compaction-hooks.ts",
+            "additions": 111,
+            "deletions": 21,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run-loop.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run-orchestrator.ts",
+            "additions": 54,
+            "deletions": 45,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-recovery.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/compaction-runtime.ts",
+            "additions": 22,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/execution-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/overflow-context-recovery.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/timeout-context-recovery.ts",
+            "additions": 6,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/run/types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.compaction.test.ts",
+            "additions": 112,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.compaction.ts",
+            "additions": 48,
+            "deletions": 12,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.handlers.ts",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-subscribe.types.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/hook-context.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/harness/prompt-compaction-hook-helpers.ts",
+            "additions": 24,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/hook-types.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/wired-hooks-compaction.test.ts",
+            "additions": 63,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 28,
+        "additions": 669,
+        "deletions": 124,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108533",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108533.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 116,
+          "gatingTotal": 111,
+          "counts": {
+            "SUCCESS": 82,
+            "SKIPPED": 33,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,19 +302,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3120,
+    "total_ms": 2824,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 429
+        "ms": 452
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2052
       },
       {
         "name": "classify_comment_commands",
-        "ms": 150
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +330,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2220
+        "ms": 233
       },
       {
         "name": "append_ledger",
