@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-109149"
 mode: "autonomous"
-run_id: "29521090153"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29521090153"
-head_sha: "792bf3a2ce8a4fb4a8e8394ed6d43e3a885fab14"
-workflow_conclusion: "failure"
+run_id: "29523122457"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29523122457"
+head_sha: "eab1b8698ed896714a402a1373ecbfe47990a5e5"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-16T17:51:20.848Z"
+published_at: "2026-07-16T18:19:39.185Z"
 canonical: "#109149"
 canonical_issue: null
 canonical_pr: "#109149"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29521090153](https://github.com/openclaw/clawsweeper/actions/runs/29521090153)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29523122457](https://github.com/openclaw/clawsweeper/actions/runs/29523122457)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: #109149
 
 ## Summary
 
-Make PR #109149 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Repair the writable contributor branch for #109149: refresh it onto current main, preserve the focused SMS blank-value fix and tests, resolve the failing changed-path check, rerun focused validation, and obtain a clean exact-head Codex review. Merge and close remain out of scope.
 
 ## Impact
 
@@ -66,7 +66,7 @@ Make PR #109149 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #109149 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #109149 | fix_needed | planned | canonical | The canonical PR is focused and appears technically sound, but the calibrated automerge workflow requires repairing its writable contributor branch because it is behind current main, has a failing check, and lacks a clean exact-head post-repair Codex review. |
 
 ## Needs Human
 
