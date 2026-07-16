@@ -2,12 +2,12 @@
 repo: "openclaw/crabbox"
 cluster_id: "automerge-openclaw-crabbox-1062"
 mode: "autonomous"
-run_id: "29338302380"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29338302380"
-head_sha: "ecc6d03d1ec73267d434cb1905cfc216c78fcd70"
-workflow_conclusion: "cancelled"
+run_id: "29471962133"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29471962133"
+head_sha: "0a17516dd286800c2cca4d818b2a75255f4b5c70"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-14T14:00:45.395Z"
+published_at: "2026-07-16T04:53:51.516Z"
 canonical: "#1062"
 canonical_issue: null
 canonical_pr: "#1062"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/crabbox
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29338302380](https://github.com/openclaw/clawsweeper/actions/runs/29338302380)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29471962133](https://github.com/openclaw/clawsweeper/actions/runs/29471962133)
 
-Workflow conclusion: cancelled
+Workflow conclusion: failure
 
 Worker result: planned
 
