@@ -2,12 +2,12 @@
 repo: "openclaw/crabbox"
 cluster_id: "automerge-openclaw-crabbox-1062"
 mode: "autonomous"
-run_id: "29471962133"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29471962133"
-head_sha: "0a17516dd286800c2cca4d818b2a75255f4b5c70"
-workflow_conclusion: "failure"
+run_id: "29474889991"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29474889991"
+head_sha: "e67ce03bc5d9717bc7ba10b57d3564f05c92e198"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-16T04:53:51.516Z"
+published_at: "2026-07-16T05:52:56.176Z"
 canonical: "#1062"
 canonical_issue: null
 canonical_pr: "#1062"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/crabbox
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29471962133](https://github.com/openclaw/clawsweeper/actions/runs/29471962133)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29474889991](https://github.com/openclaw/clawsweeper/actions/runs/29474889991)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: #1062
 
 ## Summary
 
-Make PR #1062 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+The open contributor PR is the canonical repair path, but its hydrated head d34cb15fe31612421246f420d644a07a45f8d725 predates current main 2a79805d00d0a3e9432535f3ea6a722f0b3c53c1. Its 13 checks and browser proof passed on the older exact head, with no actionable review comments, but mergeability is currently unknown and the PR still contains a release-owned CHANGELOG.md delta. Repair the writable contributor branch, preserve @zozo123's credit, and rerun exact-head review and validation before the separate merge router acts.
 
 ## Impact
 
@@ -66,7 +66,7 @@ Make PR #1062 merge-ready for ClawSweeper automerge. Rebase onto latest main, ad
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #1062 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #1062 | fix_needed | planned | canonical | Rebase and narrowly repair the existing writable contributor branch, remove the prohibited changelog delta, then obtain exact-head validation and Codex review. No replacement PR is warranted. |
 
 ## Needs Human
 
