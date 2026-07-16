@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-107991"
 mode: "autonomous"
-run_id: "29480381174"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29480381174"
-head_sha: "ea8931e1aaa59e96eec88e3f532bb290e426c5ef"
-workflow_conclusion: "success"
+run_id: "29515044475"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29515044475"
+head_sha: "4e6521dd9e0ef29ab7137250cdd7ad35ddf14c0e"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-16T07:38:36.042Z"
-canonical: "https://github.com/openclaw/openclaw/pull/107991"
+published_at: "2026-07-16T16:25:24.884Z"
+canonical: "#107991"
 canonical_issue: null
-canonical_pr: "https://github.com/openclaw/openclaw/pull/107991"
-actions_total: 3
+canonical_pr: "#107991"
+actions_total: 1
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,23 +25,23 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29480381174](https://github.com/openclaw/clawsweeper/actions/runs/29480381174)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29515044475](https://github.com/openclaw/clawsweeper/actions/runs/29515044475)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/pull/107991
+Canonical: #107991
 
 ## Summary
 
-Repair #107991 in place against current main. Its exact head has a passing ClawSweeper review and addressed bot feedback, but the hydrated check set still contains a failing compact test lane and aggregate CI gate. Keep #106789 independent and quarantine security-sensitive #106090.
+Make PR #107991 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,9 +66,7 @@ Repair #107991 in place against current main. Its exact head has a passing ClawS
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| https://github.com/openclaw/openclaw/pull/106090 | route_security | planned | security_sensitive | Route this exact historical ref to central OpenClaw security handling without blocking the non-security repair of #107991. |
-| https://github.com/openclaw/openclaw/pull/106789 | keep_independent | planned | independent | Keep the provider-routing PR in its own cluster; do not mix its check-test-types or branch-refresh work into the Periphery repair. |
-| https://github.com/openclaw/openclaw/pull/107991 | fix_needed | planned | canonical | Refresh the existing branch onto current main, inspect the exact compact-lane failure, apply only a relevant narrow correction if needed, and rerun exact-head validation and review. |
+| #107991 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
