@@ -1,20 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T06:22:28.573Z",
-  "repo": "steipete/sonoscli",
+  "generated_at": "2026-07-16T06:23:45.330Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T03:22:27.367Z",
+  "since": "2026-07-16T03:23:42.858Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1000,
-  "item_numbers": [],
-  "comment_ids": [],
+  "max_comments": 1,
+  "item_numbers": [
+    102966
+  ],
+  "comment_ids": [
+    4988748738
+  ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -28,7 +32,136 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:102966:4988748738:2026-07-16T06:07:41Z:re_review",
+      "comment_id": "4988748738",
+      "comment_version_key": "4988748738:2026-07-16T06:07:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102966#issuecomment-4988748738",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 102966,
+      "author": "jgrandguillaume",
+      "author_id": 151794,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-16T06:07:41Z",
+      "comment_updated_at": "2026-07-16T06:07:41Z",
+      "comment_body_sha256": "943f67d7f614465562086d992c83bf6774609eb8e4a0623b3ff51c573a2c9965",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-run",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "feat(memory-lancedb): scope memory_recall and memory_forget + configurable thresholds",
+        "body": "<!--\nDRAFT — for Joël's zero-leak review before opening.\nTarget: openclaw/openclaw (base: main). Follows .github/pull_request_template.md.\nSanitized: no client names, no server paths, no internal metrics.\nPR title:\n  feat(memory-lancedb): scope memory_recall and memory_forget + configurable thresholds\n-->\n\n## What Problem This Solves\n\nWhen several contexts share a single LanceDB memory store, the explicit memory\ntools operate across the **entire** store with no way to constrain them to a\nsubset:\n\n- `memory_recall` selects the top-K nearest vectors globally, so a memory written\n  in one context can surface as a recall result in an unrelated one.\n- `memory_forget` (query mode) runs an unfiltered vector search and auto-deletes a\n  lone high-confidence match — so once the same fact exists in more than one\n  context, it can delete the wrong context's copy.\n- The **automatic before-prompt recall** injects from the whole store on every\n  turn, with no way to keep one context's memories out of an unrelated\n  conversation.\n\nSplitting into a separate store per context is the only current workaround, which\ndefeats the point of a shared store. Two smaller gaps compound this:\n\n- **Duplicate detection is global.** The same fact stored under two different\n  contexts is rejected as a duplicate on the second write, so it can never be\n  recalled within the second context.\n- **Recall selectivity is hardcoded** (minimum similarity score, result cap, and\n  auto-recall over-fetch), so operators cannot tune precision/recall for their\n  own data without editing the plugin source.\n\n## Why This Change Was Made\n\nAdd an optional per-row **scope** column and apply a native LanceDB `.where()`\n**prefilter** in the explicit memory tools, so results are constrained to the\nrequested scope *before* the vector search returns — no separate store per context\nneeded. `.where()` is a native LanceDB primitive the plugin already uses on the\n`--filter` CLI path but not on these tools.\n\n**Scope is an opaque partition key, not a fixed concept.** It is whatever the\ncaller wants to partition by — a project, a person, a channel, a tenant. The\nplugin never interprets it: a memory is tagged by prefixing its text with\n`[SCOPE:<value>]`, and both tools take a `scope` parameter. The tag is a routing\nprefix, not part of the fact: it is parsed into the `scope` column and **stripped\nfrom the text before embedding and storing** (in both the explicit store tool and\nthe auto-capture path), so the vector reflects the content rather than the\nsynthetic prefix and the tag is never echoed back to the model on recall. A scope\nkey is a slug (`[A-Za-z0-9_-]+`); a tag or `scope` argument whose key is not a valid\nslug is **rejected** rather than silently transformed, so a punctuated key (e.g. a\nraw channel/room id) can never be canonicalized into — and mixed with — another\npartition, nor silently stored global. OpenClaw builds the `.where()` clause\ninternally from the validated slug — no raw filter expression is ever accepted from\nthe caller.\n\n**Scope is enforced as a partition, not an optional label.** A tagged memory is\nhidden from any operation that does not ask for its scope — it never surfaces in an\nunscoped recall, is never auto-recalled into an unrelated session, and can never be\ndeleted by an unscoped forget. The three read/delete paths:\n\n- **`memory_recall`** — a *scoped* call returns that scope's matches first, with\n  untagged/global rows filling any remaining slots; the scope and the global rows\n  are retrieved in **separate ANN passes** (each with its own candidate budget) so\n  many strong global neighbors cannot crowd the requested scope out of a shared\n  top-K and make the call miss rows from the very scope it asked for. An *unscoped*\n  call is **global-only** (`scope = '' OR scope IS NULL`) — scoped rows stay\n  hidden.\n- **`memory_forget`** — a *scoped* call is restricted to the **exact** scope\n  (`scope = '…'`); an *unscoped* call is **global-only**. This holds for **both**\n  delete paths: a **query** forget filters by scope, and a **memoryId** forget is\n  fenced by first checking the target row's scope — a scoped row can only be deleted\n  from within its scope, and an unscoped `memoryId` delete only removes global rows\n  — so a known id from another partition cannot bypass the fence.\n- **Automatic before-prompt recall** — **global-only**. The hook has no\n  active-scope signal, so it injects only untagged/global memories; a scoped memory\n  is never auto-recalled into an unrelated session.\n\nScope is threaded consistently so it cannot silently mis-behave:\n\n- Duplicate detection is made **scope-aware**: the scope is applied as a\n  `.where()` prefilter before the near-exact top-K, so a duplicate only counts\n  within the same scope and a same-scope duplicate is never pushed out of the\n  candidate window by other scopes. The same fact can coexist under different\n  scopes; same-scope and global-vs-global writes still dedup.\n- A self-healing migration adds the `scope` column to pre-existing tables\n  (guarded on the driver's `schema()`/`addColumns`; a no-op for partial test\n  doubles), preserving existing rows and vectors.\n\nThe recall thresholds are surfaced as configuration (with matching manifest\n`uiHints`, so they appear in setup/config flows) with defaults equal to the\npreviously hardcoded values. They are threaded through the live-config merge so\noperator values take effect in the before-prompt hook, not only at startup.\n\n**What is deferred (explicit non-goal).** This PR does not *target* the automatic\nbefore-prompt injection at a specific scope — the hook has no active-scope signal,\nso it cannot know which partition the current turn belongs to. Rather than leak, it\n**fails safe**: the automatic path is restricted to global/untagged memories, so a\nscoped memory is never auto-injected anywhere. Scope-*targeted* auto-injection\n(surfacing `scope=alpha` memories inside an alpha turn) is future work; the scope\ncolumn and `.where()` prefilter added here are the foundation a later change can\nbuild on once such a signal is available at that hook.\n\n**Security model — scope is a partition primitive, not a trust boundary.** The\n`scope` value is caller-supplied (a `scope` argument, or a `[SCOPE:<value>]` tag in\nthe text), and OpenClaw deliberately does **not** bind it to a session/channel\nidentity: the partition key is caller-defined (a project, a person, a tenant), and\nonly the caller knows which partition a given turn belongs to. This does not weaken\nthe current model — today every memory is global, so any turn can already recall,\nforget, or write any memory. Scope only **adds** isolation: a tagged row is hidden\nfrom unscoped operations, so a caller that supplies a consistent scope gains\npartitioning it did not have before, and no caller gains a capability it lacked.\nTreating a scope as an *enforced* boundary between mutually-distrusting callers\n(checking the requested scope against a trusted active-session signal before every\nread/write/delete) is a deployment policy layered on top of this primitive, and is\ndeferred to the same future work as scope-targeted auto-injection — the `scope`\ncolumn and `.where()` prefilter added here are exactly the mechanism such a policy\nwould build on.\n\nThe change is **behavior-preserving until you tag a memory**: every pre-existing\nrow has an empty scope, so it stays global and is returned by unscoped recall and\nthe automatic injection exactly as before, and thresholds default to today's\nvalues. A memory becomes partitioned only when it is explicitly tagged\n`[SCOPE:<value>]` (via the store tool or a tagged user message) — at which point it\nis hidden from unscoped and other-scope operations by design. Installs that never\nuse scope tags see no change at all.\n\n## User Impact\n\n- A tagged memory is **partitioned in a shared store**: it is hidden from unscoped\n  recall, never auto-recalled into an unrelated session, and cannot be deleted by\n  an unscoped forget — real isolation without splitting into multiple stores.\n- Callers can pass `scope` to `memory_recall` to **read one partition** (project,\n  person, channel, …): that scope's memories are returned first and untagged/global\n  ones fill any remaining slots, and a scope with many strong global neighbors is\n  no longer crowded out of the results.\n- Callers can pass `scope` to `memory_forget` to **delete safely within one\n  partition**: a scoped forget can never remove a global or other-scope copy of\n  the same fact, and this fence applies to **both** the `query` and the `memoryId`\n  delete paths (a known id from another partition cannot bypass it).\n- An invalid scope key (not a `[A-Za-z0-9_-]+` slug) is **rejected**, not silently\n  stored global — a punctuated key such as a raw channel/room id cannot leak an\n  intended-scoped memory into the global partition.\n- The same fact can be stored under **different scopes** without the second write\n  being swallowed as a duplicate.\n- Recall precision/recall is **tunable via config** (`recallMinScore`,\n  `recallResultCap`, `autoRecallOverfetch`) instead of requiring a source edit.\n- **No change until you use scope**: with no scope tags, every row stays global —\n  unscoped recall, forget, and the automatic before-prompt injection behave exactly\n  as before.\n\n## Evidence\n\n### Real-behavior proof (real `@lancedb/lancedb` driver, on-disk table)\n\nThe unit tests mock the LanceDB driver, so the two things they cannot show are the\nschema **migration** and the native **prefilter** running against the real engine.\nThe script below drives the real pinned `@lancedb/lancedb` (no mock) on a real\non-disk table, replaying `MemoryDB`'s exact persistence operations — the self-heal\nmigration (`schema()` → `addColumns`), the scoped/unscoped `.where()` recall, and\nthe scoped delete. Deterministic vectors, no embeddings/network; the only scope\nslug is the fictional `demo-shop_eu` and all memory text is generic.\n\n```text\ntemp store: /tmp/mldb-scope-proof-XXXXXX\n\nPART 1 — migration on a pre-existing (legacy) table\n  legacy columns: id, text, vector, importance, category, createdAt\n  [PASS] legacy table has no 'scope' column\n  [PASS] legacy table has no 'agent' column\n  missing columns detected: [\"scope\",\"agent\"]\n  columns after migration: id, text, vector, importance, category, createdAt, scope, agent\n  [PASS] 'scope' column added\n  [PASS] 'agent' column added\n  [PASS] both legacy rows preserved\n  [PASS] row 'a' text preserved\n  [PASS] row 'a' vector preserved (len + values)\n  [PASS] migrated rows default to global scope ''\n\nPART 2 — native .where() prefilter isolation\n  scoped recall  where scope='demo-shop_eu' -> ids: [c]\n  [PASS] scoped recall returns ONLY the scoped row (c)\n  unscoped recall where scope=''/NULL   -> ids: [a,b]\n  [PASS] unscoped recall returns ONLY global rows (a,b)\n  [PASS] scoped row hidden from unscoped recall despite identical nearest vector\n\nPART 3 — scoped delete is fenced to its scope\n  rows after delete where scope='demo-shop_eu' -> ids: [a,b]\n  [PASS] scoped delete removed the scoped row (c gone)\n  [PASS] scoped delete preserved global rows (a,b remain)\n\n=== RESULT: ALL CHECKS PASSED ===\n```\n\nThe scoped row (`c`) is deliberately given the **same nearest vector** as a global\nrow (`a`), so only a real prefilter — not distance ranking — can keep it out of the\nunscoped recall. The migrated `scope` column is non-nullable and defaults to `''`,\nso pre-existing rows become global while their vectors are preserved (the\n`OR scope IS NULL` branch is a defensive belt-and-suspenders for any externally\nNULL rows).\n\n<details>\n<summary>Reproducible standalone script (drop at repo root, <code>node _scope-proof.mjs</code>)</summary>\n\n```js\nimport { mkdtemp, rm } from \"node:fs/promises\";\nimport { tmpdir } from \"node:os\";\nimport { join } from \"node:path\";\nimport * as lancedb from \"@lancedb/lancedb\";\n\nconst DIM = 8;\nconst near = Array.from({ length: DIM }, (_, i) => (i === 0 ? 1 : 0));\nconst far = Array.from({ length: DIM }, (_, i) => (i === DIM - 1 ? 1 : 0));\nconst query = near;\n\nlet failures = 0;\nfunction check(label, cond) {\n  console.log(`  [${cond ? \"PASS\" : \"FAIL\"}] ${label}`);\n  if (!cond) failures++;\n}\nconst ids = (rows) => rows.map((r) => r.id).sort().join(\",\");\n\nconst dir = await mkdtemp(join(tmpdir(), \"mldb-scope-proof-\"));\nconst TABLE = \"memories\";\nconsole.log(`temp store: ${dir}\\n`);\n\ntry {\n  const db = await lancedb.connect(dir);\n\n  console.log(\"PART 1 — migration on a pre-existing (legacy) table\");\n  await db.createTable(TABLE, [\n    { id: \"a\", text: \"prefers dark roast coffee\", vector: near, importance: 1, category: \"preference\", createdAt: 1 },\n    { id: \"b\", text: \"team ships on fridays\", vector: far, importance: 1, category: \"fact\", createdAt: 2 },\n  ]);\n  let tbl = await db.openTable(TABLE);\n\n  const legacyCols = (await tbl.schema()).fields.map((f) => f.name);\n  console.log(`  legacy columns: ${legacyCols.join(\", \")}`);\n  check(\"legacy table has no 'scope' column\", !legacyCols.includes(\"scope\"));\n  check(\"legacy table has no 'agent' column\", !legacyCols.includes(\"agent\"));\n\n  const existingNames = new Set((await tbl.schema()).fields.map((f) => f.name));\n  const missing = [\"scope\", \"agent\"].filter((c) => !existingNames.has(c));\n  console.log(`  missing columns detected: ${JSON.stringify(missing)}`);\n  if (missing.length > 0) {\n    await tbl.addColumns(missing.map((name) => ({ name, valueSql: \"''\" })));\n  }\n\n  const migratedCols = (await tbl.schema()).fields.map((f) => f.name);\n  console.log(`  columns after migration: ${migratedCols.join(\", \")}`);\n  check(\"'scope' column added\", migratedCols.includes(\"scope\"));\n  check(\"'agent' column added\", migratedCols.includes(\"agent\"));\n\n  const migratedRows = await tbl.query().toArray();\n  const rowA = migratedRows.find((r) => r.id === \"a\");\n  const rowB = migratedRows.find((r) => r.id === \"b\");\n  check(\"both legacy rows preserved\", migratedRows.length === 2 && !!rowA && !!rowB);\n  check(\"row 'a' text preserved\", rowA?.text === \"prefers dark roast coffee\");\n  check(\"row 'a' vector preserved (len + values)\", Array.from(rowA?.vector ?? []).join(\",\") === near.join(\",\"));\n  check(\"migrated rows default to global scope ''\", (rowA?.scope ?? \"\") === \"\" && (rowB?.scope ?? \"\") === \"\");\n\n  console.log(\"\\nPART 2 — native .where() prefilter isolation\");\n  // 'c' is scoped and shares the SAME (nearest) vector as global 'a', so only the\n  // prefilter — not distance ranking — can keep it out of an unscoped recall.\n  await tbl.add([\n    { id: \"c\", text: \"demo-shop_eu catalog prices are in EUR\", vector: near, importance: 1, category: \"fact\", createdAt: 3, scope: \"demo-shop_eu\", agent: \"\" },\n  ]);\n\n  const scoped = await tbl.vectorSearch(query).where(\"scope = 'demo-shop_eu'\").limit(5).toArray();\n  console.log(`  scoped recall  where scope='demo-shop_eu' -> ids: [${ids(scoped)}]`);\n  check(\"scoped recall returns ONLY the scoped row (c)\", ids(scoped) === \"c\");\n\n  const globalOnly = await tbl.vectorSearch(query).where(\"scope = '' OR scope IS NULL\").limit(5).toArray();\n  console.log(`  unscoped recall where scope=''/NULL   -> ids: [${ids(globalOnly)}]`);\n  check(\"unscoped recall returns ONLY global rows (a,b)\", ids(globalOnly) === \"a,b\");\n  check(\"scoped row hidden from unscoped recall despite identical nearest vector\", !ids(globalOnly).includes(\"c\"));\n\n  console.log(\"\\nPART 3 — scoped delete is fenced to its scope\");\n  await tbl.delete(\"scope = 'demo-shop_eu'\");\n  const afterDelete = await tbl.query().toArray();\n  console.log(`  rows after delete where scope='demo-shop_eu' -> ids: [${ids(afterDelete)}]`);\n  check(\"scoped delete removed the scoped row (c gone)\", !ids(afterDelete).includes(\"c\"));\n  check(\"scoped delete preserved global rows (a,b remain)\", ids(afterDelete) === \"a,b\");\n\n  console.log(`\\n=== RESULT: ${failures === 0 ? \"ALL CHECKS PASSED\" : failures + \" CHECK(S) FAILED\"} ===`);\n} finally {\n  await rm(dir, { recursive: true, force: true });\n}\nprocess.exit(failures === 0 ? 0 : 1);\n```\n\n</details>\n\n### Automated checks\n\n- Type-check clean: `pnpm tsgo:extensions` and `pnpm tsgo:extensions:test` both\n  exit 0 with no errors.\n- `pnpm test:extension memory-lancedb` — **149 tests passing**, including fourteen\n  regression tests:\n  1. the `[SCOPE:<value>]` tag is captured verbatim (a value with hyphens **and**\n     underscores is not truncated and mis-scoped) and is stripped from the\n     embedded input and the stored text, so the vector reflects the fact and the\n     tag is not echoed back on recall;\n  2. dedup is scope-aware — the same fact survives under different scopes, while\n     same-scope and global-vs-global writes still dedup;\n  3. dedup prefilters by scope before the top-K limit, so a same-scope duplicate\n     is still detected even when many other scopes share a near-identical vector;\n  4. scoped `memory_recall` prioritizes its scope — the requested scope's row is\n     returned (and ranked first) even behind many strong global matches that\n     would otherwise fill the candidate window;\n  5. an **unscoped** `memory_recall` is global-only — a scoped row never surfaces\n     in a plain recall;\n  6. a scoped `memory_forget` deletes only within its scope — the same fact under\n     a different scope survives;\n  7. an **unscoped** `memory_forget` is global-only — it cannot nominate or delete\n     a scoped row from another partition;\n  8. **auto-recall** injects only global memories — a scoped row is never\n     auto-recalled into an unrelated session;\n  9. operator recall thresholds survive the live-config merge — a configured\n     `autoRecallOverfetch`/`recallMinScore` reaches the before-prompt auto-recall\n     instead of silently falling back to the defaults;\n  10. a `memory_store` tag whose key is not a slug (e.g. a punctuated channel id)\n      is **rejected** — an intended-scoped memory never silently falls back to the\n      global partition;\n  11. a `memory_forget` by `memoryId` is fenced to the row's scope — a scoped row\n      is not deleted by an unscoped or mismatched-scope call, while a matching\n      scope (or a global row) deletes as expected;\n  12. a tag-only `[SCOPE:<value>]` store (no text after the tag) is **rejected**,\n      and auto-capture skips it — the bare control tag is never embedded or\n      persisted as a memory on its own;\n  13. `ltm search` is global-only by default and honors `--scope <slug>` — the CLI\n      never scans across partitions unless a scope is explicitly requested, and a\n      non-slug `--scope` key is rejected.\n  14. **auto-capture eligibility is evaluated on the scope-stripped text** — a\n      `[SCOPE:<slug>]` message whose fact fits under `captureMaxChars` is captured\n      even when the routing tag makes the raw string exceed the limit, so a long tag\n      can no longer flip a message's memory-worthiness; the tag is stripped before\n      the capture heuristics run, then the fact is embedded and stored under its\n      scope.\n- Rebased onto current `main`. The `memory_store` success string applies `main`'s\n  UTF-16-safe `truncateUtf16Safe(...)` helper to the scope-stripped text\n  (`truncateUtf16Safe(memoryText, 100)`), so both `main`'s UTF-16 fix and this PR's\n  tag-strip hold; `pnpm check:no-conflict-markers` passes and no raw `.slice(0, N)`\n  truncation remains on memory text.\n- Adapted to `main`'s tightened quality gates in the extensions lane: the\n  newly-enforced `noUncheckedIndexedAccess` (the `[SCOPE:<value>]` capture-group\n  reads and one test batch access are guarded with the SDK's `expectDefined`,\n  matching `main`'s idiom), the oxlint rules (`no-map-spread`, `curly`, and the\n  **type-aware** `restrict-template-expressions` / `no-unnecessary-type-conversion`,\n  reproduced locally with the `--tsconfig` shard config CI runs), and the\n  zero-`any`-cast type-suppression inventory (the added test mocks were reworked to\n  drop every `as any`). `pnpm tsgo:extensions`, `pnpm tsgo:extensions:test`, the\n  extensions lint shard, and the type-suppression-inventory test are all green for\n  this plugin's files.\n- Closed two partition gaps found in review: (1) the `ltm search` CLI was the only\n  `db.search` caller left without a scope filter, so a table-wide scan could expose\n  scoped rows — it is now global-only by default with an opt-in `--scope <slug>`,\n  mirroring `memory_recall`; (2) a tag-only `[SCOPE:<value>]` payload used to fall\n  back to storing the raw text (embedding the control tag itself) — it is now\n  rejected on store and skipped on auto-capture. Both are covered by the new\n  regression tests (12–13 above).\n- A follow-up review pass hardened the scoped-capture path: a scoped store or\n  auto-capture payload that is empty **or whitespace-only** after the tag is stripped\n  is rejected (never embedded as a blank memory), and auto-capture now runs its\n  capture heuristics on the **stripped** text, so the routing tag's length cannot\n  change a message's eligibility. Covered by regression test 14 (and the existing\n  tag-only test 12).\n- Docs updated (`docs/plugins/memory-lancedb.md`): a new **Scope** section (tag /\n  slug shape, global-vs-scoped recall and forget, `memoryId` fence, global-only\n  auto-recall, and the `ltm search --scope` behavior) plus a **Recall selectivity**\n  table for the three new settings, with `docs/docs_map.md` regenerated for the new\n  headings; `pnpm format:docs:check`, `docs:map:check`, the MDX check, and the\n  internal-link check all pass.\n\n---\n<sub>Prepared with AI assistance.</sub>\n",
+        "branch": "feat/memory-lancedb-scope",
+        "head_sha": "2ceb44b222d20120af5cfc214f16d2cfbe2cd4ff",
+        "author": "jgrandguillaume",
+        "labels": [
+          "docs",
+          "extensions: memory-lancedb",
+          "size: XL",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "docs/docs_map.md",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/plugins/memory-lancedb.md",
+            "additions": 59,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-lancedb/config.ts",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-lancedb/index.test.ts",
+            "additions": 1526,
+            "deletions": 54,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-lancedb/index.ts",
+            "additions": 311,
+            "deletions": 22,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/memory-lancedb/openclaw.plugin.json",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 6,
+        "additions": 1983,
+        "deletions": 79,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102966",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102966.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 102,
+          "gatingTotal": 97,
+          "counts": {
+            "SUCCESS": 68,
+            "SKIPPED": 34
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -37,19 +170,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1521,
+    "total_ms": 2743,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1170
+        "ms": 396
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1984
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -65,7 +198,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 314
+        "ms": 272
       },
       {
         "name": "append_ledger",
