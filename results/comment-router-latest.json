@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T21:22:14.849Z",
+  "generated_at": "2026-07-16T21:22:40.862Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T18:22:12.715Z",
+  "since": "2026-07-16T18:22:40.327Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -15,11 +15,11 @@
   "comment_ids": [
     4996696254
   ],
-  "status_comment_id": 4996696595,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -39,15 +39,15 @@
       "comment_version_key": "4996696254:2026-07-16T21:20:07Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/109165#issuecomment-4996696254",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 109165,
-      "author": "Pick-cat",
-      "author_id": 266665499,
+      "target_branch": null,
+      "issue_number": 93868,
+      "author": "harjothkhara",
+      "author_id": 48686985,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-16T21:20:07Z",
-      "comment_updated_at": "2026-07-16T21:20:07Z",
-      "comment_body_sha256": "6416a13bebeca6c97f0869543cab859d20edfb94909435d8675a7dfe5d848477",
-      "status_comment_id": 4996696595,
+      "comment_created_at": "2026-07-16T21:18:13Z",
+      "comment_updated_at": "2026-07-16T21:18:13Z",
+      "comment_body_sha256": "c3811f58a2e32cb154bd87cbb30d0f2be53d5f0b946c88f10ed9eb5c41ecff4d",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,141 +72,32 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 109165,
-          "dispatch_key": "router-ea96a22e609a86a4",
-          "dispatched_at": "2026-07-16T21:22:15.807Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-16T21:22:16.842Z",
-          "response_comment_id": "4996696595",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(line): dripping inbound media downloads hang past setup timeout",
-        "body": "## What Problem This Solves\n\nFixes an issue where LINE inbound media download could hang forever after the content endpoint returned HTTP 200, when the response body kept dripping bytes slowly.\n\nAffected workflow: LINE inbound media persistence (`downloadLineMedia` → content ready poll → `saveMediaStream`).\n\n## Why This Change Was Made\n\nOn current `main`, readiness owns a 15s `AbortController` inside `fetchLineContentWhenReady` and clears that timer as soon as headers return `Readable.fromWeb(response.body)`. After headers, only the Node stream remains — with no wall-clock — so a slow drip can keep `saveMediaStream` alive indefinitely.\n\nThis keeps the existing **15s readiness** contract for 202→retry polling, and adds a separate **120s body** wall-clock after HTTP 200 that aborts and destroys the Node stream. Body budget matches Slack/Feishu inbound media totals (`SLACK_MEDIA_TOTAL_TIMEOUT_MS` / Feishu `120_000`) so late readiness still gets a full transfer window for the default 10MB cap. LINE documents `api-data.line.me` as the large-data content endpoint where video/audio may spend time preparing before binary retrieval ([Get content](https://developers.line.biz/en/reference/messaging-api/#get-content)).\n\nNon-goals: changing shared `saveMediaStream`, LINE send/API surfaces, live LINE Bot credentials, or collapsing readiness+body into one shared 15s budget.\n\n**Collision check:** `path:extensions/line/src/download.ts` open PRs = 0 (all authors and Pick-cat).\n\n## User Impact\n\n- Wedged or dripping LINE content bodies fail closed at the **body** deadline instead of hanging inbound media handling.\n- Healthy media that becomes ready late still gets a full body transfer budget (no longer starved by shared 15s).\n- Readiness-only behavior for hung pre-header / endless 202 polling stays at 15s.\n\n## Evidence\n\nHead: `7f923be17856f009af73fc12858463fa97bcfd3f`\n\n### Timeout contract (post-fix)\n\n| Phase | Budget | Scope |\n| --- | --- | --- |\n| Readiness | `CONTENT_READY_TIMEOUT_MS` = 15s | 202 polling until HTTP 200 headers |\n| Body | `LINE_MEDIA_BODY_TIMEOUT_MS` = 120s | `saveMediaStream` after headers; stream destroyed on abort |\n\nOptional `timeoutMs` / `bodyTimeoutMs` / `contentBaseUrl` are test overrides only — no new config/env.\n\n### Focused tests\n\n```bash\nnode scripts/run-vitest.mjs extensions/line/src/download.test.ts extensions/line/src/download.deadline.loopback.test.ts\n```\n\n```text\n Test Files  2 passed (2)\n      Tests  14 passed (14)\n   Duration  980ms\n[test] passed 1 Vitest shard in 5.03s\n```\n\nIncludes:\n- hung pre-header fetch still aborts at readiness 15s (`did not become ready`)\n- drip-after-headers aborts on **body** deadline (`bodyTimeoutMs: 1000`) while readiness signal stays un-aborted\n- late readiness (14s 202 hang) + 1.5s slow-valid body succeeds under fresh 2s body budget (would fail a shared 15s total)\n- loopback `node:http` drip every 40ms with `bodyTimeoutMs: 250` rejects in ~2s\n- loopback slow-but-valid body (80ms) completes under `bodyTimeoutMs: 1500`\n\n### Verification\n\n- `oxfmt` on touched files\n- `git diff --check` clean\n- Collision rechecked at push time\n\n### Real behavior proof\n\n- Behavior addressed: dripping content body after HTTP 200 cannot outlive the body wall-clock; late readiness does not steal body budget\n- Environment: local Vitest + loopback HTTP on `127.0.0.1` (test `contentBaseUrl` override)\n- Sibling contracts checked: `extensions/slack/src/monitor/media.ts` (`SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000`), Feishu media HTTP 120s, LINE Get content large-data prep notes\n- What was not tested: live `api-data.line.me` with channel credentials (no live LINE bot in this contributor environment); controlled local drip + slow-valid only\n\n### Risk / Compatibility\n\nReadiness semantics unchanged (15s). Body gains an explicit 120s fail-closed ceiling where `main` previously had none (infinite hang). No new config keys. AI-assisted.\n\n@clawsweeper re-review\n\nMade with [Cursor](https://cursor.com)",
-        "branch": "fix/line-media-download-deadline",
-        "head_sha": "7f923be17856f009af73fc12858463fa97bcfd3f",
-        "author": "pick-cat",
-        "labels": [
-          "channel: line",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "extensions/line/src/download.deadline.loopback.test.ts",
-            "additions": 136,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/line/src/download.test.ts",
-            "additions": 91,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/line/src/download.ts",
-            "additions": 136,
-            "deletions": 54,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 363,
-        "deletions": 55,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-109165",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109165.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 79,
-          "gatingTotal": 74,
-          "counts": {
-            "SKIPPED": 34,
-            "SUCCESS": 34,
-            "IN_PROGRESS": 11
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-16T21:22:15.093Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4857,
+    "total_ms": 2251,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 445
+        "ms": 446
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1553
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 11
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -222,7 +113,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2710
+        "ms": 1716
       },
       {
         "name": "append_ledger",
