@@ -1,17 +1,17 @@
 ---
 repo: "openclaw/openclaw-windows-node"
 cluster_id: "issue-openclaw-openclaw-windows-node-993"
-mode: "autonomous"
-run_id: "29487793648"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29487793648"
+mode: "plan"
+run_id: "29491020995"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29491020995"
 head_sha: "4f067bc52be84ceabf495fc29a322831f01c1aa5"
-workflow_conclusion: "failure"
-result_status: "blocked"
-published_at: "2026-07-16T09:44:40.894Z"
+workflow_conclusion: "success"
+result_status: "planned"
+published_at: "2026-07-16T10:33:30.411Z"
 canonical: "https://github.com/openclaw/openclaw-windows-node/issues/993"
 canonical_issue: "https://github.com/openclaw/openclaw-windows-node/issues/993"
 canonical_pr: null
-actions_total: 3
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,23 +25,23 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw-windows-node
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29487793648](https://github.com/openclaw/clawsweeper/actions/runs/29487793648)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29491020995](https://github.com/openclaw/clawsweeper/actions/runs/29491020995)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
-Worker result: blocked
+Worker result: planned
 
 Canonical: https://github.com/openclaw/openclaw-windows-node/issues/993
 
 ## Summary
 
-Verified the bug on current main SHA bf0fa8a9bde433db9f6758cc89723bf9bfdd06c0 and mapped a narrow four-file repair. This run could not modify or validate a branch because the target checkout is read-only; native Windows proof was also unavailable because no Crabbox binary is installed.
+Plan a narrow new fix PR for open canonical issue #993. The hydrated issue and review establish that current main still drops models.list contextTokens and incorrectly presents contextWindow as the unqualified usable limit. No security, product-direction, closure, or merge decision is required.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,9 +66,8 @@ Verified the bug on current main SHA bf0fa8a9bde433db9f6758cc89723bf9bfdd06c0 an
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #993 | keep_canonical | planned | canonical | The open issue remains the canonical implementation path; no active implementation PR was hydrated. |
-| cluster:issue-openclaw-openclaw-windows-node-993 | fix_needed | planned |  | The issue is valid, non-security-sensitive, bounded, and safely implementable without changing Gateway/Core metadata, routing, authentication, persisted settings, defaults, or CHANGELOG.md. |
-| cluster:issue-openclaw-openclaw-windows-node-993 | build_fix_artifact | planned |  | The repair artifact is ready for a writable executor, but implementation, required validation, rubber-duck review, and current-head visible picker proof remain blocked in this worker environment. |
+| #993 | fix_needed | planned | canonical | The report is a reproducible, non-security-sensitive presentation bug with a bounded field-propagation and formatting repair. |
+| cluster:issue-openclaw-openclaw-windows-node-993 | build_fix_artifact | planned |  | Create or update the single target branch clawsweeper/issue-openclaw-openclaw-windows-node-993 and open a credited implementation PR after all validation and proof gates pass. |
 
 ## Needs Human
 
