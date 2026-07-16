@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-106789"
 mode: "autonomous"
-run_id: "29383075386"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29383075386"
-head_sha: "923797712890459a866dc7ec905320f34ce9c1c4"
-workflow_conclusion: "success"
+run_id: "29477197318"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29477197318"
+head_sha: "20a3056724249a5ae38e75d0faea1510be533c9c"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-15T02:06:37.870Z"
+published_at: "2026-07-16T06:46:19.342Z"
 canonical: "#106789"
 canonical_issue: null
-canonical_pr: "https://github.com/openclaw/openclaw/pull/106789"
-actions_total: 3
+canonical_pr: "#106789"
+actions_total: 1
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29383075386](https://github.com/openclaw/clawsweeper/actions/runs/29383075386)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29477197318](https://github.com/openclaw/clawsweeper/actions/runs/29477197318)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -35,16 +35,16 @@ Canonical: #106789
 
 ## Summary
 
-Keep the credited source PR #104485 closed and repair canonical PR #106789 in place. Current main still has the hardcoded Blacksmith Testbox behavior, while #106789 is writable and narrowly addresses that behavior. Direct merge and close actions are blocked by the job; exact-head validation must resolve the failing OpenClawKit dead-code check and unknown mergeability first.
+Make PR #106789 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,11 @@ Keep the credited source PR #104485 closed and repair canonical PR #106789 in pl
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | failed |  |  | error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429
+fatal: expected flush after ref listing |
+| execute_fix | blocked |  |  | error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429
+fatal: expected flush after ref listing |
+| automerge_repair_outcome_comment | updated | #106789 |  |  |
 
 ## Apply Actions
 
@@ -66,9 +70,7 @@ Keep the credited source PR #104485 closed and repair canonical PR #106789 in pl
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| https://github.com/openclaw/openclaw/pull/104485 | keep_closed | skipped | superseded | Historical source PR already replaced by the open, writable canonical PR #106789. |
-| https://github.com/openclaw/openclaw/pull/106789 | fix_needed | planned | canonical | Repair the adopted canonical branch against current main, preserve the reviewed provider-precedence behavior, and obtain clean exact-head validation. |
-| https://github.com/openclaw/openclaw/pull/106789 | build_fix_artifact | planned | canonical | Provide the deterministic executor with a bounded in-place repair and validation contract. |
+| #106789 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
