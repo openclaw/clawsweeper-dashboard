@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T01:39:55.688Z",
-  "repo": "openclaw/clawsweeper",
+  "generated_at": "2026-07-16T01:50:56.368Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-15T22:39:54.095Z",
+  "since": "2026-07-15T22:50:53.077Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    616
+    102369
   ],
   "comment_ids": [
-    4987172911
+    4987263213
   ],
-  "status_comment_id": 4987173306,
+  "status_comment_id": 4987263603,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/clawsweeper:616:4987172911:2026-07-16T01:37:15Z:re_review",
-      "comment_id": "4987172911",
-      "comment_version_key": "4987172911:2026-07-16T01:37:15Z",
-      "comment_url": "https://github.com/openclaw/clawsweeper/pull/616#issuecomment-4987172911",
-      "repo": "openclaw/clawsweeper",
+      "idempotency_key": "comment-router:openclaw/openclaw:102369:4987263213:2026-07-16T01:48:44Z:re_review",
+      "comment_id": "4987263213",
+      "comment_version_key": "4987263213:2026-07-16T01:48:44Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102369#issuecomment-4987263213",
+      "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 616,
-      "author": "brokemac79",
-      "author_id": 255583030,
+      "issue_number": 102369,
+      "author": "ruel225",
+      "author_id": 300765114,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-16T01:37:15Z",
-      "comment_updated_at": "2026-07-16T01:37:15Z",
-      "comment_body_sha256": "97abd1c77f8e344c280e07ae79dc90eda06c8401e3fc833e7055418a70b9bdcf",
-      "status_comment_id": 4987173306,
+      "comment_created_at": "2026-07-16T01:48:44Z",
+      "comment_updated_at": "2026-07-16T01:48:44Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 4987263603,
       "trigger": "mention",
       "command": "review",
       "intent": "re_review",
@@ -95,64 +95,124 @@
       "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix: run exact publishers on current main",
-        "body": "## Summary\n\nRepairs queued exact-review publication without reducing the queue's existing\nparallel publisher capacity.\n\n- Validate the immutable artifact against its producer SHA, but run the\n  publisher from current `main` so repaired publication logic is used.\n- Recognize legacy artifacts with no durable review-lease tuple and safely\n  enqueue one fresh exact review instead of attempting a stale target mutation.\n- Remove the exact publisher's second action-ledger state publication, which\n  amplified shared `clawsweeper-state` contention after the actual review\n  publication had already completed.\n\n## Incident evidence\n\nThis is deliberately not a claim that #592 was the original incident cause.\n\n- `openclaw/openclaw#107787`'s review run\n  [29408820027](https://github.com/openclaw/clawsweeper/actions/runs/29408820027)\n  started at `2026-07-15T10:38:19Z`, 26 seconds **before** #592 merged at\n  `10:38:45Z`. It created the full review comment at `10:46:50Z`, then its\n  publisher reported `RoutableSyncPublishRaceError` while committing the\n  durable result. That prevented the deferred verdict router from applying the\n  expected target labels. The comment is visible at\n  [#107787 comment 4979684095](https://github.com/openclaw/openclaw/issues/107787#issuecomment-4979684095).\n  This proves the shared-state publication failure predates #592.\n- #592 separately split exact review generation from publishing and checked the\n  publisher out at the artifact's historical `source_sha`. A queued artifact\n  therefore runs code from before later publisher repairs. #593 corrected the\n  bundle-command spelling but did not change that historical checkout.\n- #612 added the correct current-main behavior for legacy tuple-less artifacts:\n  requeue a fresh review instead of applying an artifact that cannot prove the\n  visible review lease. That behavior cannot help an artifact whose publisher\n  is still executing a pre-#612 checkout. A representative failed publisher is\n  [run 29460181512](https://github.com/openclaw/clawsweeper/actions/runs/29460181512)\n  for [issue #574](https://github.com/openclaw/clawsweeper/issues/574), which\n  reported that the live durable tuple existed while its local report had no\n  durable lease identity.\n- The exact action ledger is observability data. Keeping it as a second\n  best-effort state write makes the shared-state race worse; it is not required\n  to publish the verdict or route labels.\n\nRelated: #592, #593, #610, #611, #612, #614.\n\n## Implementation and safety\n\nThe artifact validator still binds the producer SHA and target identity. Only\nthe implementation checkout changes to `main`. Legacy tuple-less artifacts do\nnot receive state/target publication credentials and do not mutate their target;\nthey dispatch one signed fresh exact review using the existing source-drift\nroute. Normal exact publication keeps its existing 24-slot capacity and broad\npublication stays target-scoped.\n\nThis is an immediate repair for historical artifact execution and avoidable\nstate-write pressure. It does not claim to fully solve the older shared-state\nrace demonstrated by #107787. A separate bounded state-write critical-section\nrepair remains warranted.\n\n## Validation\n\n```text\npnpm run build:all\npnpm exec node --test --test-name-pattern 'exact event review hands immutable artifacts|publish workflow dispatches immediate apply|trusted comment router owns command ledger capacity retries|every action-ledger publication authenticates' test/sweep-workflow.test.ts test/clawsweeper-action-ledger.test.ts test/repair/command-ops-action-ledger.test.ts\npnpm exec node -e \"const fs=require('node:fs'); const YAML=require('yaml'); YAML.parse(fs.readFileSync('.github/workflows/sweep.yml','utf8')); console.log('sweep.yml parsed')\"\ngit diff --check\ncodex review --uncommitted\ngit fetch origin main --prune\ncodex review --base origin/main\n```\n\nFocused proof: 6 passing tests; TypeScript build and workflow YAML parse pass.\nBoth Codex review passes were clean. `actionlint` is not installed on this host.\nThe full workflow suite has five established native-Windows baseline failures\nbecause WSL cannot execute `/bin/bash`; the touched tests pass and a Linux\nCrabbox build completed.\n\n## Risk and rollout\n\nThis touches a GitHub Actions workflow, so GitHub App/OAuth workflow scope is\nthe deployment risk. Roll out by observing the next legacy and current exact\npublisher runs: legacy artifacts should complete by requeueing once, while\nnormal artifacts should publish/routably defer without the extra ledger commit.\nNo bulk backlog replay is included.\n",
-        "branch": "codex/disable-exact-publish-ledger",
-        "head_sha": "f7f0fc92899843941fab61cdc5288e098657deec",
-        "author": "brokemac79",
-        "labels": [],
+        "title": "fix(agents): memoize exec auto-reviewer verdicts for identical requests (#102249)",
+        "body": "## Summary\n\n- Add a per-run verdict memo to `createModelExecAutoReviewer` so identical exec requests reuse the deterministic `allow-once` verdict instead of re-billing a fresh model completion.\n- Key the memo on the full serialized reviewer input (command, argv, cwd, envKeys, host, reason, analysis, agent) to prevent cross-context reuse.\n\n## What Problem This Solves\n\nWhen an agent has the model-backed exec auto-reviewer enabled, every ask-requiring exec that misses the allowlist is sent to a fresh paid reviewer completion. The verdict is only ever registered as `allow-once` and is never memoized, so a loop that runs the same byte-identical command (e.g. `npm test`) pays for one reviewer completion per invocation. N identical execs cost N paid reviewer calls.\n\n## User Impact\n\n- **Why it matters / User impact:** Agents running repeated commands in loops (poll/retry patterns, `npm test` iterations) no longer burn redundant paid reviewer completions. Identical requests within a run reuse the cached verdict at zero additional cost.\n- **What did NOT change:** The patch only adds memoization inside `createModelExecAutoReviewer`. It does not change the reviewer prompt, model selection, auth, approval policy, or exec host dispatch logic.\n- **Architecture / source-of-truth check:** The memo uses the same serialized input that `stringifyInput` sends to the model, ensuring the cached verdict is only reused when the reviewer would see an identical prompt.\n\n## Origin / follow-up\n\nFixes #102249. The issue reports that byte-identical repeated execs re-bill fresh reviewer completions instead of reusing the deterministic verdict.\n\n## Competition / linked PR analysis\n\nChecked for open PRs covering exec reviewer memoization: #102362 is another candidate for the same issue but lacks real behavior proof and uses a narrower key. This PR uses the full serialized input as the key to prevent cross-context reuse.\n\n## Real behavior proof\n\n- **Behavior or issue addressed:** Identical exec requests within a run now reuse the cached `allow-once` verdict instead of re-billing a fresh model completion.\n- **Real environment tested:** Local worktree on Node v22.22.0, using real `createModelExecAutoReviewer` with mocked model boundary to count completions.\n- **Exact steps or command run after this patch:**\n\n```bash\nnode scripts/run-vitest.mjs src/agents/exec-auto-reviewer.test.ts\nnpx tsx evidence-exec-reviewer-memo.ts\n```\n\n- **Evidence after fix:**\n\n```json\n{\n  \"proof\": \"exec-reviewer-verdict-memo\",\n  \"boundary\": \"createModelExecAutoReviewer per-run memo\",\n  \"caller\": \"src/agents/exec-auto-reviewer.ts\",\n  \"call1\": { \"decision\": \"allow-once\", \"modelCalls\": 1 },\n  \"call2\": { \"decision\": \"allow-once\", \"modelCalls\": \"served from memo\" },\n  \"call3\": { \"decision\": \"allow-once\", \"modelCalls\": \"new command\" },\n  \"call4\": { \"decision\": \"allow-once\", \"modelCalls\": \"new host\" },\n  \"totalModelCalls\": 3,\n  \"expectedModelCalls\": 3,\n  \"memoWorking\": true\n}\n```\n\n```text\nTest Files  1 passed (1)\nTests  13 passed (13)\n[test] passed Vitest shard\n```\n\n- **Observed result after fix:** 4 calls with the same command/host produce 3 model calls (1 for first request, 1 for different command, 1 for different host). The second identical call is served from memo. All verdicts are `allow-once`.\n- **What was not tested:** A live provider completion was not run (model boundary was mocked to count calls). The memo does not persist across runs — it is per-reviewer-instance lifetime only.\n- **Fix classification:** Root cause fix\n\n## Regression Test Plan\n\n- **Target test file:** `src/agents/exec-auto-reviewer.test.ts`\n- **Scenario locked in:** First call triggers model, second identical call served from memo (model call count stays at 1), different command triggers new model call, different host triggers new model call.\n- **Why this is the smallest reliable guardrail:** The test directly asserts `complete` call count, covering the memo hit, miss, and context-differentiation paths.\n\n## Merge risk\n\n- **Risk labels considered:** Low risk — additive memoization with conservative cache scope.\n- **Risk explanation:** `ask` and non-low-risk verdicts are not cached. The memo only stores `allow-once` decisions. Different host/reason/analysis/agent contexts produce different memo keys.\n- **Why acceptable:** The memo key matches the full reviewer input, preventing cross-context reuse. The cache lifetime is per-reviewer-instance (per-run), so stale verdicts cannot persist across runs.\n\n## What was not changed\n\n- Reviewer prompt and system instructions were not changed.\n- Model selection and auth were not changed.\n- Approval policy and exec host dispatch were not changed.\n- The `allow-once` registration behavior was not changed.",
+        "branch": "fix/exec-reviewer-verdict-memo",
+        "head_sha": "ed18314afa2b8cdd28e1e229e07bddc41a7a2eda",
+        "author": "ruel225",
+        "labels": [
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
         "files": [
           {
-            "path": ".github/workflows/sweep.yml",
-            "additions": 42,
-            "deletions": 48,
+            "path": "src/agents/exec-auto-reviewer.test.ts",
+            "additions": 104,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "test/clawsweeper-action-ledger.test.ts",
-            "additions": 1,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/repair/command-ops-action-ledger.test.ts",
-            "additions": 2,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/sweep-workflow.test.ts",
-            "additions": 25,
-            "deletions": 12,
+            "path": "src/agents/exec-auto-reviewer.ts",
+            "additions": 46,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 70,
-        "deletions": 84,
+        "changedFiles": 2,
+        "additions": 150,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawsweeper-616",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-616.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102369",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102369.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "UNSTABLE",
         "review_decision": "",
         "checks": {
-          "total": 7,
-          "gatingTotal": 6,
+          "total": 109,
+          "gatingTotal": 104,
           "counts": {
-            "IN_PROGRESS": 1,
-            "SUCCESS": 6
+            "SUCCESS": 44,
+            "SKIPPED": 33,
+            "IN_PROGRESS": 30,
+            "FAILURE": 1,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "pnpm check:IN_PROGRESS"
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:FAILURE",
+            "check-test-types:IN_PROGRESS",
+            "check-prompt-snapshots:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
           ],
           "pending": [
-            "pnpm check:IN_PROGRESS"
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/2):IN_PROGRESS",
+            "QA Smoke CI (profile 2/2):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-prompt-snapshots:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-dependencies:FAILURE"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -171,19 +231,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4046,
+    "total_ms": 3654,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 418
+        "ms": 444
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1044
+        "ms": 1708
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 446
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -199,7 +259,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2441
+        "ms": 364
       },
       {
         "name": "append_ledger",
