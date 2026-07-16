@@ -1,24 +1,20 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T05:50:13.291Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-16T05:51:37.031Z",
+  "repo": "openclaw/gogcli",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T02:50:11.045Z",
+  "since": "2026-07-16T02:51:36.081Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
-  "item_numbers": [
-    94719
-  ],
-  "comment_ids": [
-    4988555168
-  ],
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
+  "scanned_comments": 2,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,138 +28,7 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:94719:4988555168:2026-07-16T05:34:06Z:re_review",
-      "comment_id": "4988555168",
-      "comment_version_key": "4988555168:2026-07-16T05:34:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/94719#issuecomment-4988555168",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 94719,
-      "author": "SPRIC76",
-      "author_id": 202198248,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-16T05:34:06Z",
-      "comment_updated_at": "2026-07-16T05:34:06Z",
-      "comment_body_sha256": "bbd47b39c4c15da6bc9deebb3edfbc8cab15f8a405b994ad26954097a5aa445f",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(anthropic): read claudeCodeVersion at runtime to prevent stale user-agent bearer auth failures",
-        "body": "## What Problem This Solves\n\nAnthropic OAuth requests carry a hardcoded `claudeCodeVersion = \"2.1.75\"` user-agent string in two places:\n\n| File | Symbol | Code path |\n|---|---|---|\n| `src/llm/providers/anthropic.ts` | `claudeCodeVersion` | Legacy SDK provider (OAuth bearer) |\n| `src/agents/anthropic-transport-stream.ts` | `CLAUDE_CODE_VERSION` | Managed Anthropic transport (native SSE) |\n\nWhen the installed `@anthropic-ai/claude-code` CLI is any version other than `2.1.75`, every OAuth-authenticated request still declares itself as `2.1.75`. The Anthropic backend can reject the mismatched version, and bearer auth fails. This is issue #94716, confirmed still reproducible on current `main` (the constant is still hardcoded at `packages/ai/src/providers/anthropic.ts` post file-move).\n\n## Changes\n\n### `src/llm/utils/claude-code-version.ts` (new)\n\nSingle source of truth, resolved **per call** via an injectable resolver:\n\n```typescript\nexport type ClaudeCodeVersionResolver = () => string | null;\n\n// Reads @anthropic-ai/claude-code/package.json at call time.\n// Uses createRequire(import.meta.url) — no execSync, no module-load caching.\nexport const defaultClaudeCodeVersionResolver: ClaudeCodeVersionResolver = () => { … };\n\nlet resolver: ClaudeCodeVersionResolver = defaultClaudeCodeVersionResolver;\nexport function __setClaudeCodeVersionResolver(next: ClaudeCodeVersionResolver): void { … }\nexport function __resetClaudeCodeVersionResolver(): void { … }\n\nexport function resolveClaudeCodeVersion(): string { … }   // throws on any failure\n\n// Called at client-construction time in both providers.\nexport function claudeCodeUserAgent(): string {\n  return `claude-cli/${resolveClaudeCodeVersion()}`;\n}\n```\n\nDesign points:\n- **Per-call resolution.** `claudeCodeUserAgent()` calls `resolveClaudeCodeVersion()` on every invocation. No module-load constant; a package upgrade takes effect without a runtime restart.\n- **Injectable resolver.** `__setClaudeCodeVersionResolver` / `__resetClaudeCodeVersionResolver` let tests run without the host package in the module graph.\n- **Fail loudly, never silently.** Null / empty / non-digit-leading / non-string / throw → exception. No fallback to a stale version — a silent fallback to the old hardcoded constant would reproduce the exact bug this PR fixes, just with a smaller window.\n- **Scoped package name.** `@anthropic-ai/claude-code` — not unscoped `claude` — prevents unofficial package resolution into an OAuth identity header.\n\n### `src/llm/providers/anthropic.ts` / `src/agents/anthropic-transport-stream.ts`\n\nRemove the hardcoded version constants. Import and call `claudeCodeUserAgent()` in `defaultHeaders`.\n\n### `src/llm/utils/claude-code-version.test.ts` (new)\n\n9 deterministic unit tests via resolver injection (no host package required in CI):\n\n| # | Test | Expected |\n|---|---|---|\n| 1 | resolver returns `\"2.1.177\"` | `resolveClaudeCodeVersion()` → `\"2.1.177\"` |\n| 2 | resolver returns `null` | throws `/invalid value.*null/` |\n| 3 | resolver returns `\"\"` | throws `/invalid value/` |\n| 4 | resolver returns `\"not-a-version\"` | throws `/invalid value/` |\n| 5 | resolver returns `123` | throws `/invalid value/` |\n| 6 | resolver throws | rethrows with `/Failed to resolve/` wrapping cause |\n| 7 | resolver returns `\"2.0.0-beta\"` (digit-leading) | accepted as-is |\n| 8 | `claudeCodeUserAgent()` reads active resolver | header matches injected version |\n| 9 | resolver fails → `claudeCodeUserAgent()` throws | no stale fallback (regression for #94716) |\n\n## Evidence\n\n```\nvitest run src/llm/utils/claude-code-version.test.ts\n  Test Files  1 passed (1)\n       Tests  9 passed (9)\n\ntsc --noEmit --skipLibCheck: exit 0\n\nnode scripts/proof-claudeCodeVersion.mjs\n  user-agent: claude-cli/2.1.177  ← installed @anthropic-ai/claude-code (matches host CLI, not the old \"2.1.75\" constant)\n```\n\nFull wire capture (OpenClaw → capture server showing `user-agent: claude-cli/2.1.177` in request headers) requires a dist build from this branch and is available on request.\n\n## Known open items (tracked, in progress on this branch)\n\n- **Rebase required.** `src/llm/providers/anthropic.ts` moved to `packages/ai/src/providers/anthropic.ts` on current `main`; this branch predates the move and needs to retarget both provider files.\n- **Lint:** `no-underscore-dangle` flags the `__setClaudeCodeVersionResolver` / `__resetClaudeCodeVersionResolver` test-injection helpers — needs a rename or scoped disable comment.\n- **Pre-existing test regression uncovered during review:** 5 tests in the existing `anthropic-transport-stream.test.ts` (not the new file added by this PR) fail against this branch — being root-caused and fixed rather than skipped, since a silent skip would hide whatever the actual interaction is.\n\nNone of the above changes the design or the root-cause fix above; they're mechanical follow-up commits on this same branch.\n\n## Related\n\nThere's a second open PR for the same issue, #95265, using a module-load-cached resolver with a silent fallback to the old `\"2.1.75\"` constant on resolution failure. Commented on that PR with the specific design tradeoffs — the short version is that a silent fallback to the stale constant reproduces the bug class this fix exists to close. Happy to consolidate with maintainer input.\n\nFixes #94716.\n",
-        "branch": "fix/issue-94716-anthropic-claudeCodeVersion-runtime-read",
-        "head_sha": "f0883d7024959300922c7ca88d4df0b6017c86a9",
-        "author": "spric76",
-        "labels": [
-          "agents",
-          "size: S",
-          "triage: needs-real-behavior-proof",
-          "P1",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 auth-provider",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
-        ],
-        "files": [
-          {
-            "path": "src/agents/anthropic-transport-stream.ts",
-            "additions": 2,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/providers/anthropic.ts",
-            "additions": 2,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/llm/utils/claude-code-version.test.ts",
-            "additions": 75,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/llm/utils/claude-code-version.ts",
-            "additions": 94,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 4,
-        "additions": 173,
-        "deletions": 6,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-94719",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-94719.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 95,
-          "gatingTotal": 90,
-          "counts": {
-            "FAILURE": 4,
-            "SUCCESS": 59,
-            "SKIPPED": 31,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-large-2:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "Real behavior proof:FAILURE",
-            "checks-node-compact-large-2:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -172,19 +37,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2446,
+    "total_ms": 1191,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 621
+        "ms": 913
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1533
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 15
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -200,7 +65,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 201
+        "ms": 241
       },
       {
         "name": "append_ledger",
