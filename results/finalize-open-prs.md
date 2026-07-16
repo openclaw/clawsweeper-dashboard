@@ -1,6 +1,6 @@
 # Open ClawSweeper Repair PR Finalizer
 
-Generated: 2026-07-16T18:19:42.376Z
+Generated: 2026-07-16T20:48:18.950Z
 
 ## Summary
 
@@ -30,4 +30,4 @@ Status: report_only
 
 | PR | Title | Cluster | Mergeable | Merge State | Checks | Blockers | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [#109258](https://github.com/openclaw/openclaw/pull/109258) | docs(templates): ask feature requesters whether they plan to implement | feature-template-pr-intent | MERGEABLE | BEHIND | CANCELLED:2 SKIPPED:37 SUCCESS:68; blockers:1 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
+| [#109258](https://github.com/openclaw/openclaw/pull/109258) | docs(templates): ask feature requesters whether they plan to implement | feature-template-pr-intent | MERGEABLE | BEHIND | CANCELLED:3 SKIPPED:58 SUCCESS:73; blockers:1 | needs_merge_state:BEHIND, needs_checks:Real behavior proof:CANCELLED, needs_merge_preflight, needs_result_backfill | repair failing checks or document unrelated main flake with touched-surface proof |
