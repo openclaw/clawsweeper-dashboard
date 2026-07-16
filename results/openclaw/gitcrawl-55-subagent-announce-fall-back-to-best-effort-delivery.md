@@ -1,17 +1,17 @@
 ---
 repo: "openclaw/openclaw"
 cluster_id: "gitcrawl-55-subagent-announce-fall-back-to-best-effort-delivery"
-mode: "autonomous"
-run_id: "29485371840"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29485371840"
-head_sha: "e582737cb68f79da4782eab0d189f49421551ffc"
-workflow_conclusion: "failure"
+mode: "plan"
+run_id: "29487615730"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29487615730"
+head_sha: "4f067bc52be84ceabf495fc29a322831f01c1aa5"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-16T09:06:38.132Z"
+published_at: "2026-07-16T09:38:36.609Z"
 canonical: "https://github.com/openclaw/openclaw/commit/76a0abc768c71ccd48d57288f46c1ad389ccf13e"
 canonical_issue: null
 canonical_pr: null
-actions_total: 7
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29485371840](https://github.com/openclaw/clawsweeper/actions/runs/29485371840)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29487615730](https://github.com/openclaw/clawsweeper/actions/runs/29487615730)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: https://github.com/openclaw/openclaw/commit/76a0abc768c71ccd48d57288f
 
 ## Summary
 
-All five hydrated refs are already closed, so no close, comment, label, or merge action is valid. Current main at 5cd9243465f9f4b9f6d69b7f2b0958757d79a9e8 contains the queued announce best-effort routing fix tracked by #59201 and #70585. The distinct no-config requester-depth bug from closed PR #70888 remains present on current main and warrants a narrow credited replacement fix artifact.
+Live preflight shows both the hinted canonical PR #70585 and listed candidate PR #61620 are already closed. Current main f5bb19e028fb69f1b837c2a0cf0caf706632b513 retains the queued best-effort delivery behavior implemented by commit 76a0abc768c71ccd48d57288f46c1ad389ccf13e, so no open canonical replacement or mutation is planned. Closed #70888 describes a distinct requester-depth follow-up and remains historical evidence outside this open-candidate classification pass.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 7 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,13 +66,8 @@ All five hydrated refs are already closed, so no close, comment, label, or merge
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #59201 | keep_closed | skipped | fixed_by_candidate | Historical issue is already closed and its queued-delivery failure is fixed on current main. |
-| #60207 | keep_closed | skipped | independent | Closed historical issue has a materially different outbound deduplication root cause. |
-| #61620 | keep_closed | skipped | superseded | Useful historical routing work was superseded by narrower implementations already present on main. |
-| #70585 | keep_closed | skipped | fixed_by_candidate | Historical canonical PR is already closed because its narrow behavior is present on current main. |
-| #70888 | keep_closed | skipped | related | The closed contributor PR documents a separate reproducible bug that remains on current main and should be carried forward through a credited replacement. |
-| cluster:gitcrawl-55-subagent-announce-fall-back-to-best-effort-delivery | fix_needed | planned |  | A narrow replacement fix is needed for the remaining explicit requester-depth bug sourced from #70888. |
-| cluster:gitcrawl-55-subagent-announce-fall-back-to-best-effort-delivery | build_fix_artifact | planned |  | The source PR is useful but closed and not safely writable; a credited replacement artifact is the deterministic repair path. |
+| #61620 | keep_closed | skipped | superseded | The only listed candidate is already closed and was superseded by narrower behavior and regression coverage on main. |
+| #70585 | keep_closed | skipped | fixed_by_candidate | The obsolete representative is already closed as implemented on main; no open canonical PR needs to replace it. |
 
 ## Needs Human
 
