@@ -2,12 +2,12 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-109149"
 mode: "autonomous"
-run_id: "29533144614"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29533144614"
-head_sha: "0fcbad47d4948e3bbef97cf45729dea111e9b01e"
-workflow_conclusion: "failure"
+run_id: "29535200692"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29535200692"
+head_sha: "681e84007ce9d957b0e0810cf4c85ce0eead7c65"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-16T20:48:15.340Z"
+published_at: "2026-07-16T21:17:05.747Z"
 canonical: "#109149"
 canonical_issue: null
 canonical_pr: "#109149"
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29533144614](https://github.com/openclaw/clawsweeper/actions/runs/29533144614)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29535200692](https://github.com/openclaw/clawsweeper/actions/runs/29535200692)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: #109149
 
 ## Summary
 
-Make PR #109149 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Continue repairing canonical PR #109149 in place. The contributor branch already contains the original fix plus a follow-up predicate refactor, but it remains behind current main, most checks are still pending, and the existing Codex review predates the current head. Refresh the branch, preserve contributor credit and the focused SMS delta, complete validation, and run an exact-head review. Merge and close remain prohibited.
 
 ## Impact
 
@@ -66,7 +66,7 @@ Make PR #109149 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #109149 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #109149 | fix_needed | planned | canonical | The PR remains the best canonical fix and its branch is safely writable, but the adopted automerge repair loop cannot finish while the branch is behind main, checks are pending, and no clean Codex review covers the exact current head. |
 
 ## Needs Human
 
