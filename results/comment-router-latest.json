@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-16T22:17:25.447Z",
+  "generated_at": "2026-07-16T22:18:01.397Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T19:17:22.856Z",
+  "since": "2026-07-16T19:17:58.637Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    109165
+    101328
   ],
   "comment_ids": [
-    4997103254
+    4997106915
   ],
-  "status_comment_id": 4997103499,
+  "status_comment_id": 4997107182,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:109165:4997103254:2026-07-16T22:15:26Z:re_review",
-      "comment_id": "4997103254",
-      "comment_version_key": "4997103254:2026-07-16T22:15:26Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/109165#issuecomment-4997103254",
+      "idempotency_key": "comment-router:openclaw/openclaw:101328:4997106915:2026-07-16T22:15:56Z:re_review",
+      "comment_id": "4997106915",
+      "comment_version_key": "4997106915:2026-07-16T22:15:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/101328#issuecomment-4997106915",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 109165,
-      "author": "Pick-cat",
-      "author_id": 266665499,
+      "issue_number": 101328,
+      "author": "giodl73-repo",
+      "author_id": 235387111,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-16T22:15:26Z",
-      "comment_updated_at": "2026-07-16T22:15:26Z",
-      "comment_body_sha256": "6bec63c20e0b3238352d742676791c64e76348039c436b5146347cb697936a45",
-      "status_comment_id": 4997103499,
+      "comment_created_at": "2026-07-16T22:15:56Z",
+      "comment_updated_at": "2026-07-16T22:15:56Z",
+      "comment_body_sha256": "c4b5dc4caf9068f17b57ba2e25b6dd4f4be728f9a099771d49ad91955e107371",
+      "status_comment_id": 4997107182,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -80,39 +80,154 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 109165,
-          "dispatch_key": "router-1197cb5d25552c5b",
-          "dispatched_at": "2026-07-16T22:17:26.326Z"
+          "item_number": 101328,
+          "dispatch_key": "router-fd85ac3faa5e138d",
+          "dispatched_at": "2026-07-16T22:18:02.430Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-16T22:17:28.362Z",
-          "response_comment_id": "4996696595",
+          "commented_at": "2026-07-16T22:18:03.841Z",
+          "response_comment_id": "4997107182",
           "response_comment_mode": "updated"
         }
       ],
-      "author_repository_permission": "read",
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(line): dripping inbound media downloads hang past setup timeout",
-        "body": "## What Problem This Solves\n\nFixes an issue where LINE inbound media download could hang forever after the content endpoint returned HTTP 200, when the response body kept dripping bytes slowly.\n\nAffected workflow: LINE inbound media persistence (`downloadLineMedia` → content ready poll → `saveMediaStream`).\n\n## Why This Change Was Made\n\nOn current `main`, readiness owns a 15s `AbortController` inside `fetchLineContentWhenReady` and clears that timer as soon as headers return `Readable.fromWeb(response.body)`. After headers, only the Node stream remains — with no wall-clock — so a slow drip can keep `saveMediaStream` alive indefinitely.\n\nThis keeps the existing **15s readiness** contract for 202→retry polling, and adds a separate **120s body** wall-clock after HTTP 200 that aborts and destroys the Node stream. Body budget matches Slack/Feishu inbound media totals (`SLACK_MEDIA_TOTAL_TIMEOUT_MS` / Feishu `120_000`) so late readiness still gets a full transfer window for the default 10MB cap. LINE documents `api-data.line.me` as the large-data content endpoint where video/audio may spend time preparing before binary retrieval ([Get content](https://developers.line.biz/en/reference/messaging-api/#get-content)).\n\nNon-goals: changing shared `saveMediaStream`, LINE send/API surfaces, live LINE Bot credentials, or collapsing readiness+body into one shared 15s budget.\n\n**Collision check:** `path:extensions/line/src/download.ts` open PRs = 0 (all authors and Pick-cat).\n\n## User Impact\n\n- Wedged or dripping LINE content bodies fail closed at the **body** deadline instead of hanging inbound media handling.\n- Healthy media that becomes ready late still gets a full body transfer budget (no longer starved by a shared 15s total).\n- Readiness-only behavior for hung pre-header / endless 202 polling stays at 15s.\n\n## Evidence\n\nExact head: `7f923be17856f009af73fc12858463fa97bcfd3f`.\n\n### Timeout contract (post-fix)\n\n| Phase | Budget | Scope |\n| --- | --- | --- |\n| Readiness | `CONTENT_READY_TIMEOUT_MS` = 15s | 202 polling until HTTP 200 headers |\n| Body | `LINE_MEDIA_BODY_TIMEOUT_MS` = 120s | `saveMediaStream` after headers; stream destroyed on abort |\n\nOptional `timeoutMs` / `bodyTimeoutMs` / `contentBaseUrl` are test overrides only — no new config/env.\n\n### Observed real-behavior proof (local Vitest + `node:http` loopback)\n\nCommand:\n\n```bash\nnode scripts/run-vitest.mjs extensions/line/src/download.test.ts extensions/line/src/download.deadline.loopback.test.ts\n```\n\nResult at this head:\n\n```text\n✓ aborts a dripping content body within the body wall-clock deadline 474ms\n✓ persists a slow-but-valid body before the body deadline 89ms\n✓ aborts a hung content request at the readiness deadline 5ms\n✓ aborts a dripping content body after headers within the body deadline 54ms\n✓ keeps a fresh body deadline after late readiness 1ms\n Test Files  2 passed (2)\n      Tests  14 passed (14)\n[test] passed 1 Vitest shard in 4.83s\n```\n\nConcrete contract observations (not just green checks):\n\n- **Body drip fail-closed:** real `node:http` peer returns HTTP 200 then drips 1 byte every 40ms; with `bodyTimeoutMs: 250`, rejection is `LINE media body for message mid-drip timed out after 0.25 seconds`, and wall-clock elapsed lands in `[200, 2000)` (observed ~474ms — bounded, not an indefinite hang).\n- **Slow-but-valid success:** same loopback path with an 80ms paced body and `bodyTimeoutMs: 1500` completes (`size: 2`, observed ~89ms) — healthy slow transfer is not false-killed.\n- **Readiness unchanged:** hung pre-header fetch still rejects with `did not become ready within 15 seconds`; readiness `AbortSignal` aborts; `saveMediaStream` is not called.\n- **Separate budgets:** drip-after-headers abort uses the **body** error string while the readiness signal stays un-aborted; late readiness (~14s 202 hang) + 1.5s slow-valid body still succeeds under a fresh 2s body budget (would fail a shared 15s total).\n- Sibling contracts checked: `extensions/slack/src/monitor/media.ts` (`SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000`), Feishu media HTTP 120s, LINE Get content large-data prep notes.\n- What was not tested: live `api-data.line.me` with channel credentials (no live LINE bot in this contributor environment). Controlled local drip + slow-valid + readiness hang cover the changed fail-closed contract.\n\n### Verification\n\n- `oxfmt` on touched files\n- `git diff --check` clean\n- Collision rechecked at push time\n\n### Risk / Compatibility\n\nReadiness semantics unchanged (15s). Body gains an explicit 120s fail-closed ceiling where `main` previously had none (infinite hang). No new config keys. AI-assisted.\n\nMade with [Cursor](https://cursor.com)",
-        "branch": "fix/line-media-download-deadline",
-        "head_sha": "7f923be17856f009af73fc12858463fa97bcfd3f",
-        "author": "pick-cat",
+        "title": "Add grouped Claw schema and read-only add plan",
+        "body": "## Summary\n\nImplements the first read-only slice of [RFC #27](https://github.com/openclaw/rfcs/pull/27) behind `OPENCLAW_EXPERIMENTAL_CLAWS=1`:\n\n- Defines the strict grouped Claw v1 schema for one new agent plus its workspace files, packages, MCP servers, and cron jobs.\n- Enforces portable exact SemVer, canonical ClawHub names, cross-platform workspace paths, managed avatars, five-field timezone-qualified cron schedules, pinned package-manager MCP commands, safe spawn environment keys, and HTTPS/loopback remote MCP URLs.\n- Reads local package or standalone sources into a deterministic development snapshot that binds the manifest, package metadata, and every referenced workspace source.\n- Produces a complete read-only add plan with expected state, stable diagnostics, local readiness requirements, and a `planIntegrity` digest that later mutation must bind to explicit consent.\n- Blocks agent, workspace, MCP, cron, and unsafe source collisions instead of merging into an existing agent.\n- Exposes only `openclaw claws inspect <source>` and `openclaw claws add <source> --dry-run`; without the process opt-in, `claws` is absent from registration and help.\n\nThis PR does not mutate config or disk, run package installers, configure MCP, create cron jobs, or persist provenance. Package actions remain explicit blockers until the package-owner lifecycle slice later in the stack.\n\n## Stack\n\n- RFC: [openclaw/rfcs#27](https://github.com/openclaw/rfcs/pull/27)\n- This PR: schema, source identity, diagnostics, readiness, and read-only planning\n- Next: [#101755](https://github.com/openclaw/openclaw/pull/101755) creates the new agent/workspace and root provenance record\n\n## Validation\n\n```text\npnpm exec vitest run src/claws/schema.test.ts src/claws/schema-conformance.test.ts src/cli/claws-cli.test.ts\n# 48 tests passed\n\nnode scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts src/claws/lifecycle.e2e.test.ts\n# 3 lifecycle E2E tests passed\n\npnpm exec oxlint src/claws/schema-portability.ts src/claws/schema-conformance.test.ts \\\n  src/claws/schema.test.ts src/claws/schema.ts src/claws/reader.ts src/claws/lifecycle.ts src/claws/types.ts\n# 0 warnings, 0 errors\n\npnpm tsgo:core\npnpm tsgo:test:src\ngit diff --check\n# passed\n```\n\nThe real CLI E2E proves inspection, an eight-action read-only plan with the two expected deferred package-owner blockers, and fail-closed behavior when add is invoked without `--dry-run`.\n\nCodex review of the final uncommitted patch completed with no actionable findings.",
+        "branch": "user/giodl/claws-pr2-schema-plan",
+        "head_sha": "a3c017240d70d528e8e2b804339c0eb8d33df4ca",
+        "author": "giodl73-repo",
         "labels": [
-          "channel: line",
-          "size: M",
-          "P1",
-          "rating: 🧂 unranked krab",
+          "cli",
+          "maintainer",
+          "size: XL",
+          "P3",
+          "rating: 🦪 silver shellfish",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "status: 📣 needs proof",
+          "feature: ✨ showcase"
         ],
         "files": [
           {
-            "path": "extensions/line/src/download.deadline.loopback.test.ts",
-            "additions": 136,
+            "path": "src/claws/experimental.test.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/experimental.ts",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/fixtures/incident-response.claw.json",
+            "additions": 76,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/fixtures/local-claws.feed.json",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/fixtures/workspace/HEARTBEAT.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/fixtures/workspace/SOUL.md",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/lifecycle.e2e.test.ts",
+            "additions": 115,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/lifecycle.ts",
+            "additions": 379,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/reader.ts",
+            "additions": 292,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/schema-conformance.test.ts",
+            "additions": 201,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/schema-portability.ts",
+            "additions": 141,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/schema.test.ts",
+            "additions": 462,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/schema.ts",
+            "additions": 406,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/claws/types.ts",
+            "additions": 203,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/argv.ts",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/claws-cli.runtime.ts",
+            "additions": 168,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/claws-cli.test.ts",
+            "additions": 197,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/claws-cli.ts",
+            "additions": 47,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/program/command-registry-core.ts",
+            "additions": 13,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cli/program/command-registry.test.ts",
+            "additions": 12,
             "deletions": 0,
             "changeType": "ADDED"
           },
@@ -123,43 +238,50 @@
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/line/src/download.ts",
-            "additions": 136,
-            "deletions": 54,
+            "path": "src/cli/program/core-command-descriptors.ts",
+            "additions": 22,
+            "deletions": 5,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 363,
-        "deletions": 55,
+        "changedFiles": 21,
+        "additions": 2801,
+        "deletions": 14,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-109165",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109165.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-101328",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-101328.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
-        "review_decision": "",
+        "review_decision": "CHANGES_REQUESTED",
         "checks": {
-          "total": 82,
-          "gatingTotal": 77,
+          "total": 117,
+          "gatingTotal": 112,
           "counts": {
-            "SKIPPED": 35,
-            "SUCCESS": 46,
+            "SUCCESS": 81,
+            "SKIPPED": 33,
+            "FAILURE": 2,
             "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "check-lint:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "check-lint:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-16T22:17:25.693Z"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "processed_at": "2026-07-16T22:18:01.702Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -170,19 +292,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6120,
+    "total_ms": 5922,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 526
+        "ms": 505
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1946
+        "ms": 2146
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 15
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -198,7 +320,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3517
+        "ms": 3150
       },
       {
         "name": "append_ledger",
