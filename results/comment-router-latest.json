@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T03:23:28.323Z",
+  "generated_at": "2026-07-17T03:26:24.512Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T00:23:27.751Z",
+  "since": "2026-07-17T00:26:22.225Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    109504
+    109109
   ],
   "comment_ids": [
-    4998544364
+    4998636839
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:109504:4998544364:2026-07-17T02:58:42Z:re_review",
-      "comment_id": "4998544364",
-      "comment_version_key": "4998544364:2026-07-17T02:58:42Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/109504#issuecomment-4998544364",
+      "idempotency_key": "comment-router:openclaw/openclaw:109109:4998636839:2026-07-17T03:17:21Z:re_review",
+      "comment_id": "4998636839",
+      "comment_version_key": "4998636839:2026-07-17T03:17:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109109#issuecomment-4998636839",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 109504,
-      "author": "moguangyu5-design",
-      "author_id": 237363243,
+      "issue_number": 109109,
+      "author": "SunnyShu0925",
+      "author_id": 265248434,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T02:58:42Z",
-      "comment_updated_at": "2026-07-17T02:58:42Z",
-      "comment_body_sha256": "b1f54340debca098fd40de24ae014c33636a6539a744d9e7e0585ba1e0c7bd74",
+      "comment_created_at": "2026-07-17T03:17:21Z",
+      "comment_updated_at": "2026-07-17T03:17:21Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,7 +74,72 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(auto-reply): deliverBindingPayload missing abortSignal check",
+        "body": "## What Problem This Solves\n\nFixes an issue where `deliverBindingPayload` does not check or propagate the dispatch abort signal, so plugin binding notifications could still be delivered via `routeReplyToOriginating`, `dispatcher.sendToolResult`, or `dispatcher.sendFinalReply` after the dispatch operation has been aborted.\n\n## Why This Change Was Made\n\n`deliverBindingPayload` was missing the same abort-signal guard that `sendPayloadAsync` (the sibling function) already implements:\n\n1. **Check upfront**: `getDispatchAbortSignal()` + `.aborted` early return\n2. **Propagate**: pass `abortSignal` to `routeReplyToOriginating` options\n3. **Re-check**: after the async `routeReplyToOriginating` call, check `.aborted` again before falling through to `sendToolResult`/`sendFinalReply`\n\nSince all callers of `deliverBindingPayload` are in the same closure that already has `getDispatchAbortSignal()` — no parameter changes needed.\n\n## User Impact\n\nUsers of plugin bindings may see fewer stale/misdirected binding notifications when a dispatch operation is aborted (e.g. session timeout, manual cancellation). No behavior change for normal (non-aborted) dispatch paths.\n\n## Evidence\n\n- **Real environment tested**: Linux x64, Node 22, branch `fix/bug-020-deliver-binding-payload-abort-signal`\n- **Exact test command run after this patch**:\n\n  ```\n  node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts\n  node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts\n  node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts\n  node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test-utils.ts\n  ```\n\n- **Evidence after fix**: All 309 tests pass (270 lifecycle+bindings + 18 abort + 21 reply-dispatch) with no regressions.\n\n### Focused regression test\n\nAdded `\"aborts plugin-owned binding delivery during route await via abort signal\"` in `dispatch-from-config.lifecycle-and-bindings.test-utils.ts`:\n\n- Sets up a plugin-owned binding whose inbound claim hook returns a `{ handled, reply }` outcome.\n- Inside the `routeReply` mock, the abort signal is fired **synchronously** — this places the abort AFTER the pipeline-level `isPreDispatchOperationAborted()` checks but BEFORE `deliverBindingPayload`'s post-check, verifying that the post-check prevents fallback delivery via `sendToolResult`/`sendFinalReply`.\n- Uses `Provider: \"telegram\"` / `OriginatingChannel: \"discord\"` so `shouldRouteToOriginating` is true (surface != originating), ensuring the dispatch reaches `routeReplyRuntime.routeReply`.\n- The mock returns `null` so `deliverBindingPayload` falls through to the post-check.\n\n**Verification**: Test fails without the fix (`sendFinalReply` called with `\"should not send\"`) and passes with the fix (`sendFinalReply` not called).\n\n### Real behavior proof\n\nThe fix follows the exact same abort-signal pattern used by `sendPayloadAsync` (lines 748-770 in the same file), which has been the canonical guard for dispatch abort in this module. The three checks (pre-await, propagate, post-await) mirror that proven implementation.\n\nAdditionally, a standalone proof run confirms the behavior end-to-end:\n\n```\n========================================\nPROOF: deliverBindingPayload abort-signal guard\n========================================\n\n[SETUP] Active dispatch abort cleared (setNoAbort)\n[SETUP] Plugin hooks: inbound_claim + message_received\n[SETUP] Plugin-owned binding resolved\n[SETUP] AbortController created (aborted=false)\n[EXEC] ctx built (provider=telegram, surface=telegram, originating=discord)\n\n--- EXECUTING dispatchReplyFromConfig ---\n\n[ROUTE] routeReplyToOriginating invoked -> firing abort!\n[ROUTE] aborted=true -> returning null (unhandled)\n\n--- FINISHED ---\n\n=== VERIFICATION ===\nrouteReply was called:    YES\nsendFinalReply called:    NO [OK]\nsendToolResult called:    NO [OK]\nreplyResolver called:     NO [OK]\ndispatchReplyFromConfig returned: {\"queuedFinal\":false,\"counts\":{\"tool\":0,\"block\":0,\"final\":0}}\n\n=== VERDICT ===\nPASS: deliverBindingPayload post-abort guard prevented fallback delivery.\n```\n\nThe output demonstrates:\n- A real `AbortController` is created (not pre-aborted)\n- `dispatchReplyFromConfig` is called with the abort signal\n- Inside `routeReplyToOriginating`, the abort signal fires mid-call\n- After returning `null` (unhandled), the post-abort guard in `deliverBindingPayload` prevents fallback to `sendToolResult`/`sendFinalReply`\n- Verified: no post-abort delivery occurs\n\n### CI fixes\n\n- Rebased against latest `main` to resolve baseline-drift CI failures\n- Fixed `type-suppression-inventory` violation: replaced `as any` with `as unknown as T` in the test mock (`as unknown` is not flagged by the inventory check)\n- Fixed duplicate `isDirectReleaseCandidateExecution` declaration in `scripts/release-candidate-checklist.d.mts` (rebase artifact)\n\n### Open PR collision check\n\nSearched open PR topics and changed-file lists; no open PR touched `src/auto-reply/reply/dispatch-from-config.ts` for a similar abort-signal fix.\n\nAI-assisted.\n",
+        "branch": "fix/bug-020-deliver-binding-payload-abort-signal",
+        "head_sha": "e3287cc2ad8c5f8c5e4dcdc1d0cc60bc86adfc4e",
+        "author": "sunnyshu0925",
+        "labels": [
+          "scripts",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "scripts/release-candidate-checklist.d.mts",
+            "additions": 0,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test-utils.ts",
+            "additions": 98,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/auto-reply/reply/dispatch-from-config.ts",
+            "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 106,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-109109",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109109.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 123,
+          "gatingTotal": 118,
+          "counts": {
+            "SUCCESS": 82,
+            "SKIPPED": 40,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,15 +150,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2462,
+    "total_ms": 2635,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 481
+        "ms": 554
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1647
       },
       {
         "name": "classify_comment_commands",
@@ -113,7 +178,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1891
+        "ms": 348
       },
       {
         "name": "append_ledger",
