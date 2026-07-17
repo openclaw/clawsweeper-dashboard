@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T02:01:15.636Z",
+  "generated_at": "2026-07-17T02:03:58.509Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-16T23:01:13.860Z",
+  "since": "2026-07-16T23:03:58.032Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -15,11 +15,11 @@
   "comment_ids": [
     4998250005
   ],
-  "status_comment_id": 4998250258,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -39,7 +39,7 @@
       "comment_version_key": "4998250005:2026-07-17T01:59:15Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/109088#issuecomment-4998250005",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 109088,
       "author": "SunnyShu0925",
       "author_id": 265248434,
@@ -47,7 +47,7 @@
       "comment_created_at": "2026-07-17T01:59:15Z",
       "comment_updated_at": "2026-07-17T01:59:15Z",
       "comment_body_sha256": "df951c9bcfcafae33182c870fe04b020ab6804527dbaf6cd46ef56cae3faef8c",
-      "status_comment_id": 4998250258,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,126 +72,36 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 109088,
-          "dispatch_key": "router-8211aa20c50e53ab",
-          "dispatched_at": "2026-07-17T02:01:16.316Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-17T02:01:18.124Z",
-          "response_comment_id": "4997471666",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(infra): bound stalled provider JSON/text/binary response reads with default chunk timeout",
-        "body": "## What Problem This Solves\n\nProvider JSON, text, and binary response reads have no per-chunk idle timeout. When a provider sends response headers but stalls mid-body, the `ReadableStream` `reader.read()` call blocks indefinitely, hanging the agent run until the user manually cancels it. The same unbounded read affects the non-2xx error-body path (`readResponseTextLimited` → `extractProviderErrorInfo`), so a provider that returns error headers and then stalls also hangs.\n\n## Why This Change Was Made\n\n`readProviderJsonResponse`, `readProviderTextResponse`, and `readProviderBinaryResponse` each call `readResponseWithLimit` without passing `chunkTimeoutMs`. Inside `readResponsePrefixFromReader`, an absent `chunkTimeoutMs` falls through to bare `reader.read()`, which never times out on its own. The sibling error-body function `readResponseTextLimited` had the same gap—its callers (`extractProviderErrorInfo`, `provider-transport-fetch`) also had unbounded reads.\n\nThe fix:\n\n- Adds optional `chunkTimeoutMs`/`timeoutMs`/`onIdleTimeout`/`onTimeout` parameters to all three public response helpers and to `readResponseTextLimited`.\n- Sets a **30-second idle default** for JSON and text responses (binary downloads are opt-in since they can be large and callers should choose their own budget).\n- Sets a **10-second idle default** for error-body reads via `readResponseTextLimited` (error bodies are small, typically <16 KB, and a shorter timeout means faster recovery from stalled error responses).\n\nThis eliminates the entire hang class: both 2xx success paths and 4xx/5xx error paths now have bounded idle reads.\n\n## User Impact\n\nProvider requests that would previously hang the agent forever now fail with an actionable timeout error—within 30 seconds for mid-response stalls and within 10 seconds for stalled error-body reads. Successful responses are unaffected.\n\n## Evidence\n\n### Automated tests\n\n- `pnpm test src/agents/provider-http-errors.test.ts`: **18/18 tests passed** (all 3 new stall tests included).\n\n### Live stall proof (standalone, mirrors the fix exactly)\n\nA local `node:http` server sends `HTTP 200` + `{\"status\": \"par` and never closes the connection. A real `fetch()` to this server exercises the identical `readChunkWithIdleTimeout` → `withCancellableTimeout` code path used by the fix.\n\n```\n==================================================================\nPROOF: Stalled provider response body termination\n==================================================================\n\nTCP server listening on :34691\nServer sends headers + partial JSON body then stalls (no close).\n\n─── Test 1: With chunkTimeoutMs=100ms (the fix) ───\n  ✓ REJECTED after 139ms\n  Error: stall-proof: response body stalled for 100ms\n  → The fix terminates the stalled read within chunkTimeoutMs\n\n─── Test 2: Without chunkTimeoutMs (old behavior) ───\n  (no timeout set; will abort via AbortController after 2s)\n  ✓ ABORTED after 30011ms (user-initiated cancel)\n  → Old code cannot terminate stalled reads on its own\n```\n\nThe old code blocked for 30 011 ms — not because it recovered, but because Node.js `fetch()` has a 30-second TCP-level default. Without that default (e.g. long-lived HTTP/2, or a proxy that holds the connection open longer), the hang is permanent. The fix cleanly terminates the stall within **139 ms** (configured as 100 ms chunk timeout + scheduling overhead).\n\n### Regression tests\n\nAll existing size-cap regression tests continue to pass unchanged.\n\n## Additional Notes\n\nThis bug was discovered via source-code audit of `readProviderJsonResponse` → `readResponseWithLimit` → `readResponsePrefixFromReader`. The `chunkTimeoutMs` parameter already existed in the underlying machinery (PR #40098) — it simply was not wired through to the public provider response helpers or the error-body reader.\n\n### Risk assessment for the 30s default\n\n- **Idle timeout vs. total timeout**: the 30s default is a *per-chunk* idle timeout, meaning a response that continuously sends data (even slowly) will not trigger it. Only a complete stall between chunks will.\n- **Caller scope**: ~80 direct callers of `readProviderJsonResponse` + ~8 of `readProviderTextResponse` + ~35 error-path callers. All were audited; none send requests where a >30s inter-chunk pause is legitimate.\n- **Upgrade compatibility**: all new parameters are optional, so existing plugin code compiles and runs unchanged—just with a new idle-failure safety net.\n- **Binary/audio/video**: left without a default for now; callers must explicitly opt in with `{ chunkTimeoutMs: ... }`.\n",
-        "branch": "fix/bug-045-provider-no-chunk-timeout",
-        "head_sha": "9a06721e98afd70021341458c7cc450244247719",
-        "author": "sunnyshu0925",
-        "labels": [
-          "agents",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/agents/provider-http-errors.test.ts",
-            "additions": 67,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/provider-http-errors.ts",
-            "additions": 52,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 119,
-        "deletions": 4,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-109088",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109088.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 117,
-          "gatingTotal": 112,
-          "counts": {
-            "SUCCESS": 78,
-            "FAILURE": 4,
-            "SKIPPED": 34,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "dependency-guard-detect:FAILURE",
-            "security-sensitive-guard-detect:FAILURE",
-            "security-sensitive-guard:FAILURE",
-            "dependency-guard:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "dependency-guard-detect:FAILURE",
-            "security-sensitive-guard-detect:FAILURE",
-            "security-sensitive-guard:FAILURE",
-            "dependency-guard:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-17T02:01:15.825Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4748,
+    "total_ms": 1774,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 405
+        "ms": 399
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1252
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 11
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -203,7 +113,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2963
+        "ms": 1298
       },
       {
         "name": "append_ledger",
