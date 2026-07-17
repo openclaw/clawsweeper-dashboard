@@ -2,12 +2,12 @@
 repo: "openclaw/clawsweeper"
 cluster_id: "issue-openclaw-clawsweeper-635"
 mode: "autonomous"
-run_id: "29550853901"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29550853901"
-head_sha: "5e590dc160047e4f8cf1182bbc988f9ed15ad010"
-workflow_conclusion: "failure"
+run_id: "29552577333"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29552577333"
+head_sha: "a5222ffef1d4a80e490bac6066f96f45673c228b"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-17T02:55:58.102Z"
+published_at: "2026-07-17T03:35:47.087Z"
 canonical: "https://github.com/openclaw/clawsweeper/issues/635"
 canonical_issue: "https://github.com/openclaw/clawsweeper/issues/635"
 canonical_pr: null
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/clawsweeper
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29550853901](https://github.com/openclaw/clawsweeper/actions/runs/29550853901)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29552577333](https://github.com/openclaw/clawsweeper/actions/runs/29552577333)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: https://github.com/openclaw/clawsweeper/issues/635
 
 ## Summary
 
-Issue #635 remains reproducible on main SHA 5e590dc160047e4f8cf1182bbc988f9ed15ad010. The publisher throws when apply-decisions returns an exact-item outcome without durable-sync, terminal, guarded-open, or source-drift proof, before the existing current-tuple deferred-routing path can complete the artifact. Plan a narrow fix and focused regression coverage; do not close or merge.
+Issue #635 remains reproducible on current main a5222ffef1d4a80e490bac6066f96f45673c228b. The publisher still converts every exact apply result lacking sync, terminal, guarded-open, or source-drift proof into a generic permanent failure. A narrow fix should add explicit post-apply dispositions: terminal no-op only for proven same-head no-ops, typed bounded retry for known retry actions, ordinary publication for applied results, and permanent failure for empty or unknown action sets. No close or merge is permitted.
 
 ## Impact
 
@@ -66,10 +66,10 @@ Issue #635 remains reproducible on main SHA 5e590dc160047e4f8cf1182bbc988f9ed15a
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #100 | keep_closed | skipped | independent | Closed historical context with no shared root cause. |
-| #634 | keep_closed | skipped | related | Adjacent merged fix, not a candidate implementation for the remaining root cause. |
-| #635 | fix_needed | planned | canonical | A narrow code fix can distinguish a missing/mismatched apply report from a known exact-item nonterminal outcome, allowing only the latter to publish its current tuple and use the existing deferred router instead of becoming a retryable publisher failure. |
-| cluster:issue-openclaw-clawsweeper-635 | build_fix_artifact | planned |  | No viable open implementation PR exists, and the remaining bug has a narrow repair surface. |
+| #100 | keep_closed | skipped | independent | Unrelated closed historical context. |
+| #634 | keep_closed | skipped | related | Adjacent stale-preflight fix with a distinct root cause. |
+| #635 | fix_needed | planned | canonical | The bug is current, non-security-sensitive, narrowly implementable, and has no active implementation PR. |
+| cluster:issue-openclaw-clawsweeper-635 | build_fix_artifact | planned |  | Build a new-fix-PR artifact for the explicit durable-publication disposition contract. |
 
 ## Needs Human
 
