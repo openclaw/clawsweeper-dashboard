@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T16:30:16.639Z",
+  "generated_at": "2026-07-17T16:30:23.365Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T13:30:13.850Z",
+  "since": "2026-07-17T13:30:20.133Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110068
+    108767
   ],
   "comment_ids": [
-    5005110387
+    5005173251
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110068:5005110387:2026-07-17T16:03:38Z:re_review",
-      "comment_id": "5005110387",
-      "comment_version_key": "5005110387:2026-07-17T16:03:38Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110068#issuecomment-5005110387",
+      "idempotency_key": "comment-router:openclaw/openclaw:108767:5005173251:2026-07-17T16:10:47Z:re_review",
+      "comment_id": "5005173251",
+      "comment_version_key": "5005173251:2026-07-17T16:10:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108767#issuecomment-5005173251",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 110068,
-      "author": "YangManBOBO",
-      "author_id": 156181593,
+      "issue_number": 108767,
+      "author": "zw-xysk",
+      "author_id": 294457748,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T16:03:03Z",
-      "comment_updated_at": "2026-07-17T16:03:38Z",
-      "comment_body_sha256": "dec39aa2627437a84993b4530e94df53a37c58c0da4b0ee5e6c317185841e6aa",
+      "comment_created_at": "2026-07-17T16:10:47Z",
+      "comment_updated_at": "2026-07-17T16:10:47Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -77,59 +77,47 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(telegram): duplicate inbound messages after a transient update-offset persistence failure",
-        "body": "## What Problem This Solves\r\n\r\nFixes an issue where Telegram users on a self-hosted OpenClaw gateway can have\r\nalready-handled inbound messages re-delivered and re-processed after a restart,\r\nproducing duplicate replies and duplicate side effects (re-run tools/commands).\r\n\r\nThe trigger is a *transient* failure while persisting the Telegram Bot API\r\nupdate offset (the durable watermark the gateway saves so it can resume without\r\nreplaying old updates). Any temporary hiccup in the plugin state store (disk I/O\r\nerror, lock contention, quota) makes the offset write fail. When that happens\r\nthe gateway logs the error but never catches the offset back up, so the durable\r\noffset silently drifts behind the position the gateway has actually processed.\r\nOn the next restart the bot resumes from that stale offset and Telegram\r\nre-delivers everything after it.\r\n\r\n## Why This Change Was Made\r\n\r\nThe update tracker coalesces offset writes behind a single in-flight write and a\r\nmonotonic \"highest requested\" high-water mark. Previously, when a write threw,\r\n`drainPersistQueue` only reported the error: it dropped the pending target and\r\nleft the request high-water mark advanced, so (1) the failed offset was never\r\nretried and (2) a later request for the same offset was short-circuited by the\r\n`updateId <= highestPersistenceRequestedUpdateId` guard. The durable offset\r\ncould then only ever move again if some strictly higher offset happened to\r\npersist successfully.\r\n\r\nThis change makes offset persistence resilient to transient failures without\r\ntouching the coalescing fast path or any public API:\r\n\r\n- On a failed write it keeps the durable watermark unchanged (unchanged\r\n  behavior), re-arms the failed offset (unless a newer coalesced target already\r\n  supersedes it), and rolls the request high-water mark back to the durable\r\n  floor so the same offset can be requested and retried.\r\n- It retries on a bounded exponential backoff (250ms up to 5s, `unref`ed) so a\r\n  temporary storage outage recovers even on an idle chat, while a persistently\r\n  failing writer cannot hot-spin the event loop.\r\n- On success it resets the backoff.\r\n\r\nThe safe-completed watermark still fences the offset behind any pending or\r\nfailed update, so a retry never advances the offset past an update that is still\r\nin flight.\r\n\r\n### Follow-up: tie the retry to the bot lifecycle (addresses ClawSweeper review)\r\n\r\nThe first revision left the retry timer detached from the owning bot. Telegram\r\naccount removal and token changes deliberately delete the persisted offset, and\r\n`bot.stop()` did not dispose the tracker — so a queued retry from a retired\r\ntracker could wake after shutdown and write an already-retired offset back into\r\nthe shared account store, creating a *second* stale-offset path.\r\n\r\nThis revision gives the retry explicit lifecycle ownership:\r\n\r\n- `createTelegramUpdateTracker` now exposes `dispose()`, which clears the pending\r\n  retry timer and latches a `disposed` flag so no scheduled or in-flight write\r\n  can persist afterwards.\r\n- `bot-core.ts` invokes `updateTracker.dispose()` from the existing `bot.stop`\r\n  hook (alongside the thread-binding and outbound-recorder teardown), aligning\r\n  the tracker's lifetime with the bot.\r\n- `drainPersistQueue` yields to disposal if it races an in-flight write, so it\r\n  never re-arms a retry for an offset that is being retired on purpose.\r\n\r\n## User Impact\r\n\r\nTelegram channels no longer re-deliver and re-answer already-processed messages\r\nafter a gateway restart that followed a transient state-store error. Operators\r\nget an offset that reliably catches up to the processed position once the\r\nunderlying storage recovers, instead of a watermark that stays stuck until new,\r\nhigher-numbered traffic arrives.\r\n\r\n## Evidence\r\n\r\nAdded focused regression tests in\r\n`extensions/telegram/src/bot-update-tracker.test.ts` and validated the full\r\ntracker suite plus the closest offset/persistence integration tests.\r\n\r\n- `vitest run extensions/telegram/src/bot-update-tracker.test.ts` -> **18 passed\r\n  (18)** (13 existing + 5 new).\r\n- Before/after proof: temporarily reverting the retry fix makes\r\n  `retries a transient offset persistence failure until it succeeds` and\r\n  `keeps retrying offset persistence across repeated transient failures` report\r\n  `expected \"vi.fn()\" to be called 2 times, but got 1 times`; reverting the\r\n  `dispose()` wiring makes `cancels a scheduled offset-persistence retry once\r\n  disposed` fail with the retry firing after shutdown. With the fix, all 18 pass.\r\n- `oxlint` and `oxfmt --check` on all changed files -> clean.\r\n\r\nNew tests:\r\n\r\n1. `retries a transient offset persistence failure until it succeeds` -- one\r\n   transient failure; the durable offset does not advance, the error is\r\n   surfaced, and a timer-driven retry (no new traffic) persists the offset.\r\n2. `keeps retrying offset persistence across repeated transient failures` --\r\n   three consecutive failures back off and eventually succeed.\r\n3. `does not persist a higher offset past an id whose write is still failing` --\r\n   with a later update still pending, retries land the offset exactly on the\r\n   safe id and never jump past the unfinished update.\r\n4. `cancels a scheduled offset-persistence retry once disposed` -- after a failed\r\n   write schedules a retry, `dispose()` clears the timer and no further write\r\n   happens even after the backoff window elapses (stop/reconfiguration race).\r\n5. `ignores new offset-persistence requests after being disposed` -- a disposed\r\n   tracker does not resurrect persistence for freshly handled updates.\r\n\r\n",
-        "branch": "fix/telegram-offset-persist-retry",
-        "head_sha": "65f83b99d87a30df398cf2e5e2ccaa063b309bab",
-        "author": "yangmanbobo",
+        "title": "fix(feishu): lock timeoutMs preflight abort for stalled DNS lookup",
+        "body": "## What Problem This Solves\n\nFeishu app registration can hang when SSRF DNS/proxy preflight never completes. Without an entry-point regression on `beginAppRegistration`, a future change can stop forwarding `timeoutMs` into `fetchWithSsrFGuard` and leave onboarding stuck before HTTP dispatch.\n\n## Why This Change Was Made\n\nCurrent `main` (after [#105549](https://github.com/openclaw/openclaw/pull/105549)) owns registration deadlines via **guard top-level `timeoutMs`**, not `AbortSignal.timeout()` in `RequestInit`. `beginAppRegistration(domain, options?)` still accepts test-only `fetchImpl` / `lookupFn` / `timeoutMs`.\n\nThis PR is test-only: it locks that contract for a never-resolving `lookupFn`, asserting `TimeoutError` + `message: \"request timed out\"` and that `fetchImpl` is never called. Shared SSRF suite already covers stalled DNS at the guard; this covers the Feishu registration wiring into that owner.\n\nRebuilt onto latest `main` `c69a75f697876c6e0b75996f10306b3ca6467203`.\n\nAI-assisted: yes. I inspected current `fetchFeishuJson` / `beginAppRegistration`, #105549, sibling hang-without-headers coverage, and `fetch-guard.ssrf` stalled-DNS tests before updating.\n\n## User Impact\n\nNo runtime change. CI keeps a focused lock that stalled Feishu registration preflight fails closed with the guard-owned diagnostic and without opening an HTTP request.\n\n## Evidence\n\n**Contract on current main** (`extensions/feishu/src/app-registration.ts`): `fetchWithSsrFGuard({ ..., timeoutMs })` — see #105549 (“a second AbortSignal.timeout path was redundant”).\n\n**Focused suite:** `pnpm exec vitest run extensions/feishu/src/app-registration.test.ts` → **11 passed**\n\n**Refreshed entry-point proof** (production `beginAppRegistration`, no Vitest):\n\n```text\n[fetch-timeout] fetch timeout after 80ms (elapsed 81ms) operation=fetchWithSsrFGuard url=https://accounts.feishu.cn/oauth/v1/app/registration\n```\n\n```json\n{\n  \"phase\": \"beginAppRegistration-stalled-lookup\",\n  \"mainContract\": \"timeoutMs → fetchWithSsrFGuard (#105549)\",\n  \"timed_out\": true,\n  \"name\": \"TimeoutError\",\n  \"message\": \"request timed out\",\n  \"elapsed_ms\": 192\n}\n```\n\n```text\n[feishu preflight stall proof] timed_out=true name=TimeoutError message=request timed out elapsed_ms=81 fetch_called=0\n```\n\nHead: `5d7b34b6c956c5edc90da62d2dec4cedffddab49` (1 file / +35 vs `main` `c69a75f…`)\n",
+        "branch": "fix/feishu-registration-signal",
+        "head_sha": "5d7b34b6c956c5edc90da62d2dec4cedffddab49",
+        "author": "zw-xysk",
         "labels": [
-          "channel: telegram",
-          "size: M",
-          "P1",
+          "channel: feishu",
+          "size: XS",
+          "proof: sufficient",
+          "P2",
           "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "extensions/telegram/src/bot-core.ts",
-            "additions": 3,
+            "path": "extensions/feishu/src/app-registration.test.ts",
+            "additions": 35,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-update-tracker.test.ts",
-            "additions": 209,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/telegram/src/bot-update-tracker.ts",
-            "additions": 73,
-            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 285,
-        "deletions": 2,
+        "changedFiles": 1,
+        "additions": 35,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110068",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110068.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108767",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108767.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 105,
-          "gatingTotal": 100,
+          "total": 83,
+          "gatingTotal": 78,
           "counts": {
-            "SUCCESS": 75,
-            "SKIPPED": 29,
+            "SUCCESS": 46,
+            "SKIPPED": 36,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -151,19 +139,19 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3166,
+    "total_ms": 3701,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 774
+        "ms": 573
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1928
+        "ms": 2220
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 156
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -179,7 +167,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 377
+        "ms": 469
       },
       {
         "name": "append_ledger",
