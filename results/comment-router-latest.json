@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T19:53:41.724Z",
-  "repo": "openclaw/crabfleet",
+  "generated_at": "2026-07-17T19:56:24.076Z",
+  "repo": "openclaw/crawlkit",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T16:53:36.752Z",
+  "since": "2026-07-17T16:56:20.752Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -13,8 +13,8 @@
   "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 3,
-  "commands_seen": 2,
+  "scanned_comments": 2,
+  "commands_seen": 1,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -30,115 +30,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/crabfleet:92:5006959624:2026-07-17T19:52:25Z:clawsweeper_auto_repair",
-      "comment_id": "5006959624",
-      "comment_version_key": "5006959624:2026-07-17T19:52:25Z",
-      "comment_url": "https://github.com/openclaw/crabfleet/pull/92#issuecomment-5006959624",
-      "repo": "openclaw/crabfleet",
+      "idempotency_key": "clawsweeper-repair:openclaw/crawlkit:61:5006766123:2026-07-17T19:53:56Z:clawsweeper_needs_human",
+      "comment_id": "5006766123",
+      "comment_version_key": "5006766123:2026-07-17T19:53:56Z",
+      "comment_url": "https://github.com/openclaw/crawlkit/pull/61#issuecomment-5006766123",
+      "repo": "openclaw/crawlkit",
       "target_branch": "main",
-      "issue_number": 92,
+      "issue_number": 61,
       "author": "clawsweeper[bot]",
       "author_id": 274271284,
       "author_association": "NONE",
-      "comment_created_at": "2026-07-17T19:52:25Z",
-      "comment_updated_at": "2026-07-17T19:52:25Z",
-      "comment_body_sha256": "cc625061f2bc7e67dc85b0be94a75abaf4eb617ad816670d98ceb2a120b5660f",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto repair",
-      "intent": "clawsweeper_auto_repair",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=bed54f69522d14a468610dd39dab785a98be870f)",
-      "review_summary": "The PR adds a status precondition to `finishRunForLane` and regression coverage so stalled or terminal run attempts are not overwritten or given a false completion event.\n\nReproducibility: yes. for source reproduction: seed a run as `stalled`, invoke the Done path, and observe whether the guarded update and event are skipped. The supplied before/after claim has not been backed by inspectable runtime output in this PR.",
-      "review_followup": "- [P1] A narrow mechanical repair can restore atomic lifecycle persistence; contributor-supplied real-D1 proof remains required before merge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "bed54f69522d14a468610dd39dab785a98be870f",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-17T19:48:33.327Z",
-      "review_lease_owner": "github-run-29608761880-1",
-      "review_lease_comment_id": "5006921348",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "50b5586bbeea00bf250646927b532b9d59ed1d9976ea8d3a5d84e6c4706ecc43",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cards): stop finishRunForLane overwriting a run's stalled status",
-        "body": "## What Problem This Solves\n\nWhen a run finishes for a lane (advance to Done / Human Review / Backlog), `finishRunForLane` overwrote\nthe run's `status` unconditionally. If a reconciler had already marked that run **`stalled`** — a\nheartbeat timeout or crash detected during the caller's read→write window — its terminal provenance\nwas silently replaced with `completed` / `review` / `canceled`, and a false \"run &lt;status&gt;\" event\nwas recorded. The stalled fact (and the preserved workspace it implies) was lost.\n\nThis is the same check-then-act race the two siblings on this table already guard against: `stall()`\nand `reconcileStalledRuns()` both fence their `run_attempts` UPDATE with `WHERE status IN\n(activeRunStatuses)` and only emit their event when a row actually changed. `finishRunForLane` was the\none writer that didn't.\n\n## The change\n\nFence the transition on the run still being pre-terminal, and split the write so the event only fires\nwhen the guarded UPDATE actually changed a row (mirroring `stall()`):\n\n```\n.where(\"id\", \"=\", runId)\n.where(\"status\", \"in\", [...activeRunStatuses, \"review\"])   // + \"review\" so a review run can reach Done\n.executeTakeFirst();\nif ((runUpdate.numUpdatedRows ?? 0n) === 0n) return;         // already terminal (e.g. stalled) → no-op\n```\n\nA run a reconciler has moved to `stalled` (or `completed`/`failed`/`canceled`) no longer matches, so\nthe transition and its event are skipped. `\"review\"` is included because a run in Human Review\nadvancing to Done is a legitimate transition the active set alone would reject.\n\n## Real-behaviour proof (before → after)\n\nThe same interleaving — a reconciler stalls the run during the caller's read→write window, then\n`finishRunForLane(Done)` runs — driven against `origin/main` and this PR over a **real Miniflare D1**\n(SQLite) seeded with a `stalled` run, so the actual compiled `WHERE status` SQL executes:\n\n```\nBASE origin/main — finishRunForLane(Done) on a stalled run (real D1)\n  after: run status=completed, run-finished events=1 (\"run completed\")\n  => STOMPED: stalled overwritten to 'completed' + false 'run completed' event\n\nHEAD (this PR) — real D1\n  after: run status=stalled, run-finished events=0\n  => PRESERVED: stalled provenance intact, no false 'run completed' event\n```\n\n## Testing\n\n`pnpm check` (tsc + oxlint + oxfmt), `pnpm build`, `pnpm exec wrangler deploy --dry-run`, `pnpm test`\nall green. `tests/card-run-finish-guard.test.ts` covers both the bound-parameter shape (per-lane\nstatus + control_intent + guard set) and — via a stateful mock that honours the `WHERE status` fence —\nthe guard *behaviour*: a live/`review` run transitions and records its event; a `stalled` run is left\nuntouched with no event. (The real-D1 before/after above is the behavioural proof; the unit tests are\nthe fast in-CI regression.) Mutation testing of the changed range scores 88%. A concurrency lint of\nthe diff is clean.\n\n**Scope:** this fixes only the run-provenance overwrite. The card's own lane move (`moveCard`) is a\nseparate, pre-existing, user-initiated step and is intentionally left as-is.\n\nRelated: FINDING 2 of #88.\n\nReview history: https://gist.github.com/d5e542084486421fc1e3f62f0f546779\n",
-        "branch": "fix/run-status-stomp",
-        "head_sha": "bed54f69522d14a468610dd39dab785a98be870f",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/worker/card-repository.ts",
-            "additions": 18,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/card-run-finish-guard.test.ts",
-            "additions": 181,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 199,
-        "deletions": 12,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-crabfleet-92",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabfleet-92.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 0,
-          "gatingTotal": 0,
-          "counts": {},
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/crabfleet:89:5004298214:2026-07-17T17:56:33Z:clawsweeper_needs_human",
-      "comment_id": "5004298214",
-      "comment_version_key": "5004298214:2026-07-17T17:56:33Z",
-      "comment_url": "https://github.com/openclaw/crabfleet/pull/89#issuecomment-5004298214",
-      "repo": "openclaw/crabfleet",
-      "target_branch": "main",
-      "issue_number": 89,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-17T14:28:21Z",
-      "comment_updated_at": "2026-07-17T17:56:33Z",
-      "comment_body_sha256": "6b39434c328b4473fab8d08803a07a81e03b5cbceddee8c50e7391b2510c3095",
+      "comment_created_at": "2026-07-17T19:25:47Z",
+      "comment_updated_at": "2026-07-17T19:53:56Z",
+      "comment_body_sha256": "2c5203a2c6f5fb1d454dd916a9d9325aa3fed57867d33b06dec81ad435f47705",
       "status_comment_id": null,
       "trigger": "trusted_bot",
       "command": "clawsweeper needs human",
@@ -149,24 +53,97 @@
       "trusted_bot": true,
       "trusted_bot_author": "clawsweeper[bot]",
       "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] After the contributor supplies real native-VNC runtime proof, a maintainer should confirm that the authorization-equivalence checks match the intended browser-VNC contract; there is no established code defect for...; Cleared: The supplied diff tightens credential issuance without adding dependencies, downloaded code, secret access, workflow permissions, or another concrete security regression. (sha=610383689a96506737cec7af46f8bc337cf068ff)",
-      "review_summary": "This PR extracts native-VNC grant minting into a service that permits only live sessions and revalidates control authorization and workspace identity after minting.\n\nReproducibility: no. real-deployment reproduction is provided, but the current-main source path and focused interleaving harness make the missing lifecycle and post-mint checks source-reproducible with high confidence.",
-      "review_followup": "- [P1] After the contributor supplies real native-VNC runtime proof, a maintainer should confirm that the authorization-equivalence checks match the intended browser-VNC contract; there is no established code defect for automated repair.",
+      "repair_reason": "- [P1] A human must approve the signing-key trust transition, and only the contributor’s managed macOS release environment can supply the missing real-run proof.; Needs attention: The implementation is purpose-aligned, but replacing the only release-signing trust anchor requires independent authorization verification before merge. (sha=e2df402b1404cc052fd7e4d25ab6589d54fe138b)",
+      "review_summary": "The branch replaces the pinned SSH release signer, adds a pre-tag macOS signing/notarization preflight with regression checks, and updates v0.14.3 release instructions.\n\nReproducibility: no. high-confidence current-main bug reproduction is applicable; the changed release behavior is source-reproducible through the added preflight and its regression harness, but the real macOS signing environment was not inspectably demonstrated.",
+      "review_followup": "- [P1] A human must approve the signing-key trust transition, and only the contributor’s managed macOS release environment can supply the missing real-run proof.",
       "freeform_prompt": null,
       "visual_lens": null,
-      "expected_head_sha": "610383689a96506737cec7af46f8bc337cf068ff",
+      "expected_head_sha": "e2df402b1404cc052fd7e4d25ab6589d54fe138b",
       "close_reason": null,
       "close_confidence": null,
       "close_action_taken": null,
-      "reviewed_at": "2026-07-17T17:53:33.490Z",
-      "review_lease_owner": "github-run-29601493450-1",
-      "review_lease_comment_id": "5005954187",
+      "reviewed_at": "2026-07-17T19:51:15.140Z",
+      "review_lease_owner": "github-run-29608965430-1",
+      "review_lease_comment_id": "5006945226",
       "expected_item_updated_at": null,
-      "expected_source_revision": "dbd58fc345283c57a94102c32f9bef32502ff09dae5d320e284e5ef5c6a750ba",
+      "expected_source_revision": "42a0b91cdebbb5eaa3a27a30416f1a77204e86fcf855c298dbd30d97d68c81c0",
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "target": {
+        "kind": "pull_request",
+        "title": "build(release): prepare v0.14.3",
+        "body": "## Summary\n\n- rotate the repository-pinned release signer to Peter's current SSH signing key\n- add a supported pre-tag macOS release preflight that authenticates fresh protected `origin/main`, signs and notarizes, restores the managed keychain, then runs the credential-free online-ticket and build-provenance verifier\n- fail closed when checkout cleanliness cannot be inspected, with regression coverage\n- finalize the v0.14.3 changelog and update publishing commands\n\n## Backfill decision\n\nNo GitHub Releases were created for v0.14.0, v0.14.1, or v0.14.2. The repository contract requires every release to carry both signed/notarized architecture archives and checksums, and its protected verifier also requires the signed tag to equal current protected `main`. These historical tags have no release assets and no longer equal current `main`; tag-only backfills would violate the release contract.\n\n## Proof\n\n- `GOWORK=off go mod tidy && git diff --exit-code -- go.mod go.sum`\n- `GOWORK=off go vet ./...`\n- `GOWORK=off go test -count=1 ./...` — all 17 package suites pass\n- `GOWORK=off go test -race -count=1 ./...` — pass\n- `GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.46.0 -test ./...` — no output\n- `GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./...` — zero reachable vulnerabilities\n- `bash scripts/test-crawlctl-release.sh` — pass\n- live signing/notarization path proof on `d4da06c5c2030d3e3ecb170810b457ddc9025e73` with the approved managed Developer ID and notary environment — both thin architectures accepted by Apple; signature, designated-requirement, online-ticket, build-provenance, and post-cleanup checks pass\n- current head `e2df402` pre-merge preflight — fails closed before helper access because the branch does not equal freshly fetched protected `main`; temporary proof ref is removed and no artifact destination is created. Successful exact-head preflight is intentionally a post-merge release gate.\n- real notarized candidate: `crawlctl --version` returns `0.14.3`; `crawlctl --help` returns the expected command surface\n- `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main` — clean\n\nNo tag, release, artifact upload, or publication performed.\n",
+        "branch": "release/prepare-v0.14.3",
+        "head_sha": "e2df402b1404cc052fd7e4d25ab6589d54fe138b",
+        "author": "steipete",
+        "labels": [
+          "rating: 🦪 silver shellfish",
+          "P2",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": ".github/release-allowed-signers",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "CHANGELOG.md",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/publishing.md",
+            "additions": 34,
+            "deletions": 15,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "scripts/preflight-crawlctl-release.sh",
+            "additions": 83,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/test-crawlctl-release.sh",
+            "additions": 53,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 5,
+        "additions": 182,
+        "deletions": 18,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-crawlkit-61",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crawlkit-61.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 5,
+          "gatingTotal": 5,
+          "counts": {
+            "SUCCESS": 5
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "trusted ClawSweeper verdict source revision 42a0b91cdebbb5eaa3a27a30416f1a77204e86fcf855c298dbd30d97d68c81c0 does not match current source revision c4368b1a34d4855de2bb985ab69c4d73c168068c1c8f130f44d270cab3658200"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -177,19 +154,19 @@
   "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6142,
+    "total_ms": 3621,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 1253
+        "ms": 1099
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1224
+        "ms": 1095
       },
       {
         "name": "classify_comment_commands",
-        "ms": 1581
+        "ms": 1057
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -205,11 +182,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1035
+        "ms": 285
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
