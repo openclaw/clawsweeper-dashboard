@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T07:30:07.520Z",
+  "generated_at": "2026-07-17T07:31:10.971Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T04:30:05.084Z",
+  "since": "2026-07-17T04:31:10.471Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    89039
+    109725
   ],
   "comment_ids": [
-    5000033982
+    5000137502
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89039:5000033982:2026-07-17T07:12:35Z:re_review",
-      "comment_id": "5000033982",
-      "comment_version_key": "5000033982:2026-07-17T07:12:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89039#issuecomment-5000033982",
+      "idempotency_key": "comment-router:openclaw/openclaw:109725:5000137502:2026-07-17T07:26:15Z:re_review",
+      "comment_id": "5000137502",
+      "comment_version_key": "5000137502:2026-07-17T07:26:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109725#issuecomment-5000137502",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 89039,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 109725,
+      "author": "pgondhi987",
+      "author_id": 270720687,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T07:12:35Z",
-      "comment_updated_at": "2026-07-17T07:12:35Z",
+      "comment_created_at": "2026-07-17T07:26:15Z",
+      "comment_updated_at": "2026-07-17T07:26:15Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -74,236 +74,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix: prevent silent message loss from EmbeddedAttemptSessionTakeoverError",
-        "body": "## Summary\n\nWhen the OpenAI SDK retried an `ECONNRESET` internally (default `maxRetries=2`), the session write lock was released during the retry window. Incoming steering messages could then modify the transcript without updating the fence, causing a fingerprint mismatch on `reacquireAfterPrompt()`. The resulting `EmbeddedAttemptSessionTakeoverError` was caught by `model-fallback.ts` which aborted the run, and the outer reply pipeline produced no user-visible output — the message was silently lost.\n\n## What Problem This Solves\n\nA user's steering message could be silently dropped during a session takeover. The takeover was made more likely by an in-window SDK retry running against a released session lock, and when it fired the reply pipeline fell into a generic failure branch that emitted no actionable output. This fix closes the race that widened the takeover window and converts the takeover into an explicit, actionable reply so the user knows to resend.\n\n## Why This Change Was Made\n\nTwo invariants must hold together. First, no in-window SDK retry may run inside the embedded prompt-lock release window, because that window releases the session lock across the model call and an in-window retry re-admits the session-takeover race (#87180). Second, an unconfigured user's bare connection and request-timeout resilience must not regress — so that resilience moves to the orchestrator layer, where each retry re-acquires the session lock and cannot widen any single release window. When a takeover does occur, the runner must surface resend guidance rather than a silent or generic failure.\n\n## Root Cause Chain\n\n```\nAPI ECONNRESET\n  → OpenAI SDK default maxRetries=2, internal retry\n  → session write lock released during retry window\n  → incoming message arrives via queueHandle.queueMessage\n  → activeSession.steer writes directly (bypassing withOwnedSessionTranscriptWrites)\n  → transcript changes without updating fence\n  → original attempt reacquireAfterPrompt() fingerprint mismatch\n  → EmbeddedAttemptSessionTakeoverError thrown\n  → model-fallback.ts aborts the run\n  → outer layer hits generic failure branch\n  → assistantTexts/payloads never enter buildReplyPayloads()\n  → message silently lost (user sees generic error or nothing)\n```\n\n## Fix\n\nSeven coordinated changes that address the bug at multiple layers:\n\n### 1. Wrap steering in `withOwnedSessionTranscriptWrites` (`attempt.ts`)\nSteering writes that arrive during prompt lock release now go through `withOwnedSessionTranscriptWrites`, keeping fence tracking consistent and preventing the fingerprint mismatch that triggers the takeover error.\n\n### 2. Dedicated error handler for takeover (`agent-runner-execution.ts`, `failover-error.ts`)\nAdded `isEmbeddedAttemptSessionTakeoverError()` export and a dedicated catch block in `runAgentTurnWithFallback`. Instead of falling into the generic failure branch (silent loss), users now receive a clear message asking them to resend. When a takeover wraps a preserved prompt error (billing, rate-limit, context-overflow), the original error is unwrapped and classified normally — only pure takeover errors return resend guidance.\n\n### 3. Pin SDK retries to 0 inside the embedded prompt lock window (`attempt.ts`, `attempt.session-lock.ts`)\nExtracted `installEmbeddedPromptRetryDefault` helper that wraps the session's `streamFn` with `{ maxRetries: 0, ...options }`. The in-window default is **unconditionally 0** — the configured `settings.retry.provider.maxRetries` is deliberately NOT injected here, because the prompt-lock window releases the session lock across the model call and an in-window SDK retry would run against a released lock and re-admit the session-takeover race (#87180). An explicit per-call `maxRetries` still overrides (spread last). Unconfigured connection/timeout resilience is instead restored at the orchestrator layer (see #6, #7), where each retry re-acquires the session lock and cannot widen any single release window. Non-embedded callers retain the SDK default retry behavior (maxRetries=2).\n\n### 4. Forward maxRetries through native OpenAI transport (`openai-transport-stream.ts`)\n`buildOpenAISdkRequestOptions` previously accepted only `model` and `signal`, dropping the `maxRetries` injected by `installEmbeddedPromptRetryDefault`. Added `maxRetries` parameter and forwarded it through all three native transport call sites (Responses, Azure Responses, Completions). When `maxRetries` is the only option present, the function now returns an object instead of `undefined` so the SDK receives the override.\n\n### 5. Phase tracking in `EmbeddedAttemptSessionTakeoverError` (`attempt.session-lock.ts`)\nAdded a `phase` field (`prompt_reacquire`, `cleanup`, `write`, `fence_check`) for better diagnostics when this error does occur. Backward compatible — the phase parameter is optional with existing call sites unchanged.\n\n### 6. Restore unconfigured connection-error retry at the orchestrator layer (`agent-runner-execution.ts`, `embedded-agent-helpers/errors.ts`)\nDisabling SDK retries inside the prompt-lock release window (#3) is required so an in-window retry cannot widen the takeover race — but for users who have **not** configured `settings.retry.provider.maxRetries`, it also dropped the SDK's default retry of bare connection errors (`ECONNRESET`, `socket hang up`, `Connection error.`) that carry no leading HTTP status. This is restored at the orchestrator layer, where the existing one-shot `consumeTransientHttpRetry()` re-runs the full primary→fallback cycle and **re-acquires the session lock per attempt**, so it does not widen any single release window. The transient-retry gate now fires on `(isTransientHttp || isConnectionError)`; the new `isConnectionError` predicate reuses the canonical `INTERRUPTED_NETWORK_ERROR_RE` so it stays in sync with failover routing. In-window `maxRetries:0` is unchanged. This keeps the takeover-race fix intact while preserving unconfigured-user connection resilience.\n\n### 7. Restore unconfigured request-timeout retry at the orchestrator layer (`agent-runner-execution.ts`)\nThe orchestrator transient-retry restore in #6 left a symmetric gap: in addition to bare connection errors, the OpenAI/Anthropic SDKs retry request-**timeout** transport errors by default, and after the in-window `maxRetries:0`, an unconfigured single-model user's timeout error is rethrown to the same outer gate — which only matched HTTP-status transients and connection errors, dropping timeout retry entirely (multi-model users were unaffected because failover already routes timeouts). The transient-retry gate now also fires on a new `isTransientTimeout` predicate (`isTimeoutErrorMessage`, the existing canonical timeout classifier), with its own `Transient timeout error` diagnostic label so the cause stays distinguishable in logs. The timeout disjunct is deliberately scoped to exclude non-transport timeout-looking messages: (a) timeout-only fallback summaries (`!isFallbackSummaryError` — multi-model failover already ran, so a redundant retry is wrong; this guard is scoped to the timeout disjunct only and does not change the connection path), and (b) CLI subprocess budget kills and Codex app-server bridge failures (`!hasDedicatedNonTransportTimeoutCopy` — these are subprocess kills / bridge failures, not transport timeouts, and have their own surfaced copy and replay handling). The one-shot `consumeTransientHttpRetry()` budget is shared, so timeout retry is bounded exactly like the connection retry. The connection-retry path semantics from #6 are unchanged. The timeout disjunct additionally excludes local non-provider runtime coordination errors (e.g. `SessionWriteLockTimeoutError`, whose message reads as `session file locked (timeout ...ms)`) via the canonical `isNonProviderRuntimeCoordinationError` classifier: retrying any model would hit the same local condition, so these abort the fallback chain rather than re-run as a transport timeout.\n\n## User Impact\n\n- A transient connection reset mid-turn no longer risks losing the reply: the orchestrator retries the whole cycle once (with the session lock re-acquired) and delivers the assistant reply.\n- When a session is genuinely taken over (new input arrived while the previous turn was still running), the user receives an explicit prompt to resend rather than silence or a non-actionable generic error.\n- No new configuration is introduced; existing single-model users regain connection/timeout resilience, and multi-model users are unaffected.\n\n## Evidence\n\nTwo complementary proofs cover this fix, both green at the current head `413a69e6d83f6c1612e2bb7aea9192a49a4a3b25`:\n\n1. **Orchestrator-level proof** — an exact-head e2e test (`src/auto-reply/reply/agent-runner-takeover-live.e2e.test.ts`) that drives the real `runAgentTurnWithFallback` and asserts the user-facing reply.\n2. **Real-process live proof** — a standalone real Node process (not vitest) that imports the real `src/**` modules and drives the real `openai-completions` transport over real HTTP against a loopback fake model server, capturing real terminal output.\n\nBoth drive the fix end to end through real components rather than hand-built errors; the second is a strict upgrade over scaffolded reply/fallback boundaries because the transport fault and the takeover are surfaced by the production code paths themselves.\n\n### Proof 1 — orchestrator-level e2e (`agent-runner-takeover-live.e2e.test.ts`)\n\n**What is real (no hand-built errors, no mocked runner internals):**\n- A real temp session transcript file on disk.\n- A real local `node:http` server acting as the model `baseUrl` (`api: openai-completions`).\n- The real `openai-completions` transport stream fn (`createOpenAICompletionsTransportStreamFn`) doing real HTTP I/O.\n- The real embedded prompt-lock controller + fence (`createEmbeddedAttemptSessionLockController`), wired through the real `installEmbeddedPromptRetryDefault` (pins SDK `maxRetries` to 0) and `installPromptSubmissionLockRelease` — exactly as `src/agents/embedded-agent-runner/run/attempt.ts` wires them in production.\n- The real connection/transient classification (`isConnectionError` / `isTransientHttpError` / `isTimeoutErrorMessage` from `embedded-agent-helpers/errors.ts`) and the real failover classification (`isNonProviderRuntimeCoordinationError`), consumed by the real `runAgentTurnWithFallback` retry gate and takeover catch.\n\nThe only injected variables are at real boundaries: a dropped TCP socket (Scenario A) and a concurrent unowned transcript rewrite (Scenario B). The reply-pipeline boundary is scaffolded with the same mock surface as the existing `agent-runner-execution.test.ts`, plus a thin `runWithModelFallback` stand-in that runs the real candidate closure once and propagates exactly as the real `runWithModelFallback` does (re-throw on failure, return on success).\n\n**Scenario A — pure transient transport fault.** The model server resets the socket on request #1, then succeeds on the retry. Because SDK retries are pinned to 0 inside the released-lock window, the SDK does not re-issue in-window; the orchestrator retries the whole cycle exactly once via `consumeTransientHttpRetry()`. Observed and asserted:\n- Bounded provider request count `== 2` — one failed request plus exactly one orchestrator retry (the SDK did not retry in-window).\n- The turn succeeded with a **visible** assistant reply containing `OK` (not silent loss).\n- The transient-connection diagnostic `Transient connection error before reply (...). Retrying once in 2500ms.` was emitted exactly once.\n- The reply operation was not failed on the recovery path.\n\n**Scenario B — organic session takeover → resend guidance.** While the real model call holds the released prompt lock, a concurrent unowned rewrite of the same session transcript changes the session-file fingerprint, so `reacquireAfterPrompt` throws `EmbeddedAttemptSessionTakeoverError` **organically** inside the wrapped call's `finally`. Observed and asserted:\n- Provider request count `== 1` — no silent in-window SDK retry.\n- The user-facing reply is the exact resend-guidance literal produced by the real catch path at `src/auto-reply/reply/agent-runner-execution.ts:3123`: `⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.`\n- A `run_failed` lifecycle terminal was recorded via the reply operation.\n- The takeover is a non-provider coordination error, so the fallback chain aborts rather than burning model candidates.\n\n**Revert-resistance (each assertion is load-bearing):**\n- Disabling the `maxRetries` pin makes Scenario A fail: the SDK silently retries in-window, the orchestrator never engages, and the transient diagnostic count is 0.\n- Removing the takeover rewrite makes Scenario B fall back to generic error text instead of the resend guidance.\n\n**Reproduce:**\n\n```\nnode scripts/run-vitest.mjs src/auto-reply/reply/agent-runner-takeover-live.e2e.test.ts\n```\n\n**Run summary (exact head `413a69e6d83f6c1612e2bb7aea9192a49a4a3b25`):**\n\n```\n RUN  v4.1.9 <workdir>/openclaw-pr-workdirs/pr-89039\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Duration  31.15s\n```\n\n### Proof 2 — real-process live proof (standalone Node process, real HTTP)\n\nThis proof does not use vitest. A standalone throwaway harness runs under a real `node v24.15.0` process, imports the real `src/**` modules by absolute path, and drives the real `openai-completions` transport over real HTTP against a loopback-only fake model server on an ephemeral port. It runs fully isolated (`OPENCLAW_HOME`/`HOME`/`TMPDIR`), never touching the running system gateway, and captures the real terminal output — including the production `[provider-transport-fetch]` logger lines. Both scenarios passed (process exit 0, `ALL CHECKS PASSED`).\n\n**Scenario A — real socket destroy → delivered reply.** The model server performs a real TCP socket destroy on request #1. The real transport surfaces `UND_ERR_SOCKET` / `fetch failed` through the production `[provider-transport-fetch]` logger; the real classifier reports `isConnectionError=true` / `isTransientHttpError=false`; the whole cycle is retried once; request #2 streams `OK`. Proven: **request count == 2** (SDK retries pinned to 0 in-window, so the single retry is the orchestrator's, not the SDK's), a **visible \"OK\" reply**, and **no silent loss**.\n\n**Scenario B — organic session takeover → resend guidance.** While the real model call holds the released prompt lock, a concurrent unowned rewrite of the same session file changes its fingerprint, and `reacquireAfterPrompt` throws `EmbeddedAttemptSessionTakeoverError` (phase `prompt_reacquire`) **organically**. Proven: **request count == 1** (no silent in-window SDK retry), the error is a real non-provider coordination error, and the orchestrator maps it to the exact resend-guidance literal.\n\n**Captured real terminal output (redacted — username, absolute paths, and ephemeral ports scrubbed):**\n\n```\n[provider-transport-fetch] [model-fetch] start provider=mlx api=openai-completions model=probe-model method=POST url=http://127.0.0.1:<PORT>/v1/chat/completions timeoutMs=900000 proxy=none policy=custom\nmodel server: request #1 received -> destroying socket (real transport fault)\n[provider-transport-fetch] [model-fetch] error provider=mlx api=openai-completions model=probe-model elapsedMs=253 name=TypeError code=undefined causeName=SocketError causeCode=UND_ERR_SOCKET message=fetch failed\ncycle threw: \"Connection error.\"\nreal classifier: isConnectionError=true isTransientHttpError=false\nTransient connection error before reply (Connection error.). Retrying once in 2500ms. (orchestrator-equivalent gate)\n[provider-transport-fetch] [model-fetch] start provider=mlx api=openai-completions model=probe-model method=POST url=http://127.0.0.1:<PORT>/v1/chat/completions timeoutMs=900000 proxy=none policy=custom\nmodel server: request #2 received -> streaming completion \"OK\"\n[provider-transport-fetch] [model-fetch] response provider=mlx api=openai-completions model=probe-model status=200 elapsedMs=65 contentType=text/event-stream\nPASS — real transport surfaced a bare connection error (isConnectionError)\nPASS — connection drop is NOT a leading-HTTP-status transient\nPASS — bounded request count == 2 (one reset + one orchestrator retry)\nPASS — delivered assistant reply contains \"OK\" (no silent loss)\n=== Scenario A complete ===\n\n=== Scenario B: organic session takeover -> resend guidance ===\nmodel server: request #1 received -> holding open until rewrite\nconcurrent unowned writer: rewriting session file out of band (steering append)\nprompt window threw: EmbeddedAttemptSessionTakeoverError: session file changed while embedded prompt lock was released: <ISOLATED_TMP>/session.jsonl (phase: prompt_reacquire)\nPASS — prompt window threw an error (not a silent drop)\nPASS — error is a real EmbeddedAttemptSessionTakeoverError\nPASS — takeover is a non-provider coordination error (fallback chain aborts)\nPASS — single request: no silent in-window SDK retry\norchestrator maps this coordination error -> resend guidance literal:\n  ⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.\n=== Scenario B complete ===\n\nALL CHECKS PASSED\n```\n\n### Scope of this proof\n\nThis is strong real-transport + real-coordination component proof captured from live processes — a strict upgrade over scaffolded reply/fallback boundaries. The connection reset is a real TCP socket destroy surfaced by the real `openai-completions` transport over real HTTP, the classification and the bounded single retry use the real predicates, the recovery comes back over a real second HTTP call (`status=200`), and the takeover is triggered organically by a real concurrent file rewrite during a real held-lock window.\n\nIt does **not** boot the full installed gateway with a real channel transport (WhatsApp/Telegram/Discord) delivering to a real client. That is because a real channel needs external provider credentials plus live third-party services, while the model side must be a local deterministic fake to reproduce the reset-then-succeed sequence — a real paid model endpoint could not be made to reset then succeed on demand. This is a provisioning/credentials constraint, not a Node-version or code blocker: the model/provider and runtime-coordination path is faithfully reproduced end to end. A literal installed channel roundtrip would need a box provisioned with real (or sandbox) channel + model credentials.\n\n### What was not tested\n\nThe configured provider retry-budget question — whether `settings.retry.provider.maxRetries` is preserved through the outer whole-attempt retries — is intentionally **out of scope** for this PR and tracked as a follow-up. This PR keeps in-window SDK retries at 0 (the safety invariant) and restores unconfigured connection/timeout resilience at the orchestrator layer only.\n\n## Changed Files\n\n- `packages/ai/src/providers/openai-completions.test.ts`\n- `packages/ai/src/providers/openai-responses-shared.test.ts`\n- `src/agents/embedded-agent-helpers.ts`\n- `src/agents/embedded-agent-helpers/errors.ts`\n- `src/agents/embedded-agent-helpers/errors.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.ts`\n- `src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts`\n- `src/agents/embedded-agent-runner/run/attempt.ts`\n- `src/agents/failover-error.ts`\n- `src/agents/failover-error.test.ts`\n- `src/agents/openai-completions-transport.ts`\n- `src/agents/openai-responses-transport.ts`\n- `src/agents/openai-transport-params.ts`\n- `src/agents/openai-transport-stream.streaming.test-utils.ts`\n- `src/agents/sessions/sdk.test.ts`\n- `src/auto-reply/reply/agent-runner-execution.ts`\n- `src/auto-reply/reply/agent-runner-execution.test.ts`\n- `src/auto-reply/reply/agent-runner-session-takeover.real.test.ts`\n- `src/auto-reply/reply/agent-runner-takeover-live.e2e.test.ts`\n\nFixes #87180\n",
-        "branch": "fix/session-takeover-silent-message-loss-87180",
-        "head_sha": "e30e1b82bd0ef1223a23327d1dd06147eee48cef",
-        "author": "jerry-xin",
-        "labels": [
-          "agents",
-          "size: XL",
-          "proof: supplied",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "packages/ai/src/providers/openai-completions.test.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-completions.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-responses-shared.test.ts",
-            "additions": 41,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/openai-responses-shared.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.test.ts",
-            "additions": 31,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-helpers/errors.ts",
-            "additions": 12,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts",
-            "additions": 6,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stream-runtime-prepare.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.test.ts",
-            "additions": 196,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.session-lock.ts",
-            "additions": 64,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.test.ts",
-            "additions": 4,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/failover-error.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-completions-transport.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-responses-transport.ts",
-            "additions": 12,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-params.ts",
-            "additions": 9,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/openai-transport-stream.streaming.test.ts",
-            "additions": 80,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/sessions/sdk.test.ts",
-            "additions": 55,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-error-handler.ts",
-            "additions": 97,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution-provider-failures.test.ts",
-            "additions": 267,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution-terminal-failures.test.ts",
-            "additions": 238,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.test-support.ts",
-            "additions": 4,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-execution.ts",
-            "additions": 12,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-failure-reply.ts",
-            "additions": 18,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-session-takeover.real.test.ts",
-            "additions": 512,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/auto-reply/reply/agent-runner-takeover-live.e2e.test.ts",
-            "additions": 677,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 27,
-        "additions": 2386,
-        "deletions": 28,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89039",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89039.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 113,
-          "gatingTotal": 108,
-          "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 33,
-            "FAILURE": 6,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "checks-node-compact-small-11:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "openclaw/ci-gate:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-11:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "openclaw/ci-gate:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -314,19 +85,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2864,
+    "total_ms": 2137,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 493
+        "ms": 418
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1708
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 96
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -341,16 +112,12 @@
         "ms": 0
       },
       {
-        "name": "claim_dispatch_commands",
-        "ms": 0
-      },
-      {
         "name": "execute_commands",
-        "ms": 429
+        "ms": 1637
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
