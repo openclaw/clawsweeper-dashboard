@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T20:02:43.435Z",
+  "generated_at": "2026-07-17T20:06:49.270Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T17:02:42.881Z",
+  "since": "2026-07-17T17:06:46.784Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    97316
+    102082
   ],
   "comment_ids": [
-    5006930911
+    5006975281
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:97316:5006930911:2026-07-17T19:48:25Z:re_review",
-      "comment_id": "5006930911",
-      "comment_version_key": "5006930911:2026-07-17T19:48:25Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/97316#issuecomment-5006930911",
+      "idempotency_key": "comment-router:openclaw/openclaw:102082:5006975281:2026-07-17T19:54:32Z:re_review",
+      "comment_id": "5006975281",
+      "comment_version_key": "5006975281:2026-07-17T19:54:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/102082#issuecomment-5006975281",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 97316,
-      "author": "yungchentang",
-      "author_id": 46495124,
+      "issue_number": 102082,
+      "author": "CG-Intelligence-Agent-Jack",
+      "author_id": 277066800,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T19:48:25Z",
-      "comment_updated_at": "2026-07-17T19:48:25Z",
-      "comment_body_sha256": "08f7f796690f80bb9c127634d0c4702e4cdf2ff85b9c6e38cba88900414e0429",
+      "comment_created_at": "2026-07-17T19:54:32Z",
+      "comment_updated_at": "2026-07-17T19:54:32Z",
+      "comment_body_sha256": "0410f26316b4862bd0797caa1fb625b831c6bb8c464ff9e8b0510cee14314a2e",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -77,164 +77,106 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(setup): cancel node pairing cleanly instead of a spurious timeout warning + wasted retry",
-        "body": "Related: #1010\n\n## What Problem This Solves\n\nWhen a user cancels node setup while the pairing step is waiting to connect, the cancellation isn't handled cleanly: the step logs a misleading `\"Node connection failed: Timeout\"` warning (implying a connection problem, not a user abort), then **burns a retry** — `Task.Delay(3s, ct)` on the pairing step's retry policy — before the cancellation finally surfaces. The pipeline does end up `Cancelled` either way, but only after a spurious error and a wasted retry delay, and the journal/log record a connection \"failure\" that never happened.\n\n## Why This Change Was Made\n\n`WaitForNodeConnection` links the caller's token with an internal `CancelAfter(timeout)` and catches *every* `OperationCanceledException` as `NodeConnectionOutcome.Timeout`; `PairNodeStep.ExecuteAsync`'s catch-all then turns that into `StepResult.Fail(...)`. So a user cancel is reported as a failed connection attempt, which the step's retry policy (`MaxAttempts: 3`) then retries — and only the retry's `Task.Delay(..., ct)` tripping on the cancelled token gets the pipeline to `Cancelled`.\n\nThe fix makes the cancellation propagate directly, using the file's existing cancel-rethrow idiom (`SetupSteps.cs:1725`, `:2044`): guard the `Timeout` mapping with `when (!ct.IsCancellationRequested)`, and add `catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }` ahead of `PairNodeStep`'s catch-all. The pipeline then maps the propagated OCE straight to `Cancelled` — no spurious \"failed\" log, no wasted retry. The genuine-timeout path is unchanged.\n\n## Scope — what this does and doesn't change (traced end-to-end)\n\nBeing precise, because it's easy to overstate: **the final pipeline outcome is `Cancelled` (exit 3) with or without this change** — `PairNodeStep`'s retry policy means a caller-cancel trips the retry delay and surfaces as `Cancelled` regardless. What this PR changes is the *path* to that outcome on a user cancel:\n\n- **Before:** `[Warn] Step 'pair-node' failed (attempt 1/3), retrying in 3s: Node connection failed: Timeout` → (retry delay) → `Cancelled`.\n- **After:** cancellation surfaces immediately → `Cancelled`, no spurious warning, no retry delay.\n\nSo this is a cancellation-cleanliness / accurate-diagnostics fix, not an outcome change.\n\n## User Impact\n\nCancelling node setup no longer emits a misleading \"connection failed\" warning to the log/journal or wastes a retry cycle — the abort is recorded and surfaced accurately and immediately. No change for a real connection timeout.\n\n## Change Type\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor\n- [ ] Docs or instructions\n- [ ] Tests or validation\n- [ ] Security hardening\n- [ ] Chore or infrastructure\n\n## Scope\n\n- [ ] Tray or WinUI UX\n- [ ] Windows node capability\n- [ ] Local MCP or `winnode`\n- [ ] Gateway, connection, or pairing\n- [x] Setup or onboarding\n- [ ] Permissions, privacy, or security\n- [ ] Tests, CI, or docs\n\n## Validation\n\nFull Windows CI-matrix mirror (win-x64, .NET 10.0.301), HEAD `29ce4325` vs base `9fb1960e` — every project built and all 8 suites passed. Four focused regression tests (SetupEngine.Tests), on base vs HEAD:\n\n```\ndotnet test tests/OpenClaw.SetupEngine.Tests --filter \\\n  \"PairNodeStep_CallerCancellation|WaitForNodeConnection_CallerCancellation|SetupPipeline_CallerCancel|WaitForNodeConnection_GenuineInternalTimeout\"\nPassed! - Failed: 0, Passed: 4   (HEAD)\nFailed! - Failed: 3, Passed: 1   (base, SetupSteps.cs reverted to main)\n```\n\n- **`SetupPipeline_CallerCancel_CancelsCleanlyWithoutFailureNarrative`** — the durable end-to-end contract: drives the **real** `SetupPipeline` with the real `PairNodeStep` and asserts all three of Cancelled/exit 3, **no `\"Node connection failed\"`/retry warning**, and a `pipeline_cancelled` journal entry (not a failed-step narrative). This is what actually pins the fix — it's red on base (the retry-warning assertion fails) and green on HEAD.\n- **`PairNodeStep_CallerCancellation`** + **`WaitForNodeConnection_CallerCancellation`** — the two catch boundaries, cancelled from a **deterministic WebSocket-upgrade barrier** (no timing guess).\n- **`WaitForNodeConnection_GenuineInternalTimeout`** — a real internal timeout still maps to `Timeout` (passes on both base and HEAD; proves the fix only diverts caller cancels).\n\n_This revision addresses the ClawSweeper / Copilot maintainer-assistant review: adds the deterministic pipeline-level contract, the genuine-timeout assertion, the upgrade barrier (replacing the 300 ms delay), and binds the reflection lookup by full signature with a clear failure message._\n\n(Two intermittent pre-existing flakes exist in the full matrix — `Connection.Tests.ConnectAndReconnect_EmitCompletedOperatorSpans` and `Tray.UITests.ChatTimelineVirtualizationProofTests` — on surfaces this SetupEngine-only diff doesn't touch; neither is a regression here.)\n\n## Real Behavior Proof\n\nDriving the **real** `SetupPipeline` through the real `PairNodeStep` with a caller cancel (loopback WebSocket that completes the upgrade then stays silent so the step parks in its wait; caller token cancelled at the deterministic WS-upgrade barrier), base vs HEAD:\n\n- **base** (`9fb1960e`) — pipeline log:\n  ```\n  [Warn] Step 'pair-node' failed (attempt 1/3), retrying in 3s: Node connection failed: Timeout\n  → SetupPipeline outcome: Cancelled (exit 3)\n  ```\n  i.e. a spurious connection-failure warning and a retry before it cancels.\n- **HEAD** (`29ce4325`) — pipeline log:\n  ```\n  → SetupPipeline outcome: Cancelled (exit 3)\n  ```\n  cancellation surfaces immediately; no \"failed\" warning, no retry.\n\nSame final outcome; the fix removes the misleading warning and the wasted retry.\n\n- Environment tested: Windows host, .NET SDK 10.0.301, win-x64\n- PR head / base tested: `29ce4325` / `9fb1960e`\n- Screenshot or artifact links verified? `N/A` (non-UI setup/connection logic; proof is the paired pipeline-log capture + red→green tests)\n- **Honest limitation:** this exercises the real `SetupPipeline`/`PairNodeStep` cancellation path but substitutes a loopback WebSocket and fake WSL/reachability deps, so it is deterministic pipeline coverage rather than a transcript from the shipped setup flow against a live gateway. I don't currently have a real gateway-pairing environment to capture that end-to-end transcript; happy to add it if a maintainer can point me at one, or defer that to maintainer discretion given the production change is two narrow catch filters.\n\n## Security Impact\n\n- New permissions or capabilities? `No`\n- Secrets or tokens handling changed? `No`\n- New or changed network calls? `No`\n- Command or tool execution surface changed? `No`\n- Data access scope changed? `No`\n\n## Compatibility and Migration\n\n- Backward compatible? `Yes`\n- Config or environment changes? `No`\n- Migration needed? `No`\n\n## Review History\n\nLocal review history (findings + dispositions per commit), including the correction from the original \"reports Failed\" framing to the accurate cancellation-cleanliness scope: https://gist.github.com/anagnorisis2peripeteia/0bdbede425c116811993f71fed9816b9\n\n## Review Conversations\n\n- [ ] I replied to or resolved every bot review conversation addressed by this PR.\n- [ ] I left unresolved only conversations that still need maintainer judgment.\n",
-        "branch": "fix/setup-node-connect-cancel-provenance",
-        "head_sha": "55f93df043007edc50c852f88c3872381b08537d",
-        "author": "anagnorisis2peripeteia",
+        "title": "fix(slack): suppress progress chrome sends",
+        "body": "## Summary\n- detect progress-only Slack tool chrome payloads with leading tool emoji plus command/status body\n- convert thread-scoped chrome to reactions instead of `chat.postMessage`\n- fail closed by suppressing chrome without a reaction target while preserving semantic replies\n- type automatic tool-progress payloads at the producer boundary with a closed generic plugin-SDK progress intent so Slack does not infer from arbitrary text\n\n## What Problem This Solves\nProgress-only operational chrome like `:hammer_and_wrench: \\`pnpm test\\`` or `:writing_hand: Write: MEMORY.md` can leak into Slack as user-visible messages when a tool/status payload accidentally reaches the Slack send path. This creates noise in working channels and violates the progress-chrome pre-send gate. The Slack extension now classifies only narrow progress-only payloads and prevents them from becoming chat posts.\n\n## Evidence\nCurrent head: `1e3f34f78d97ec5790a39b722f55b53e640488c5`.\n\n- `pnpm --config.verify-deps-before-run=false vitest run --project extension-codex extensions/codex/src/app-server/event-projector.test.ts` passed (149 tests)\n- focused Slack replies + identity-fallback tests passed (85 tests)\n- `test/scripts/plugin-sdk-surface-report.test.ts` passed (10 tests)\n- `pnpm --config.verify-deps-before-run=false tsgo:extensions` passed\n- formatter check on touched files passed\n- `git diff --check` passed\n\n## Public SDK Contract\nThis PR uses a closed generic progress-intent contract on the reply-payload surface:\n\n- shared field: `channelData.openclawProgressKind`\n- generic tool progress kind: `TOOL_PROGRESS_KIND = \"tool-progress\"`\n- generic predicate: `isToolProgressPayload`\n- existing fast-mode kind remains: `FAST_MODE_AUTO_PROGRESS_KIND = \"fast-mode-auto\"`\n\nCodex no longer exports Codex-named public progress symbols. Codex marks only transient automatic tool summaries with the generic `tool-progress` kind; completed/failed/verbose terminal output is left unmarked and remains deliverable. Callable public SDK budget was raised with the additive predicate.\n\n## Live Slack Proof\nGenerated against the TCG Slack API from PR branch code on 2026-07-11 02:18 UTC at exact head `1e3f34f78d97ec5790a39b722f55b53e640488c5`. Channel is redacted; it was the Jack bot App Home/DM proof surface, not a client or public channel.\n\n```json\n{\n  \"workspace\": \"The Casely Group\",\n  \"head\": \"1e3f34f78d97ec5790a39b722f55b53e640488c5\",\n  \"proofSurface\": \"Jack bot App Home/DM proof surface\",\n  \"channel\": \"D0BG***7U3\",\n  \"anchorTs\": \"1783736301.593119\",\n  \"typedToolProgress\": {\n    \"input\": \"🛠️ `run tests (workspace)`\",\n    \"call\": \"sendMessageSlack(..., { progressChrome: true }) from PR branch head\",\n    \"result\": {\n      \"messageId\": \"suppressed\",\n      \"channelId\": \"D0BG***7U3\",\n      \"suppressed\": true,\n      \"receipt\": {\n        \"platformMessageIds\": [],\n        \"parts\": [],\n        \"threadId\": \"1783736301.593119\",\n        \"raw\": []\n      }\n    }\n  },\n  \"noThreadProgressChrome\": {\n    \"input\": \"✍️ Write: MEMORY.md\",\n    \"call\": \"sendMessageSlack(..., { progressChrome: true, progressChromeReaction: writing_hand }) from PR branch head\",\n    \"result\": {\n      \"messageId\": \"suppressed\",\n      \"channelId\": \"D0BG***7U3\",\n      \"suppressed\": true,\n      \"receipt\": {\n        \"platformMessageIds\": [],\n        \"parts\": [],\n        \"raw\": []\n      }\n    }\n  },\n  \"completedToolOutput\": {\n    \"input\": \"🛠️ `run tests (workspace)`\\\\n```txt\\\\nPASS 149 tests\\\\n```\",\n    \"call\": \"sendMessageSlack(...) without progressChrome, matching completed-output delivery\",\n    \"result\": {\n      \"messageId\": \"1783736301.824189\",\n      \"channelId\": \"D0BG***7U3\",\n      \"threadTs\": \"1783736301.593119\"\n    }\n  },\n  \"failedToolOutput\": {\n    \"input\": \"🛠️ `list files in /tmp/missing`\\\\n```txt\\\\nNo such file or directory\\\\n```\",\n    \"call\": \"sendMessageSlack(...) without progressChrome, matching failed-output delivery\",\n    \"result\": {\n      \"messageId\": \"1783736301.954489\",\n      \"channelId\": \"D0BG***7U3\",\n      \"threadTs\": \"1783736301.593119\"\n    }\n  },\n  \"explicitVerboseOutput\": {\n    \"input\": \"🛠️ `run tests (workspace)`\\\\noutput line preserved for explicit verbose mode\",\n    \"call\": \"sendMessageSlack(...) without progressChrome, matching verbose-preserved delivery\",\n    \"result\": {\n      \"messageId\": \"1783736302.084609\",\n      \"channelId\": \"D0BG***7U3\",\n      \"threadTs\": \"1783736301.593119\"\n    }\n  },\n  \"redactedThreadTranscript\": [\n    {\n      \"ts\": \"1783736301.593119\",\n      \"text\": \"Slack progress-chrome exact-head lifecycle proof anchor 2026-07-11T02:18:21.368Z head=1e3f34f78d97ec5790a39b722f55b53e640488c5\",\n      \"reactions\": [\"hammer_and_wrench\"]\n    },\n    {\n      \"ts\": \"1783736301.824189\",\n      \"text\": \":hammer_and_wrench: `run tests (workspace)`\\n\\n```\\nPASS 149 tests\\n```\",\n      \"reactions\": []\n    },\n    {\n      \"ts\": \"1783736301.954489\",\n      \"text\": \":hammer_and_wrench: `list files in /tmp/missing`\\n\\n```\\nNo such file or directory\\n```\",\n      \"reactions\": []\n    },\n    {\n      \"ts\": \"1783736302.084609\",\n      \"text\": \":hammer_and_wrench: `run tests (workspace)`\\noutput line preserved for explicit verbose mode\",\n      \"reactions\": []\n    }\n  ]\n}\n```\n\n## Verification\n- Thread-scoped typed progress chrome converts to a reaction/suppressed result instead of `chat.postMessage`.\n- Progress chrome without a reaction target is suppressed before Slack post.\n- Completed tool output without progress metadata remains sendable.\n- Failed tool output without progress metadata remains sendable.\n- Explicit verbose output without progress metadata remains sendable.\n- Semantic replies using the same leading emoji and embedded command remain sendable.\n",
+        "branch": "jack/slack-progress-chrome-guard-v2",
+        "head_sha": "5ef38ce70d8807007aef07f52f2c5901eff39ec1",
+        "author": "cg-intelligence-agent-jack",
         "labels": [
-          "status: 📣 needs proof",
-          "P2",
-          "rating: 🦪 silver shellfish"
+          "channel: slack",
+          "size: L",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/OpenClaw.SetupEngine/SetupSteps.cs",
-            "additions": 11,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/OpenClaw.SetupEngine.Tests/OpenClaw.SetupEngine.Tests.csproj",
-            "additions": 1,
+            "path": "extensions/slack/src/blocks.test-helpers.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "tests/OpenClaw.SetupEngine.Tests/SetupNodeConnectCancellationTests.cs",
-            "additions": 117,
+            "path": "extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts",
+            "additions": 51,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/message-handler/dispatch.ts",
+            "additions": 16,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/replies.test.ts",
+            "additions": 38,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/monitor/replies.ts",
+            "additions": 16,
+            "deletions": 32,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/slack/src/progress-chrome.ts",
+            "additions": 167,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "tests/OpenClaw.SetupEngine.Tests/SetupStepsTests.cs",
-            "additions": 111,
-            "deletions": 1,
+            "path": "extensions/slack/src/send.identity-fallback.test.ts",
+            "additions": 305,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "tests/OpenClaw.TestSupport/SilentWebSocketServer.cs",
-            "additions": 82,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/slack/src/send.ts",
+            "additions": 31,
+            "deletions": 32,
+            "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 322,
-        "deletions": 2,
+        "changedFiles": 8,
+        "additions": 630,
+        "deletions": 80,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-1011",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-1011.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-102082",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-102082.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "CLEAN",
+        "merge_state_status": "BLOCKED",
         "review_decision": "",
         "checks": {
-          "total": 12,
-          "gatingTotal": 12,
+          "total": 91,
+          "gatingTotal": 86,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 4
+            "FAILURE": 1,
+            "SUCCESS": 48,
+            "SKIPPED": 41,
+            "NEUTRAL": 1
           },
-          "blockers": [],
+          "blockers": [
+            "no-tabs:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "no-tabs:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw-windows-node:1008:5006073786:2026-07-17T18:04:47Z:re_review",
-      "comment_id": "5006073786",
-      "comment_version_key": "5006073786:2026-07-17T18:04:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1008#issuecomment-5006073786",
-      "repo": "openclaw/openclaw-windows-node",
-      "target_branch": "main",
-      "issue_number": 1008,
-      "author": "bkudiess",
-      "author_id": 7658216,
-      "author_association": "COLLABORATOR",
-      "comment_created_at": "2026-07-17T18:04:47Z",
-      "comment_updated_at": "2026-07-17T18:04:47Z",
-      "comment_body_sha256": "b92dc5dc348358b758bc5ffac16f0f8fc0ad91f898056ed2dc5fc6982b3af085",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review — added live current-head (head 4ed87980) runtime proof for the hub close/reopen path to the pr body's real behavior proof section:",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": "— added live current-head (HEAD 4ed87980) runtime proof for the Hub close/reopen path to the PR body's Real behavior proof section:",
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:967:4939958694:2026-07-17T17:55:07Z:clawsweeper_needs_human",
-      "comment_id": "4939958694",
-      "comment_version_key": "4939958694:2026-07-17T17:55:07Z",
-      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/967#issuecomment-4939958694",
-      "repo": "openclaw/openclaw-windows-node",
-      "target_branch": "main",
-      "issue_number": 967,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-10T22:15:29Z",
-      "comment_updated_at": "2026-07-17T17:55:07Z",
-      "comment_body_sha256": "a90050b5d10ae780d82b9a0cd8bc9d9a18e46b16c1f11d5410345604dbcb0f34",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P2] A maintainer must approve the identity-authentication security contract and review the refreshed merge result; there is no remaining narrow autonomous repair to dispatch.; Needs attention: No unresolved line-level security defect is established on the current head, but the new identity-authorization contract requires explicit maintainer acceptance. (sha=4a70b1964e9acfb0131a5a01c9fbc4a45cefd490)",
-      "review_summary": "Adds opt-in Tailscale Serve provisioning, private WSS gateway registration, separately opt-in Tailscale identity authentication, setup and recovery UI, credential redaction, documentation, and regression coverage for generated WSL gateways.\n\nReproducibility: not applicable. as a current-main bug; this PR introduces a new opt-in transport, setup, and authentication capability. The contributor nevertheless provides a concrete current-head real-environment validation path.",
-      "review_followup": "- [P2] A maintainer must approve the identity-authentication security contract and review the refreshed merge result; there is no remaining narrow autonomous repair to dispatch.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "4a70b1964e9acfb0131a5a01c9fbc4a45cefd490",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-17T17:51:31.272Z",
-      "review_lease_owner": "github-run-29601256758-1",
-      "review_lease_comment_id": "5005922363",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "56b21dfa0b5b5e83f307626c13985db62ad784f14b6fbc50a17ec573bb147e2b",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -243,21 +185,21 @@
   },
   "short_circuited": false,
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1836,
+    "total_ms": 2682,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 469
+        "ms": 355
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1290
+        "ms": 2043
       },
       {
         "name": "classify_comment_commands",
-        "ms": 12
+        "ms": 18
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -272,20 +214,12 @@
         "ms": 0
       },
       {
-        "name": "classify_repair_loop_sweeps",
-        "ms": 0
-      },
-      {
-        "name": "claim_dispatch_commands",
-        "ms": 0
-      },
-      {
         "name": "execute_commands",
-        "ms": 1282
+        "ms": 195
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
