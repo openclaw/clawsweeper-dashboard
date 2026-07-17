@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T15:03:46.642Z",
+  "generated_at": "2026-07-17T15:04:00.335Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T12:03:46.147Z",
+  "since": "2026-07-17T12:03:58.088Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110023
+    110046
   ],
   "comment_ids": [
-    5004588159
+    5004591509
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5004591903,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -32,28 +32,234 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:110046:5004591509:2026-07-17T15:01:56Z:re_review",
+      "comment_id": "5004591509",
+      "comment_version_key": "5004591509:2026-07-17T15:01:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110046#issuecomment-5004591509",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 110046,
+      "author": "zw-xysk",
+      "author_id": 294457748,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-17T15:01:56Z",
+      "comment_updated_at": "2026-07-17T15:01:56Z",
+      "comment_body_sha256": "a76357a3383a629e1fc0a3e176f680f3c69062962f35d2cd64a5a628958444c3",
+      "status_comment_id": 5004591903,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110046,
+          "dispatch_key": "router-d1557d22d32cb9e8",
+          "dispatched_at": "2026-07-17T15:04:01.046Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-17T15:04:02.028Z",
+          "response_comment_id": "5004591903",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(infra): bound gateway TLS file reads via secret-file helper",
+        "body": "## What Problem This Solves\n\nFixes an issue where operators enabling `gateway.tls` with `certPath` / `keyPath` / `caPath` could load arbitrarily large files into memory while preparing TLS options. A mistaken path could therefore allocate unbounded input before the gateway listener started.\n\n## Why This Change Was Made\n\nClawSweeper re-review rejected the first approach (separate `stat` then `readFile`) because pathname swaps, FIFOs, and device-like inputs can bypass that check. This revision loads each TLS artifact through OpenClaw’s shared bounded secret-file reader (`readSecretFileSync`, `rejectHardlinks: false`), matching MCP client TLS (#110016) and managed proxy CA (#110032):\n\n- cert / key: **64 KiB**\n- CA bundle: **256 KiB** (upgrade-safe for multi-root trust bundles between those caps)\n\nAI-assisted: yes. I inspected `loadGatewayTlsRuntime`, sibling MCP/proxy TLS bound-read PRs, `@openclaw/fs-safe` secret-file behavior, and the gateway TLS config contract before the change.\n\n## User Impact\n\nNormal gateway TLS cert/key/CA PEMs continue to load. Oversized cert/key/CA files fail closed with a clear role-specific size error before TLS options are built. Existing CA bundles up to 256 KiB remain accepted.\n\n## Evidence\n\n**Real-machine production-path proof (L3):** macOS `darwin 21.6.0 x64`, Node `v22.19.0`. Harness imported production `loadGatewayTlsRuntime`, auto-generated a real self-signed pair, started a real `tls.createServer` on localhost with the returned options, completed a TLS client connect, then proved oversized cert fail-closed and a >64 KiB / <256 KiB CA still loads.\n\n```json\n{\n  \"normal\": {\n    \"enabled\": true,\n    \"fingerprint\": \"820b014300c1485066f814f56b56a6a76fe0ba1629bfe269bee172bde25046bb\",\n    \"listenerPort\": 57956\n  },\n  \"oversized\": {\n    \"enabled\": false,\n    \"error\": \"gateway tls: cert file exceeds 65536 bytes\"\n  },\n  \"largeCa\": {\n    \"enabled\": true,\n    \"caBytes\": 66533\n  }\n}\n```\n\n| Layer | Result |\n| --- | --- |\n| L1 | `pnpm exec vitest run src/infra/tls/gateway.test.ts` → **12 passed** (normal load, oversized cert/key/ca, CA upgrade window, FIFO reject, missing/invalid paths) |\n| L2 | Production loader uses `readSecretFileSync` with role caps; `FsSafeError` `too-large` → role-labelled error |\n| L3 | Real TLS listener + oversized/CA cases above |\n| Gate | `oxfmt` + `oxlint` on touched files — clean |\n\nHead: `85b5ec9aded4e5a830473b9a4ba514f7c6de98b7`\n\n```text\nsrc/infra/tls/gateway.ts       role-specific bounded reads\nsrc/infra/tls/gateway.test.ts  oversized + CA upgrade + non-regular coverage\n```\n",
+        "branch": "fix/infra-bound-gateway-tls-reads",
+        "head_sha": "85b5ec9aded4e5a830473b9a4ba514f7c6de98b7",
+        "author": "zw-xysk",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 security-boundary",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/infra/tls/gateway.test.ts",
+            "additions": 109,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/tls/gateway.ts",
+            "additions": 51,
+            "deletions": 5,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 160,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110046",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110046.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 109,
+          "gatingTotal": 104,
+          "counts": {
+            "IN_PROGRESS": 36,
+            "SKIPPED": 29,
+            "SUCCESS": 39,
+            "QUEUED": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/4):IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 3/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Scan changed paths (precise):IN_PROGRESS",
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/4):IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 3/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-17T15:04:00.522Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 841,
+    "total_ms": 4423,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 461
+        "ms": 404
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1726
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 20
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -69,7 +275,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 345
+        "ms": 2165
       },
       {
         "name": "append_ledger",
