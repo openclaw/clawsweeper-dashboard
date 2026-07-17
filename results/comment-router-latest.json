@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T21:26:34.850Z",
-  "repo": "openclaw/crabfleet",
+  "generated_at": "2026-07-17T21:26:40.800Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T18:26:32.910Z",
+  "since": "2026-07-17T18:26:40.212Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    92
+    109991
   ],
   "comment_ids": [
-    5007602788
+    5007538752
   ],
-  "status_comment_id": 5007603022,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/crabfleet:92:5007602788:2026-07-17T21:24:34Z:re_review",
-      "comment_id": "5007602788",
-      "comment_version_key": "5007602788:2026-07-17T21:24:34Z",
-      "comment_url": "https://github.com/openclaw/crabfleet/pull/92#issuecomment-5007602788",
-      "repo": "openclaw/crabfleet",
-      "target_branch": "main",
-      "issue_number": 92,
-      "author": "anagnorisis2peripeteia",
-      "author_id": 129746152,
+      "idempotency_key": "comment-router:openclaw/openclaw:109991:5007538752:2026-07-17T21:14:46Z:re_review",
+      "comment_id": "5007538752",
+      "comment_version_key": "5007538752:2026-07-17T21:14:46Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109991#issuecomment-5007538752",
+      "repo": "openclaw/openclaw",
+      "target_branch": null,
+      "issue_number": 109991,
+      "author": "coder-master-0915",
+      "author_id": 301715909,
       "author_association": "NONE",
-      "comment_created_at": "2026-07-17T21:24:34Z",
-      "comment_updated_at": "2026-07-17T21:24:34Z",
-      "comment_body_sha256": "b023e98cfb5558913c69523a17f580fc7db42e011cb5783519f7dfffde69ad9d",
-      "status_comment_id": 5007603022,
+      "comment_created_at": "2026-07-17T21:14:46Z",
+      "comment_updated_at": "2026-07-17T21:14:46Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,90 +72,9 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 92,
-          "dispatch_key": "router-c23af743c0272f24",
-          "dispatched_at": "2026-07-17T21:26:35.972Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-17T21:26:37.242Z",
-          "response_comment_id": "5007603022",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cards): stop finishRunForLane overwriting a run's stalled status",
-        "body": "## What Problem This Solves\n\nWhen a run finishes for a lane (advance to Done / Human Review / Backlog), `finishRunForLane` overwrote\nthe run's `status` unconditionally. If a reconciler had already marked that run **`stalled`** — a\nheartbeat timeout or crash detected during the caller's read→write window — its terminal provenance\nwas silently replaced with `completed` / `review` / `canceled`, and a false \"run &lt;status&gt;\" event\nwas recorded. The stalled fact (and the preserved workspace it implies) was lost.\n\nThis is the same check-then-act race the two siblings on this table already guard against: `stall()`\nand `reconcileStalledRuns()` both fence their `run_attempts` UPDATE with `WHERE status IN\n(activeRunStatuses)` and only emit their event when a row actually changed. `finishRunForLane` was the\none writer that didn't.\n\n## The change\n\nFence the transition on the run still being pre-terminal, and commit the transition and its audit\nevent in **one atomic `DB.batch`** — the same guarded-update + conditional-insert pattern `claimRun`\nalready uses on this table:\n\n```\nUPDATE run_attempts SET status = ?, ended_at = ?, updated_at = ?, control_intent = ?\n  WHERE id = ? AND status IN ('queued','leasing','running','review');   -- + \"review\" so a review run can reach Done\nINSERT INTO events (card_id, actor, message, created_at)\n  SELECT card_id, ?, ?, ? FROM run_attempts\n  WHERE id = ? AND updated_at = ? AND status = ?;                        -- only for the row THIS call transitioned\n```\n\nA run a reconciler moved to `stalled` (or any terminal status) no longer matches the UPDATE, so the\ntransition is skipped; and because the event insert is conditioned on this call's `updated_at`, an\nalready-terminal run is not re-announced and a stalled run gets no false event. Sharing one batch\nmeans the status write and its event commit or roll back together — they can never persist separately\n(this closes the split-write risk raised on the earlier revision).\n\n## Real-behaviour proof (before → after, real D1)\n\nThe same interleaving, driven against a **real Miniflare D1** (SQLite) so the actual compiled SQL runs:\n\n```\nBASE origin/main — unconditional UPDATE, no status guard (real D1)\n  after finishRunForLane(Done): run status=completed, run-finished events=1 (\"run completed\")\n  => STOMPED: stalled overwritten to 'completed' + false 'run completed' event\n\nHEAD (this PR) — guarded UPDATE + conditional event, one atomic batch (real D1)\n  after finishRunForLane(Done): run status=stalled, run-finished events=0\n  => PRESERVED: stalled provenance intact, no false 'run completed' event\n```\n\nReproducible transcript: https://gist.github.com/anagnorisis2peripeteia/1c6b581b8cd3236008ee787582a7040e\n\n## Testing\n\n`pnpm check` (tsc + oxlint + oxfmt), `pnpm build`, `pnpm exec wrangler deploy --dry-run`, `pnpm test`\nall green. `tests/card-run-finish-guard.test.ts` runs against a **real Miniflare D1** (not a mock):\na live run transitions and records exactly one event; a `stalled` run is left untouched with no event\n(the race fix); an **already-terminal run is not re-announced** (pins the atomic conditional event); a\n`review` run promotes to Done; and a non-terminal lane cancels with `control_intent`. Mutation testing\nof the changed range scores 83%. A concurrency lint of the diff is clean.\n\n**Scope:** this fixes only the run-provenance overwrite. The card's own lane move (`moveCard`) is a\nseparate, pre-existing, user-initiated step and is intentionally left as-is.\n\nRelated: FINDING 2 of #88.\n",
-        "branch": "fix/run-status-stomp",
-        "head_sha": "845c52dd844ef50b9289d327b6c24110849344d1",
-        "author": "anagnorisis2peripeteia",
-        "labels": [
-          "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 session-state",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/worker/card-repository.ts",
-            "additions": 35,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "tests/card-run-finish-guard.test.ts",
-            "additions": 119,
-            "deletions": 0,
-            "changeType": "ADDED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 154,
-        "deletions": 18,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-crabfleet-92",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-crabfleet-92.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 2,
-          "gatingTotal": 2,
-          "counts": {
-            "SUCCESS": 2
-          },
-          "blockers": [
-            "check-test-types:FAILURE",
-            "openclaw/ci-gate:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "check-test-types:FAILURE",
-            "openclaw/ci-gate:FAILURE"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-17T21:26:35.183Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -163,22 +82,22 @@
     "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5098,
+    "total_ms": 2450,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 524
+        "ms": 502
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1300
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 15
+        "ms": 12
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -194,7 +113,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3147
+        "ms": 1863
       },
       {
         "name": "append_ledger",
