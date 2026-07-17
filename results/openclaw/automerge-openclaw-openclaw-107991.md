@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-107991"
 mode: "autonomous"
-run_id: "29517105802"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29517105802"
-head_sha: "4e6521dd9e0ef29ab7137250cdd7ad35ddf14c0e"
-workflow_conclusion: "success"
+run_id: "29554413985"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29554413985"
+head_sha: "e86fb8d1efa0ce5c8585f7c4c12508ade5050f73"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-16T16:58:04.726Z"
-canonical: "https://github.com/openclaw/openclaw/pull/107991"
+published_at: "2026-07-17T04:21:22.527Z"
+canonical: "#107991"
 canonical_issue: null
-canonical_pr: "https://github.com/openclaw/openclaw/pull/107991"
-actions_total: 3
+canonical_pr: "#107991"
+actions_total: 1
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,23 +25,23 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29517105802](https://github.com/openclaw/clawsweeper/actions/runs/29517105802)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29554413985](https://github.com/openclaw/clawsweeper/actions/runs/29554413985)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/pull/107991
+Canonical: #107991
 
 ## Summary
 
-Quarantine the security-sensitive historical PR #106090, keep unrelated Crabbox PR #106789 independent, and repair the writable canonical branch for #107991 before any merge decision because its hydrated exact-head CI still contains a failing compact test lane and failed CI gate.
+Make PR #107991 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,9 +66,7 @@ Quarantine the security-sensitive historical PR #106090, keep unrelated Crabbox 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| https://github.com/openclaw/openclaw/pull/106090 | route_security | planned | security_sensitive | This item is explicitly security-sensitive and outside ClawSweeper Repair's mutation scope. |
-| https://github.com/openclaw/openclaw/pull/106789 | keep_independent | planned | independent | The PR belongs to a different implementation and failure surface and should remain outside this repair cluster. |
-| https://github.com/openclaw/openclaw/pull/107991 | fix_needed | planned | canonical | Repair and refresh the contributor branch, inspect the exact failing compact lane, and make only a narrow relevant correction; merge remains blocked and requires a later exact-head passing verdict. |
+| #107991 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
