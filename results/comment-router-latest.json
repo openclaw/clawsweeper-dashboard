@@ -1,25 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T18:11:17.887Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-17T18:13:01.620Z",
+  "repo": "openclaw/openclaw-windows-node",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T15:11:17.058Z",
+  "since": "2026-07-17T15:12:55.479Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
-  "item_numbers": [
-    110052
-  ],
-  "comment_ids": [
-    5006083110
-  ],
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 0,
+  "scanned_comments": 17,
+  "commands_seen": 8,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,19 +30,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110052:5006083110:2026-07-17T18:05:51Z:re_review",
-      "comment_id": "5006083110",
-      "comment_version_key": "5006083110:2026-07-17T18:05:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110052#issuecomment-5006083110",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 110052,
-      "author": "omarshahine",
-      "author_id": 10343873,
+      "idempotency_key": "comment-router:openclaw/openclaw-windows-node:1011:5006156424:2026-07-17T18:12:48Z:re_review",
+      "comment_id": "5006156424",
+      "comment_version_key": "5006156424:2026-07-17T18:12:48Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1011#issuecomment-5006156424",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 1011,
+      "author": "anagnorisis2peripeteia",
+      "author_id": 129746152,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T18:05:51Z",
-      "comment_updated_at": "2026-07-17T18:05:51Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "comment_created_at": "2026-07-17T18:12:48Z",
+      "comment_updated_at": "2026-07-17T18:12:48Z",
+      "comment_body_sha256": "7fee7da2e3850258d6c3ca5672c45ecce0aa255aea1793e6c6426e3a929c3c43",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -72,6 +68,1098 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 1011,
+          "dispatch_key": "router-8edd6ebb7fd3e8f3",
+          "dispatched_at": "2026-07-17T18:13:03.487Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-17T18:13:04.644Z",
+          "response_comment_id": "5006156809",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(setup): cancel node pairing cleanly instead of a spurious timeout warning + wasted retry",
+        "body": "Related: #1010\n\n## What Problem This Solves\n\nWhen a user cancels node setup while the pairing step is waiting to connect, the cancellation isn't handled cleanly: the step logs a misleading `\"Node connection failed: Timeout\"` warning (implying a connection problem, not a user abort), then **burns a retry** — `Task.Delay(3s, ct)` on the pairing step's retry policy — before the cancellation finally surfaces. The pipeline does end up `Cancelled` either way, but only after a spurious error and a wasted retry delay, and the journal/log record a connection \"failure\" that never happened.\n\n## Why This Change Was Made\n\n`WaitForNodeConnection` links the caller's token with an internal `CancelAfter(timeout)` and catches *every* `OperationCanceledException` as `NodeConnectionOutcome.Timeout`; `PairNodeStep.ExecuteAsync`'s catch-all then turns that into `StepResult.Fail(...)`. So a user cancel is reported as a failed connection attempt, which the step's retry policy (`MaxAttempts: 3`) then retries — and only the retry's `Task.Delay(..., ct)` tripping on the cancelled token gets the pipeline to `Cancelled`.\n\nThe fix makes the cancellation propagate directly, using the file's existing cancel-rethrow idiom (`SetupSteps.cs:1725`, `:2044`): guard the `Timeout` mapping with `when (!ct.IsCancellationRequested)`, and add `catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }` ahead of `PairNodeStep`'s catch-all. The pipeline then maps the propagated OCE straight to `Cancelled` — no spurious \"failed\" log, no wasted retry. The genuine-timeout path is unchanged.\n\n## Scope — what this does and doesn't change (traced end-to-end)\n\nBeing precise, because it's easy to overstate: **the final pipeline outcome is `Cancelled` (exit 3) with or without this change** — `PairNodeStep`'s retry policy means a caller-cancel trips the retry delay and surfaces as `Cancelled` regardless. What this PR changes is the *path* to that outcome on a user cancel:\n\n- **Before:** `[Warn] Step 'pair-node' failed (attempt 1/3), retrying in 3s: Node connection failed: Timeout` → (retry delay) → `Cancelled`.\n- **After:** cancellation surfaces immediately → `Cancelled`, no spurious warning, no retry delay.\n\nSo this is a cancellation-cleanliness / accurate-diagnostics fix, not an outcome change.\n\n## User Impact\n\nCancelling node setup no longer emits a misleading \"connection failed\" warning to the log/journal or wastes a retry cycle — the abort is recorded and surfaced accurately and immediately. No change for a real connection timeout.\n\n## Change Type\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor\n- [ ] Docs or instructions\n- [ ] Tests or validation\n- [ ] Security hardening\n- [ ] Chore or infrastructure\n\n## Scope\n\n- [ ] Tray or WinUI UX\n- [ ] Windows node capability\n- [ ] Local MCP or `winnode`\n- [ ] Gateway, connection, or pairing\n- [x] Setup or onboarding\n- [ ] Permissions, privacy, or security\n- [ ] Tests, CI, or docs\n\n## Validation\n\nFull Windows CI-matrix mirror (win-x64, .NET 10.0.301), HEAD `29ce4325` vs base `9fb1960e` — every project built and all 8 suites passed. Four focused regression tests (SetupEngine.Tests), on base vs HEAD:\n\n```\ndotnet test tests/OpenClaw.SetupEngine.Tests --filter \\\n  \"PairNodeStep_CallerCancellation|WaitForNodeConnection_CallerCancellation|SetupPipeline_CallerCancel|WaitForNodeConnection_GenuineInternalTimeout\"\nPassed! - Failed: 0, Passed: 4   (HEAD)\nFailed! - Failed: 3, Passed: 1   (base, SetupSteps.cs reverted to main)\n```\n\n- **`SetupPipeline_CallerCancel_CancelsCleanlyWithoutFailureNarrative`** — the durable end-to-end contract: drives the **real** `SetupPipeline` with the real `PairNodeStep` and asserts all three of Cancelled/exit 3, **no `\"Node connection failed\"`/retry warning**, and a `pipeline_cancelled` journal entry (not a failed-step narrative). This is what actually pins the fix — it's red on base (the retry-warning assertion fails) and green on HEAD.\n- **`PairNodeStep_CallerCancellation`** + **`WaitForNodeConnection_CallerCancellation`** — the two catch boundaries, cancelled from a **deterministic WebSocket-upgrade barrier** (no timing guess).\n- **`WaitForNodeConnection_GenuineInternalTimeout`** — a real internal timeout still maps to `Timeout` (passes on both base and HEAD; proves the fix only diverts caller cancels).\n\n_This revision addresses the ClawSweeper / Copilot maintainer-assistant review: adds the deterministic pipeline-level contract, the genuine-timeout assertion, the upgrade barrier (replacing the 300 ms delay), and binds the reflection lookup by full signature with a clear failure message._\n\n(Two intermittent pre-existing flakes exist in the full matrix — `Connection.Tests.ConnectAndReconnect_EmitCompletedOperatorSpans` and `Tray.UITests.ChatTimelineVirtualizationProofTests` — on surfaces this SetupEngine-only diff doesn't touch; neither is a regression here.)\n\n## Real Behavior Proof\n\nDriving the **real** `SetupPipeline` through the real `PairNodeStep` with a caller cancel (loopback WebSocket that completes the upgrade then stays silent so the step parks in its wait; caller token cancelled at the deterministic WS-upgrade barrier), base vs HEAD:\n\n- **base** (`9fb1960e`) — pipeline log:\n  ```\n  [Warn] Step 'pair-node' failed (attempt 1/3), retrying in 3s: Node connection failed: Timeout\n  → SetupPipeline outcome: Cancelled (exit 3)\n  ```\n  i.e. a spurious connection-failure warning and a retry before it cancels.\n- **HEAD** (`29ce4325`) — pipeline log:\n  ```\n  → SetupPipeline outcome: Cancelled (exit 3)\n  ```\n  cancellation surfaces immediately; no \"failed\" warning, no retry.\n\nSame final outcome; the fix removes the misleading warning and the wasted retry.\n\n- Environment tested: Windows host, .NET SDK 10.0.301, win-x64\n- PR head / base tested: `29ce4325` / `9fb1960e`\n- Screenshot or artifact links verified? `N/A` (non-UI setup/connection logic; proof is the paired pipeline-log capture + red→green tests)\n- **Honest limitation:** this exercises the real `SetupPipeline`/`PairNodeStep` cancellation path but substitutes a loopback WebSocket and fake WSL/reachability deps, so it is deterministic pipeline coverage rather than a transcript from the shipped setup flow against a live gateway. I don't currently have a real gateway-pairing environment to capture that end-to-end transcript; happy to add it if a maintainer can point me at one, or defer that to maintainer discretion given the production change is two narrow catch filters.\n\n## Security Impact\n\n- New permissions or capabilities? `No`\n- Secrets or tokens handling changed? `No`\n- New or changed network calls? `No`\n- Command or tool execution surface changed? `No`\n- Data access scope changed? `No`\n\n## Compatibility and Migration\n\n- Backward compatible? `Yes`\n- Config or environment changes? `No`\n- Migration needed? `No`\n\n## Review History\n\nLocal review history (findings + dispositions per commit), including the correction from the original \"reports Failed\" framing to the accurate cancellation-cleanliness scope: https://gist.github.com/anagnorisis2peripeteia/0bdbede425c116811993f71fed9816b9\n\n## Review Conversations\n\n- [ ] I replied to or resolved every bot review conversation addressed by this PR.\n- [ ] I left unresolved only conversations that still need maintainer judgment.\n",
+        "branch": "fix/setup-node-connect-cancel-provenance",
+        "head_sha": "29ce43258d36e2decf353becc06c181ef82a7af9",
+        "author": "anagnorisis2peripeteia",
+        "labels": [
+          "status: 📣 needs proof",
+          "P2",
+          "rating: 🦪 silver shellfish"
+        ],
+        "files": [
+          {
+            "path": ".pr-gates/c4da82f06b0eeb2e7aad0c9c6d3eed72ef63bc44.json",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": ".pr-gates/review-gist.fix__setup-node-connect-cancel-provenance.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupSteps.cs",
+            "additions": 11,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/OpenClaw.SetupEngine.Tests.csproj",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupNodeConnectCancellationTests.cs",
+            "additions": 117,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupStepsTests.cs",
+            "additions": 111,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.TestSupport/SilentWebSocketServer.cs",
+            "additions": 82,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 7,
+        "additions": 348,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-1011",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-1011.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 8,
+          "gatingTotal": 8,
+          "counts": {
+            "SUCCESS": 2,
+            "IN_PROGRESS": 4,
+            "SKIPPED": 2
+          },
+          "blockers": [
+            "test:IN_PROGRESS",
+            "e2etests (setup-connect, 45, FullyQualifiedName~OpenClaw.E2ETests.Setup.SetupAndConnectTests|Full...:IN_PROGRESS",
+            "e2etests (revocation-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.RevocationAndRecove...:IN_PROGRESS",
+            "e2etests (network-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.NetworkRecoveryTests):IN_PROGRESS"
+          ],
+          "pending": [
+            "test:IN_PROGRESS",
+            "e2etests (setup-connect, 45, FullyQualifiedName~OpenClaw.E2ETests.Setup.SetupAndConnectTests|Full...:IN_PROGRESS",
+            "e2etests (revocation-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.RevocationAndRecove...:IN_PROGRESS",
+            "e2etests (network-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.NetworkRecoveryTests):IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-17T18:13:01.907Z"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:1008:4999490608:2026-07-17T18:10:24Z:clawsweeper_needs_human",
+      "comment_id": "4999490608",
+      "comment_version_key": "4999490608:2026-07-17T18:10:24Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1008#issuecomment-4999490608",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 1008,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-17T05:58:12Z",
+      "comment_updated_at": "2026-07-17T18:10:24Z",
+      "comment_body_sha256": "596db7c6dfea5079b4d5ec057a4c61738d7d0989fdb0bc0cdad38d0a53915992",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] No discrete repair finding remains; a native Windows reviewer should decide whether the documented clean-exit proof gap requires an interactive capture before merge.; Cleared: The diff adds the standard Microsoft DI package and local presentation wiring; no concrete secret, permission, dependency-source, or supply-chain regression is evident. (sha=4ed87980b14fd4d264cfe7e47964861591a5a63f)",
+      "review_summary": "Adds an App-owned DI composition root plus WinUI-free navigation, activation, scope-lifetime, and UI-dispatcher seams with architecture-ledger and tray test coverage.\n\nReproducibility: not applicable. This PR introduces internal presentation infrastructure rather than fixing a reported broken behavior. Its active lifecycle paths were exercised through current-head launch and Hub close/reopen proof.",
+      "review_followup": "- [P2] No discrete repair finding remains; a native Windows reviewer should decide whether the documented clean-exit proof gap requires an interactive capture before merge.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4ed87980b14fd4d264cfe7e47964861591a5a63f",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-17T18:07:11.316Z",
+      "review_lease_owner": "github-run-29602497571-1",
+      "review_lease_comment_id": "5006083963",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "77cc8ac276a21487774386a0dd263757f528424ce56ef203f571a6250b6bf9ed",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Add DI composition root and navigation/activation seam for tray view models",
+        "body": "## Summary\n\nIntroduces the dependency-injection and navigation plumbing that page view models will depend on: a root `ServiceProvider` owned by `App`, a navigation scope/activation seam, and a UI-thread dispatcher abstraction. This is **additive infrastructure only** — no page is converted to MVVM and no existing `App` behavior is moved. **Intended runtime behavior change: none.**\n\n## What this adds\n\n- **DI composition root.** Adds `Microsoft.Extensions.DependencyInjection` (10.0.0). `App` builds one root `ServiceProvider` with `ValidateScopes` + `ValidateOnBuild`, **after** tray initialization, and disposes it via an ordered shutdown step. App-owned services (`SettingsManager`, `IAppCommands`) are registered as **pre-built instances**, so the container never disposes them — `App` keeps sole ownership and there is **no double-dispose**. A build/validation failure is logged and leaves the provider null, so this plumbing can never prevent the tray from starting.\n- **`Presentation/` WinUI-free core:** `IUiDispatcher`, `INavigationAware`, `INavigationService`, `IPageActivator`, `NavigationScopeManager` (owns the per-navigation DI scope and the view-model activate/deactivate/dispose lifetime; navigation is non-re-entrant and exception-safe), `AppNavigationService`, and transient `SettingsPageViewModel`/`PermissionsPageViewModel` placeholders. Hand-linked into the pure `net10` test project.\n- **`Presentation/Adapters/` WinUI-bound:** `WinUIDispatcher`, `FramePageActivator`.\n- **Navigation activation hook** in `HubWindow.OnContentFrameNavigated`. The page→view-model map is empty, so it is a **runtime no-op today**: it only advances the navigation scope and never touches a page's `DataContext`, navigation, back-stack, rail selection, or dedupe. HubWindow's existing navigation is untouched.\n\n## Ownership / ledger\n\nAdds three `authoritative` rows with behavioral guard tests — `ui-dispatcher` (`IUiDispatcher`), `navigation-scope` (`NavigationScopeManager`), `composition-root` (`AppServiceRegistration`) — plus matching single-source-owner entries.\n\n## Validation\n\n- `build.ps1`: pass (all projects)\n- `dotnet test OpenClaw.Shared.Tests`: 2865 passed / 31 skipped (incl. architecture-ledger consistency)\n- `dotnet test OpenClaw.Tray.Tests`: 1772 passed (incl. 30 presentation unit + source-contract tests covering: no double-dispose of App-owned instances, transient view-model disposal with scope, non-re-entrant navigation, `Activate`/`Deactivate`-throws scope disposal, `Reset()` window-close teardown + re-navigation, A→B deactivate/dispose-before-activate ordering, `ValidateOnBuild`, the WinUI-free boundary, and the ordered shutdown-disposal step)\n\n## Real behavior proof\n\nVerified against a local Debug build of this branch (node reports `0.6.13-bkudiess-pr4-di-navigation-seam.1`), non-isolated tray, real gateway node.\n\n- **Tray launch — DI root builds at runtime:** log emits `Service provider initialized.` on launch (observed across 3 launches). This is the `InitializeServiceProvider()` success line, proving `BuildServiceProvider(ValidateScopes + ValidateOnBuild)` succeeds in a real tray process after tray init, with no validation throw.\n- **Node / MCP healthy on this build:** gateway handshake `caps=6, commands=25`; `winnode --list-tools` returns 52 tools; node connected in `node` mode.\n- **Representative navigation:** multiple deep-link navigations handled and `ConnectionPage` rendered; `OnContentFrameNavigated` runs the new activation hook each time with no errors — confirming the hook is a safe no-op today.\n- **Hub close / reopen (isolated current-head build, HEAD `4ed87980`):** on an isolated temp profile (`EnableMcpServer=true`; real `%APPDATA%` untouched):\n  - Provider init across 2 launches: `[INFO] Service provider initialized.`; startup logs `[MCP] HTTP server listening on http://<host>:8765/`, `Started MCP-only node service without gateway connection`, `Application started (WinUI 3)`.\n  - Hub **opened** via `winnode --command app.navigate {\"page\":\"permissions\"}` → `navigated:true` (Companion window present in `list_apps`).\n  - Hub **closed** via a computer-use click on the title-bar Close button → window removed from `list_apps`, i.e. `HubWindow.Closed` fired and the `IPageActivator.Reset()` path ran, with **no exception logged**.\n  - Hub **reopened** via `app.navigate {\"page\":\"connection\"}` → `navigated:true` (fresh navigation after `Reset()`), **no exception** (only a benign, unrelated `[WARN] [ConnectionPage] Could not subscribe to High Contrast changes`).\n  - Full-log error scan: the only `[ERROR]` is `Previous session did not exit cleanly` (from an earlier `Stop-Process` kill of a prior probe instance, not PR code) — no `ObjectDisposedException`, no `failed disposing`, no lifecycle exceptions.\n- **Clean shutdown — one line still test-covered:** this PR adds `SafeShutdownStepAsync(\"service provider\", …)` which nulls `_services` and then awaits `ServiceProvider.DisposeAsync()`. The exit path fires **only** from the OS notification-area tray flyout (`OnTrayMenuItemClicked(\"exit\")`), which is not drivable in the agent harness, so the live `Shutdown: disposing/disposed service provider` line could not be captured. The code path was verified directly (App nulls `_services` **before** `await DisposeAsync()`), and the ordered disposal + no-double-dispose behavior is covered by `PresentationSeamContractTests.App_DisposesServiceProvider_DuringShutdown`, `App_NullsServiceProviderField_BeforeAwaitingDisposal`, and `AppServiceRegistrationTests.Dispose_DoesNotDisposeAppOwnedInstanceSingletons`.\n\n## Follow-ups\n\n- When pages gain view models, wrap the `OnContentFrameNavigated` activation-hook body in try/catch-and-log so a misbehaving view model `Activate`/`Deactivate` cannot surface as an unhandled exception in the frame-navigated handler.\n- Reintroduce a shutdown-safe awaitable UI-marshaling method on `IUiDispatcher` if/when a consumer needs it.\r\n",
+        "branch": "bkudiess-pr4-di-navigation-seam",
+        "head_sha": "4ed87980b14fd4d264cfe7e47964861591a5a63f",
+        "author": "bkudiess",
+        "labels": [
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "P2",
+          "proof: sufficient",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "docs/ARCHITECTURE.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/App.xaml.cs",
+            "additions": 121,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/OpenClaw.Tray.WinUI.csproj",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/Adapters/FramePageActivator.cs",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/Adapters/WinUIDispatcher.cs",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/AppNavigationService.cs",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/AppServiceContext.cs",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/AppServiceRegistration.cs",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/INavigationAware.cs",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/INavigationService.cs",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/IPageActivator.cs",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/IUiDispatcher.cs",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/NavigationScopeManager.cs",
+            "additions": 185,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/PermissionsPageViewModel.cs",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/SettingsPageViewModel.cs",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Windows/HubWindow.xaml.cs",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/OpenClaw.Tray.Tests.csproj",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/AppServiceRegistrationTests.cs",
+            "additions": 118,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/NavigationScopeManagerTests.cs",
+            "additions": 264,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/PresentationSeamContractTests.cs",
+            "additions": 205,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/PresentationTestDoubles.cs",
+            "additions": 185,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/UiDispatcherContractTests.cs",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 22,
+        "additions": 1524,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-1008",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-1008.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 16,
+          "gatingTotal": 16,
+          "counts": {
+            "SUCCESS": 12,
+            "SKIPPED": 4
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw-windows-node:1008:5006073786:2026-07-17T18:04:47Z:re_review",
+      "comment_id": "5006073786",
+      "comment_version_key": "5006073786:2026-07-17T18:04:47Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1008#issuecomment-5006073786",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 1008,
+      "author": "bkudiess",
+      "author_id": 7658216,
+      "author_association": "COLLABORATOR",
+      "comment_created_at": "2026-07-17T18:04:47Z",
+      "comment_updated_at": "2026-07-17T18:04:47Z",
+      "comment_body_sha256": "b92dc5dc348358b758bc5ffac16f0f8fc0ad91f898056ed2dc5fc6982b3af085",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — added live current-head (head 4ed87980) runtime proof for the hub close/reopen path to the pr body's real behavior proof section:",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— added live current-head (HEAD 4ed87980) runtime proof for the Hub close/reopen path to the PR body's Real behavior proof section:",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "author_repository_permission": "write",
+      "target": {
+        "kind": "pull_request",
+        "title": "Add DI composition root and navigation/activation seam for tray view models",
+        "body": "## Summary\n\nIntroduces the dependency-injection and navigation plumbing that page view models will depend on: a root `ServiceProvider` owned by `App`, a navigation scope/activation seam, and a UI-thread dispatcher abstraction. This is **additive infrastructure only** — no page is converted to MVVM and no existing `App` behavior is moved. **Intended runtime behavior change: none.**\n\n## What this adds\n\n- **DI composition root.** Adds `Microsoft.Extensions.DependencyInjection` (10.0.0). `App` builds one root `ServiceProvider` with `ValidateScopes` + `ValidateOnBuild`, **after** tray initialization, and disposes it via an ordered shutdown step. App-owned services (`SettingsManager`, `IAppCommands`) are registered as **pre-built instances**, so the container never disposes them — `App` keeps sole ownership and there is **no double-dispose**. A build/validation failure is logged and leaves the provider null, so this plumbing can never prevent the tray from starting.\n- **`Presentation/` WinUI-free core:** `IUiDispatcher`, `INavigationAware`, `INavigationService`, `IPageActivator`, `NavigationScopeManager` (owns the per-navigation DI scope and the view-model activate/deactivate/dispose lifetime; navigation is non-re-entrant and exception-safe), `AppNavigationService`, and transient `SettingsPageViewModel`/`PermissionsPageViewModel` placeholders. Hand-linked into the pure `net10` test project.\n- **`Presentation/Adapters/` WinUI-bound:** `WinUIDispatcher`, `FramePageActivator`.\n- **Navigation activation hook** in `HubWindow.OnContentFrameNavigated`. The page→view-model map is empty, so it is a **runtime no-op today**: it only advances the navigation scope and never touches a page's `DataContext`, navigation, back-stack, rail selection, or dedupe. HubWindow's existing navigation is untouched.\n\n## Ownership / ledger\n\nAdds three `authoritative` rows with behavioral guard tests — `ui-dispatcher` (`IUiDispatcher`), `navigation-scope` (`NavigationScopeManager`), `composition-root` (`AppServiceRegistration`) — plus matching single-source-owner entries.\n\n## Validation\n\n- `build.ps1`: pass (all projects)\n- `dotnet test OpenClaw.Shared.Tests`: 2865 passed / 31 skipped (incl. architecture-ledger consistency)\n- `dotnet test OpenClaw.Tray.Tests`: 1772 passed (incl. 30 presentation unit + source-contract tests covering: no double-dispose of App-owned instances, transient view-model disposal with scope, non-re-entrant navigation, `Activate`/`Deactivate`-throws scope disposal, `Reset()` window-close teardown + re-navigation, A→B deactivate/dispose-before-activate ordering, `ValidateOnBuild`, the WinUI-free boundary, and the ordered shutdown-disposal step)\n\n## Real behavior proof\n\nVerified against a local Debug build of this branch (node reports `0.6.13-bkudiess-pr4-di-navigation-seam.1`), non-isolated tray, real gateway node.\n\n- **Tray launch — DI root builds at runtime:** log emits `Service provider initialized.` on launch (observed across 3 launches). This is the `InitializeServiceProvider()` success line, proving `BuildServiceProvider(ValidateScopes + ValidateOnBuild)` succeeds in a real tray process after tray init, with no validation throw.\n- **Node / MCP healthy on this build:** gateway handshake `caps=6, commands=25`; `winnode --list-tools` returns 52 tools; node connected in `node` mode.\n- **Representative navigation:** multiple deep-link navigations handled and `ConnectionPage` rendered; `OnContentFrameNavigated` runs the new activation hook each time with no errors — confirming the hook is a safe no-op today.\n- **Hub close / reopen (isolated current-head build, HEAD `4ed87980`):** on an isolated temp profile (`EnableMcpServer=true`; real `%APPDATA%` untouched):\n  - Provider init across 2 launches: `[INFO] Service provider initialized.`; startup logs `[MCP] HTTP server listening on http://<host>:8765/`, `Started MCP-only node service without gateway connection`, `Application started (WinUI 3)`.\n  - Hub **opened** via `winnode --command app.navigate {\"page\":\"permissions\"}` → `navigated:true` (Companion window present in `list_apps`).\n  - Hub **closed** via a computer-use click on the title-bar Close button → window removed from `list_apps`, i.e. `HubWindow.Closed` fired and the `IPageActivator.Reset()` path ran, with **no exception logged**.\n  - Hub **reopened** via `app.navigate {\"page\":\"connection\"}` → `navigated:true` (fresh navigation after `Reset()`), **no exception** (only a benign, unrelated `[WARN] [ConnectionPage] Could not subscribe to High Contrast changes`).\n  - Full-log error scan: the only `[ERROR]` is `Previous session did not exit cleanly` (from an earlier `Stop-Process` kill of a prior probe instance, not PR code) — no `ObjectDisposedException`, no `failed disposing`, no lifecycle exceptions.\n- **Clean shutdown — one line still test-covered:** this PR adds `SafeShutdownStepAsync(\"service provider\", …)` which nulls `_services` and then awaits `ServiceProvider.DisposeAsync()`. The exit path fires **only** from the OS notification-area tray flyout (`OnTrayMenuItemClicked(\"exit\")`), which is not drivable in the agent harness, so the live `Shutdown: disposing/disposed service provider` line could not be captured. The code path was verified directly (App nulls `_services` **before** `await DisposeAsync()`), and the ordered disposal + no-double-dispose behavior is covered by `PresentationSeamContractTests.App_DisposesServiceProvider_DuringShutdown`, `App_NullsServiceProviderField_BeforeAwaitingDisposal`, and `AppServiceRegistrationTests.Dispose_DoesNotDisposeAppOwnedInstanceSingletons`.\n\n## Follow-ups\n\n- When pages gain view models, wrap the `OnContentFrameNavigated` activation-hook body in try/catch-and-log so a misbehaving view model `Activate`/`Deactivate` cannot surface as an unhandled exception in the frame-navigated handler.\n- Reintroduce a shutdown-safe awaitable UI-marshaling method on `IUiDispatcher` if/when a consumer needs it.\r\n",
+        "branch": "bkudiess-pr4-di-navigation-seam",
+        "head_sha": "4ed87980b14fd4d264cfe7e47964861591a5a63f",
+        "author": "bkudiess",
+        "labels": [
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "P2",
+          "proof: sufficient",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "docs/ARCHITECTURE.md",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/App.xaml.cs",
+            "additions": 121,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/OpenClaw.Tray.WinUI.csproj",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/Adapters/FramePageActivator.cs",
+            "additions": 52,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/Adapters/WinUIDispatcher.cs",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/AppNavigationService.cs",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/AppServiceContext.cs",
+            "additions": 23,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/AppServiceRegistration.cs",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/INavigationAware.cs",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/INavigationService.cs",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/IPageActivator.cs",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/IUiDispatcher.cs",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/NavigationScopeManager.cs",
+            "additions": 185,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/PermissionsPageViewModel.cs",
+            "additions": 32,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Presentation/SettingsPageViewModel.cs",
+            "additions": 33,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Windows/HubWindow.xaml.cs",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/OpenClaw.Tray.Tests.csproj",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/AppServiceRegistrationTests.cs",
+            "additions": 118,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/NavigationScopeManagerTests.cs",
+            "additions": 264,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/PresentationSeamContractTests.cs",
+            "additions": 205,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/PresentationTestDoubles.cs",
+            "additions": 185,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/Presentation/UiDispatcherContractTests.cs",
+            "additions": 50,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 22,
+        "additions": 1524,
+        "deletions": 0,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-1008",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-1008.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "CLEAN",
+        "review_decision": "",
+        "checks": {
+          "total": 16,
+          "gatingTotal": 16,
+          "counts": {
+            "SUCCESS": 12,
+            "SKIPPED": 4
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:967:4939958694:2026-07-17T17:55:07Z:clawsweeper_needs_human",
+      "comment_id": "4939958694",
+      "comment_version_key": "4939958694:2026-07-17T17:55:07Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/967#issuecomment-4939958694",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 967,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-10T22:15:29Z",
+      "comment_updated_at": "2026-07-17T17:55:07Z",
+      "comment_body_sha256": "a90050b5d10ae780d82b9a0cd8bc9d9a18e46b16c1f11d5410345604dbcb0f34",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P2] A maintainer must approve the identity-authentication security contract and review the refreshed merge result; there is no remaining narrow autonomous repair to dispatch.; Needs attention: No unresolved line-level security defect is established on the current head, but the new identity-authorization contract requires explicit maintainer acceptance. (sha=4a70b1964e9acfb0131a5a01c9fbc4a45cefd490)",
+      "review_summary": "Adds opt-in Tailscale Serve provisioning, private WSS gateway registration, separately opt-in Tailscale identity authentication, setup and recovery UI, credential redaction, documentation, and regression coverage for generated WSL gateways.\n\nReproducibility: not applicable. as a current-main bug; this PR introduces a new opt-in transport, setup, and authentication capability. The contributor nevertheless provides a concrete current-head real-environment validation path.",
+      "review_followup": "- [P2] A maintainer must approve the identity-authentication security contract and review the refreshed merge result; there is no remaining narrow autonomous repair to dispatch.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "4a70b1964e9acfb0131a5a01c9fbc4a45cefd490",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-17T17:51:31.272Z",
+      "review_lease_owner": "github-run-29601256758-1",
+      "review_lease_comment_id": "5005922363",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "56b21dfa0b5b5e83f307626c13985db62ad784f14b6fbc50a17ec573bb147e2b",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "Add Tailscale Serve support for WSL gateways",
+        "body": "## Summary\r\n\r\n- Problem: Generated WSL gateways are loopback-only, so Companion cannot use a private tailnet endpoint.\r\n- Why it matters: Users with Tailscale need secure remote access without LAN exposure, port forwarding, or localhost fallback.\r\n- What changed: Added opt-in Tailscale Serve provisioning, browser/auth-key authorization, WSS gateway registration, Tailscale-aware recovery, runtime checks, redaction, and docs.\r\n- User impact: New/replacement generated gateways can publish privately at `wss://<wsl-node>.<tailnet>.ts.net`. Tailscale identity authentication is a separate explicit opt-in.\r\n- What did NOT change (scope boundary): No Funnel, Headscale, Tailscale SSH, subnet routing, named services, Windows Tailscale installation/removal, or in-place upgrades of existing gateways. Tailscale lifecycle and Serve remain root-owned; the `openclaw` account is not a Tailscale operator.\r\n\r\n## Change Type (select all)\r\n\r\n- [ ] Bug fix\r\n- [x] Feature\r\n- [ ] Refactor\r\n- [x] Docs / instructions\r\n- [x] Tests / validation\r\n- [x] Security hardening\r\n- [ ] Chore / infra\r\n\r\n## Scope (select all touched areas)\r\n\r\n- [x] Tray / WinUI UX\r\n- [ ] Windows node capability\r\n- [ ] Local MCP / `winnode`\r\n- [x] Gateway / connection / pairing\r\n- [x] Setup / onboarding\r\n- [x] Permissions / privacy / security\r\n- [x] Tests / CI / docs\r\n\r\n## Linked Issue/PR\r\n\r\n- Closes #966\r\n- [ ] Related to a bug or regression\r\n\r\n## Validation\r\n\r\nCurrent commit: `4a70b196 Scope Tailscale recovery to managed gateways`\r\n\r\n- `.\\build.ps1`\r\n  - Passed: Shared, CLI, WinNode CLI, SetupEngine, and WinUI builds.\r\n- `dotnet test .\\tests\\OpenClaw.SetupEngine.Tests\\OpenClaw.SetupEngine.Tests.csproj --no-restore`\r\n  - Passed: 448, Failed: 0, Skipped: 0.\r\n- `dotnet test .\\tests\\OpenClaw.Shared.Tests\\OpenClaw.Shared.Tests.csproj --no-restore`\r\n  - Passed: 2724, Failed: 0, Skipped: 31.\r\n- `dotnet test .\\tests\\OpenClaw.Tray.Tests\\OpenClaw.Tray.Tests.csproj --no-restore`\r\n  - Passed: 1671, Failed: 0, Skipped: 0.\r\n- `dotnet test .\\tests\\OpenClaw.Tray.Tests\\OpenClaw.Tray.Tests.csproj --no-restore --filter FullyQualifiedName~ConnectionPageTailscaleRecoveryTests`\r\n  - Passed: 4, Failed: 0, Skipped: 0.\r\n- `git diff --check`\r\n  - Passed.\r\n\r\n## Real behavior proof\r\n\r\n### Current-head automated proof\r\n\r\nThe current head includes focused regression coverage for the security and failure boundaries requested in review:\r\n\r\n- happy-path Serve finalization: exact HTTPS proxy target, device-pair public URL write, WSS endpoint publication, and root-owned Serve operation;\r\n- browser/HTTPS approval polling until configured or bounded timeout;\r\n- Serve health-check failure rolls back Funnel/Serve state, logs out, and disables `tailscaled` before pairing;\r\n- Tailscale transport with identity trust off keeps `gateway.auth.allowTailscale=false` and preserves shared/bootstrap/device-token precedence;\r\n- Tailscale-disabled fresh and replacement pipelines skip only Tailscale steps;\r\n- Funnel detection rejects public exposure and surfaces recovery guidance; cleanup resets Funnel and Serve before daemon teardown.\r\n\r\n### Current-head WinUI managed vs. unmanaged Tailscale recovery proof\r\n\r\n- Environment tested: Windows 11 with two isolated Companion profiles. Each profile used a deliberately non-resolving fake `wss://[redacted].ts.net` endpoint; no real tailnet hostname, credential, or WSL gateway was used.\r\n- PR head / commit tested: `4a70b196 Scope Tailscale recovery to managed gateways`.\r\n- Exact steps:\r\n  1. Started Companion with an app-owned record marked `IsLocal=true` and `SetupManagedDistroName=OpenClawGateway-Proof`, then allowed the fake WSS connection to fail.\r\n  2. Repeated with an external/manual `.ts.net` record without a managed-distro marker.\r\n- Live WinUI diagnostic:\r\n  - The managed record visibly rendered **Tailscale gateway unavailable** and **Check Tailscale access**, including the Windows sign-in, same-tailnet, `tailscaled`, Serve, OpenClaw service, Funnel, WSS-only, and no-localhost-fallback guidance.\r\n  - The manual/external record visibly rendered **Can't reach gateway** and only the ordinary gateway-host, network/VPN, and SSH-tunnel recovery guidance. It did not display the Tailscale-specific recovery path.\r\n- Observed result: Dedicated Tailscale recovery is scoped to app-owned generated WSL gateways; external/manual `.ts.net` gateways retain ordinary network recovery.\r\n\r\n### Current-head live Windows/WSL/Tailscale proof\r\n\r\n- Environment tested: Windows host with WSL2 and Windows Tailscale connected to the same tailnet as the replacement `OpenClawGateway` distro.\r\n- PR head / commit tested: `4a70b196 Scope Tailscale recovery to managed gateways`.\r\n- Setup result: generated app-owned record is `wss://…ts.net`, named `Tailscale (OpenClawGateway)`, marked local, and retains the managed distro association. It has no shared or bootstrap token.\r\n- Tailscale state: Windows and WSL MagicDNS suffixes matched; `tailscaled` was active as root; the non-root `openclaw` user gateway service was active and could run `tailscale whois`.\r\n- Serve and public exposure: Windows HTTPS to the generated hostname returned `200`; `tailscale serve status --json` contained exactly one `127.0.0.1:18789` proxy; neither Serve nor `tailscale funnel status --json` reported a public Funnel flag.\r\n- Identity trust: `gateway.auth.allowTailscale=true`. A Windows-originated WSS `connect` with no shared/bootstrap/device-token fields and no device identity reached `NOT_PAIRED / DEVICE_IDENTITY_REQUIRED`, rather than token authorization rejection. The same token-free request with the already-paired device's signed identity returned `ok: true`. This proves the intended layered path: Serve-verified tailnet identity plus normal paired-device identity, without silently falling back to a shared token.\r\n- Companion result: `openclaw nodes status` reported one paired and connected node; `openclaw nodes invoke --command device.info --params '{}'` returned `ok: true` through the WSS record.\r\n- Redaction: setup logs contained zero `tskey-` matches and zero `login.tailscale.com` authorization URLs.\r\n\r\n- Screenshot/artifact links verified? \r\n- \r\n<img width=\"986\" height=\"643\" alt=\"Unmanaged Tailscale recovery\" src=\"https://github.com/user-attachments/assets/682a289d-c921-443a-b04c-f8f8ec856afd\" />\r\n<img width=\"986\" height=\"643\" alt=\"Managed Tailscale recovery\" src=\"https://github.com/user-attachments/assets/624ea661-54e4-42f9-85df-74c20a45cef2\" />\r\n\r\n- Not verified / blocked: A fresh destructive rollback/uninstall execution was intentionally not repeated after the successful live setup, to preserve the working gateway. The current-head rollback and cleanup paths are covered by the focused automated tests above. Funnel, Headscale, Tailscale SSH, subnet routing, and named Tailscale Services remain intentionally out of scope.\r\n\r\n## Security Impact (required)\r\n\r\n- New permissions/capabilities? (`Yes`)\r\n- Secrets/tokens handling changed? (`Yes`)\r\n- New/changed network calls? (`Yes`)\r\n- Command/tool execution surface changed? (`No`)\r\n- Data access scope changed? (`No`)\r\n- If any `Yes`, explain risk + mitigation:\r\n  - Private Serve is opt-in and OpenClaw remains loopback-bound inside WSL.\r\n  - `tailscale up`, Serve, reset, logout, and daemon administration are root-owned. The gateway account receives no Tailscale operator authority.\r\n  - Tailscale identity trust is separately opt-in. When enabled, verified tailnet identity and tailnet ACLs become part of the gateway authorization boundary; token/device credentials remain available.\r\n  - Auth keys are transient, never accepted through CLI arguments or persisted config, and setup logs redact auth keys and Tailscale authorization URLs.\r\n  - Funnel is unsupported, detected, and rejected.\r\n\r\n## Compatibility / Migration\r\n\r\n- Backward compatible? (`Yes`)\r\n- Config/env changes? (`Yes`)\r\n- Migration needed? (`No`)\r\n- Existing managed gateways remain unchanged. To opt in, create or replace an app-generated WSL gateway and enable **Tailnet access with Tailscale Serve**.\r\n- Optional headless inputs: `--tailscale`, `--tailscale-trust-auth`, `--tailscale-auth browser|auth-key`, `--tailscale-hostname`, and `OPENCLAW_SETUP_TAILSCALE_AUTH_KEY` for auth-key mode.\r\n\r\n## Review Conversations\r\n\r\n- [x] I replied to or resolved every bot review conversation I addressed in this PR.\r\n- [x] I left unresolved only conversations that still need reviewer or maintainer judgment.\r\n",
+        "branch": "codex/tailscale",
+        "head_sha": "4a70b1964e9acfb0131a5a01c9fbc4a45cefd490",
+        "author": "andyeskridge",
+        "labels": [
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look",
+          "P2",
+          "proof: sufficient",
+          "merge-risk: 🚨 security-boundary",
+          "merge-risk: 🚨 auth-provider"
+        ],
+        "files": [
+          {
+            "path": "docs/WSL_GATEWAY_ADMIN.md",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine.UI/Pages/CapabilitiesPage.xaml",
+            "additions": 22,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine.UI/Pages/CapabilitiesPage.xaml.cs",
+            "additions": 100,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine.UI/Pages/ProgressPage.xaml",
+            "additions": 9,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine.UI/Pages/ProgressPage.xaml.cs",
+            "additions": 32,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/Program.cs",
+            "additions": 30,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupContext.cs",
+            "additions": 91,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupLogger.cs",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupPipeline.cs",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupReviewSummary.cs",
+            "additions": 27,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupSteps.cs",
+            "additions": 47,
+            "deletions": 14,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/TailscaleSetupSteps.cs",
+            "additions": 643,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/default-config.json",
+            "additions": 10,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Pages/ConnectionPage.xaml.cs",
+            "additions": 7,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Pages/ConnectionPagePlan.cs",
+            "additions": 45,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Services/SetupExistingGatewayClassifier.cs",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupConfigTests.cs",
+            "additions": 86,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupLoggerTests.cs",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupPipelineTests.cs",
+            "additions": 45,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupStepsTests.cs",
+            "additions": 578,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/AppRefactorContractTests.cs",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/ConnectionPageTailscaleRecoveryTests.cs",
+            "additions": 67,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/StartupSetupStateTests.cs",
+            "additions": 21,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.Tray.Tests/WslKeepAlivePolicyTests.cs",
+            "additions": 15,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 24,
+        "additions": 1931,
+        "deletions": 29,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-967",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-967.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 0,
+          "gatingTotal": 0,
+          "counts": {},
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "PR is not opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:999:4990483247:2026-07-17T16:28:15Z:clawsweeper_auto_repair",
+      "comment_id": "4990483247",
+      "comment_version_key": "4990483247:2026-07-17T16:28:15Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/999#issuecomment-4990483247",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 999,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-16T09:50:51Z",
+      "comment_updated_at": "2026-07-17T16:28:15Z",
+      "comment_body_sha256": "3f76e0999f95bf1cbdd3b1fbec173a92417c83cc9e5513e880da5f7841cf0cd5",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper auto repair",
+      "intent": "clawsweeper_auto_repair",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=aa721f5fc2f76d2cb9f3615ab6412e28f3d3403c)",
+      "review_summary": "The PR changes compact-number formatting, setup orchestration and Gateway reload handling around onboarding, setup progress and documentation, focused tests, and the default OpenClaw package.\n\nReproducibility: yes. for the merge-blocking contract defect: the current diff directly pins and tests a beta package while the PR body and canonical issue specify stable-by-default behavior. The complete after-fix WSL2 setup path has not been successfully reproduced.",
+      "review_followup": "- [P1] A maintainer must choose the stable-versus-beta default contract; after that choice, the contributor must supply successful official-package WSL2 proof for the exact selected head.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "aa721f5fc2f76d2cb9f3615ab6412e28f3d3403c",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-17T16:25:04.951Z",
+      "review_lease_owner": "github-run-29595755691-1",
+      "review_lease_comment_id": "5005253783",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "dc20fbe6c2fca23e1b30de8940c5a7c28c055932891f78a52ccbe209a921b54e",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix: stabilize OpenClaw beta setup and PT-PT formatting",
+        "body": "Related: #1000\nRelated: https://github.com/openclaw/openclaw/issues/108435\n\n## What Problem This Solves\n\nThe Windows Companion had two independent problems:\n\n1. Compact numeric labels were culture-sensitive under `pt-PT` and other decimal-comma locales.\n2. The Companion-owned setup path did not safely coordinate Gateway reload and restart behavior while the native OpenClaw wizard was running.\n\nThe Setup Engine also still defaulted to OpenClaw `2026.6.11`. This PR moves the supported default to the current stable release, `2026.7.1`, while keeping beta validation separate from the stable install path.\n\n## Ownership and Design\n\n- The Companion remains the owner of WSL, systemd, Gateway lifecycle, Windows Node bootstrap, and setup progress.\n- OpenClaw remains the owner of the native onboarding wizard.\n- The Companion uses the released, closed `wizard.start` schema and sends an empty parameter object. It does not require a custom OpenClaw protocol field or package.\n- Gateway reload is suspended immediately before the first `wizard.start` and restored on success, failure, or cancellation.\n- Restoration failure remains primary while preserving the original wizard exception or cancellation as inner evidence.\n- The configured Gateway reload mode is restored, then the Gateway is explicitly restarted so wizard configuration is applied.\n- Initial and reconnect wizard starts use the same schema-valid payload.\n\nOfficial source readback confirms that both OpenClaw `v2026.7.1` and `v2026.7.2-beta.2` reject additional `wizard.start` properties. This PR therefore keeps the released contract rather than adding a Companion-side workaround.\n\n## Changes\n\n- Use invariant culture at the three existing compact-number formatting boundaries.\n- Update the Setup Engine LKG from `2026.6.11` to stable `2026.7.1`.\n- Move keepalive startup before pairing and wizard work.\n- Suspend and restore `gateway.reload.mode` around the native wizard with fail-closed lifecycle handling.\n- Reuse the current canonical WSL quoting helper.\n- Include Windows Node bootstrap context in final setup progress.\n- Align setup documentation with the real pipeline order.\n- Add focused orchestration, cancellation, restoration, payload, and LKG tests.\n\n## Validation\n\nValidated on the current-main integration tree represented by this PR head:\n\n- Setup Engine: `438/438` passed on the final public branch.\n- Focused stable-version and wizard-schema tests: `4/4` passed.\n- Full repository build and the Shared/Tray suites passed on the byte-identical reviewed integration tree before the no-force PR merge update.\n- `git diff --check`: passed.\n- Repo-native x64 dev installer built successfully.\n- The installer completed with exit `0` in a disposable Windows Sandbox VM; installed product metadata was correct and the tray process remained running.\n- MXC `wxc-exec --probe` selected `appcontainer-dacl`; a bounded allowed command passed, while a write outside the sole authorized root failed with `Access is denied` and created no file.\n- Scoped `openclaw-autoreview` with Codex `gpt-5.6-sol` high: zero findings for the public branch; the final stable-target correction was `patch is correct` with confidence `0.97`.\n\nFresh GitHub CI on head `031c665b` installed official OpenClaw `2026.7.1` successfully in all three real WSL setup shards, then failed identically in `start-gateway`: the stable core retained its startup-migration lease beyond the Companion's 90-second health deadline, systemd reached its restart limit, and all later scenarios failed by cascade. This reproduces the linked OpenClaw P0 regression rather than a Companion compile, payload, or test failure.\n\nOpenClaw `2026.7.2-beta.2` release notes include the core fix that releases this lease on startup exit, but beta remains a prerelease and is not silently substituted for the Companion's stable default here. The disposable Windows Sandbox image also does not expose nested virtualization, so it cannot replace the repository's real WSL2 setup proof. This PR remains draft pending an explicit release choice and green official-package E2E.\n\n## Failed-First Evidence\n\n- The first public review caught an unsupported `installDaemon` property in `wizard.start`. Current released schemas accept only their documented fields, so the payload was corrected to an empty object and tested.\n- The first disposable-WSL run on the earlier integration line found a stale Gateway listener during restart preflight; fixture handling was corrected before the successful run.\n- Review findings about suspension timing, reconnect payload parity, bootstrap progress, restoration coverage, and cancellation/restoration priority were accepted and fixed.\n- A proposed extra restart caused only by restoring `gateway.reload.mode=restart` was rejected because OpenClaw documents `gateway.reload` as a reload exception. The Companion still performs its explicit post-wizard restart.\n\n## Scope\n\n- No `/new` or session behavior changes.\n- No permission, token, secret, model, memory, plugin, agent-policy, or OpenClaw core changes.\n- No custom OpenClaw package, protocol fork, or local-package transport is included.\n- No operator runtime was installed or mutated for this validation; installer and MXC proof ran in the disposable Windows Sandbox lane.\n\n## Security Impact\n\n- New permissions or capabilities: No.\n- Secret or token handling changes: No.\n- New network destination: No.\n- Broader command authority: No.\n\n## Review Status\n\n- [x] Rebased behavior integrated with current `main` without force-pushing the existing PR history.\n- [x] Current stable and beta release metadata verified from official GitHub Releases and npm dist-tags.\n- [x] Released `wizard.start` schemas verified for stable `2026.7.1` and beta `2026.7.2-beta.2`.\n- [x] Current-head source, focused tests, full Setup Engine suite, and scoped Auto-review passed.\n- [x] Companion installer and MXC allow/deny behavior proved in a disposable Windows VM.\n- [ ] GitHub setup E2E passes against the selected official package. Current stable `2026.7.1` fails all three shards at its startup-migration lease; beta.2 contains the candidate core fix but is not the stable default.\n- [ ] Maintainer review completed.\n\n## Agent Transcript\n\n<details>\n<summary>Sanitized operator/agent decision record</summary>\n\n- This work followed an extended operator/agent recovery and validation cycle rather than a quick version bump.\n- The operator required the Companion and OpenClaw to remain separate products with explicit ownership: the Companion owns installation and service lifecycle; OpenClaw owns native onboarding.\n- We rejected keeping a stale core indefinitely, shipping a beta as the stable default, and masking core lifecycle defects with sleeps, disabled E2E, or duplicated daemon ownership.\n- Failed-first tests and review findings were preserved, triaged against current source and released schemas, fixed only when in scope, and rerun through repository tests, disposable Windows VM proof, MXC containment proof, and scoped Auto-review.\n- The PR remains draft because its WSL2 setup layer still requires fresh repository E2E proof on the current head.\n\n</details>\n",
+        "branch": "codex/native-new-session-companion",
+        "head_sha": "aa721f5fc2f76d2cb9f3615ab6412e28f3d3403c",
+        "author": "theangrypit",
+        "labels": [
+          "status: 📣 needs proof",
+          "merge-risk: 🚨 compatibility",
+          "rating: 🦐 gold shrimp",
+          "P1",
+          "merge-risk: 🚨 availability"
+        ],
+        "files": [
+          {
+            "path": "docs/CONNECTION_PROTOCOL_RESEARCH.md",
+            "additions": 4,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/SETUP_ENGINE_REDESIGN.md",
+            "additions": 7,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Chat/ChatModelChoice.cs",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine.UI/Pages/ProgressPage.xaml.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/GatewayLkgVersion.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupPipeline.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupSteps.cs",
+            "additions": 79,
+            "deletions": 37,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.SetupEngine/SetupWizardRunner.cs",
+            "additions": 110,
+            "deletions": 13,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Pages/WorkspaceFilesModel.cs",
+            "additions": 3,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/OpenClaw.Tray.WinUI/Services/TrayDashboardSummary.cs",
+            "additions": 2,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/GatewayLkgVersionTests.cs",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupPipelineTests.cs",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "tests/OpenClaw.SetupEngine.Tests/SetupStepsTests.cs",
+            "additions": 301,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 13,
+        "additions": 517,
+        "deletions": 73,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-windows-node-999",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-windows-node-999.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "UNSTABLE",
+        "review_decision": "",
+        "checks": {
+          "total": 11,
+          "gatingTotal": 11,
+          "counts": {
+            "SUCCESS": 2,
+            "FAILURE": 4,
+            "SKIPPED": 5
+          },
+          "blockers": [
+            "test:FAILURE",
+            "e2etests (setup-connect, 45, FullyQualifiedName~OpenClaw.E2ETests.Setup.SetupAndConnectTests|Full...:FAILURE",
+            "e2etests (revocation-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.RevocationAndRecove...:FAILURE",
+            "e2etests (network-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.NetworkRecoveryTests):FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "test:FAILURE",
+            "e2etests (setup-connect, 45, FullyQualifiedName~OpenClaw.E2ETests.Setup.SetupAndConnectTests|Full...:FAILURE",
+            "e2etests (revocation-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.RevocationAndRecove...:FAILURE",
+            "e2etests (network-recovery, 25, FullyQualifiedName~OpenClaw.E2ETests.Setup.NetworkRecoveryTests):FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw-windows-node:1008:5005258465:2026-07-17T16:21:26Z:re_review",
+      "comment_id": "5005258465",
+      "comment_version_key": "5005258465:2026-07-17T16:21:26Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1008#issuecomment-5005258465",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 1008,
+      "author": "bkudiess",
+      "author_id": 7658216,
+      "author_association": "COLLABORATOR",
+      "comment_created_at": "2026-07-17T16:21:26Z",
+      "comment_updated_at": "2026-07-17T16:21:26Z",
+      "comment_body_sha256": "19230abb0a9d1c6562f4bb0b39a0398c7f99111fcfd428580c416a142c3a4537",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review — added ## validation and ## real behavior proof: current-head runtime evidence of di composition-root build at launch (`service provider initialized.` across 3 launches, validateonbuild passing in a real tray process), node/mcp health (handshake commands=25, `winnode --list-tools` = 52 tools), and representative deep-link navigation (connectionpage rendered, activation hook a safe no-op). the live clean-shutdown disposal line could not be captured because validation ran in a switched windows session (session 2, not the active console), so the tray close menu couldn't be driven; the ordered `service provider` disposal step and no-double-dispose ownership are covered by source-contract + unit tests",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": "— added ## Validation and ## Real behavior proof: current-head runtime evidence of DI composition-root build at launch (`Service provider initialized.` across 3 launches, ValidateOnBuild passing in a real tray process), node/MCP health (handshake commands=25, `winnode --list-tools` = 52 tools), and representative deep-link navigation (ConnectionPage rendered, activation hook a safe no-op). The live clean-shutdown disposal line could not be captured because validation ran in a switched Windows session (session 2, not the active console), so the tray Close menu couldn't be driven; the ordered `service provider` disposal step and no-double-dispose ownership are covered by source-contract + unit tests.",
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "newer re-review command supersedes this request"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:1012:5005089779:2026-07-17T16:00:34Z:clawsweeper_needs_human",
+      "comment_id": "5005089779",
+      "comment_version_key": "5005089779:2026-07-17T16:00:34Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1012#issuecomment-5005089779",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 1012,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-17T16:00:34Z",
+      "comment_updated_at": "2026-07-17T16:00:34Z",
+      "comment_body_sha256": "d3caeebc9c6e2d275aec40883d6b743b0c2841a9a56744cf97fb14211af99bbb",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] Keep the PR in human review until the contributor supplies the required after-fix real-gateway proof; no mechanical code repair is currently identified.; Cleared: The patch adds no permissions, dependency, credential, network, command-execution, persistence, or supply-chain changes. (sha=e36992fb6ef74610852ce34416d627cebc2f9571)",
+      "review_summary": "The PR clones each gateway session object before returning or publishing a session snapshot and adds a regression test proving later tracked-state updates cannot mutate an earlier snapshot.\n\nReproducibility: yes. at source level: retaining live object references makes a captured snapshot change after the same tracked session is updated, and the focused regression test directly expresses that path. An independent live gateway reproduction was not established during this read-only review.",
+      "review_followup": "- [P1] Keep the PR in human review until the contributor supplies the required after-fix real-gateway proof; no mechanical code repair is currently identified.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e36992fb6ef74610852ce34416d627cebc2f9571",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-17T15:57:27.102Z",
+      "review_lease_owner": "github-run-29593967756-1",
+      "review_lease_comment_id": "5005039519",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "6b8feb1ab80af9b88cba316046bd1e7cd92c235ed10fe62e09d24adffc66a307",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    },
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw-windows-node:1011:5004252875:2026-07-17T15:18:41Z:clawsweeper_needs_human",
+      "comment_id": "5004252875",
+      "comment_version_key": "5004252875:2026-07-17T15:18:41Z",
+      "comment_url": "https://github.com/openclaw/openclaw-windows-node/pull/1011#issuecomment-5004252875",
+      "repo": "openclaw/openclaw-windows-node",
+      "target_branch": "main",
+      "issue_number": 1011,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-17T14:23:17Z",
+      "comment_updated_at": "2026-07-17T15:18:41Z",
+      "comment_body_sha256": "ea1912e2a8f8fe70788ecc8e2285815c2f839513b7324ec6dab57da956a8dc97",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "- [P1] No automated code repair is indicated; merge review should resume after the contributor supplies inspectable current-head proof from the actual Windows setup cancellation path.; Cleared: The patch changes cancellation control flow and local test infrastructure without adding production dependencies, permissions, credential handling, artifact downloads, or command-execution surface. (sha=294ef1798befc37fae1a4d8dc83c7a4c72ea9c2e)",
+      "review_summary": "The branch propagates caller cancellation immediately through node pairing, preserves genuine timeout handling, and adds loopback regression tests with shared test infrastructure.\n\nReproducibility: yes. at source level: cancelling the caller token during the node-connection wait is deterministically converted to a timeout and enters retry handling on current main. The focused loopback tests support this path, although this read-only review did not execute them.",
+      "review_followup": "- [P1] No automated code repair is indicated; merge review should resume after the contributor supplies inspectable current-head proof from the actual Windows setup cancellation path.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "294ef1798befc37fae1a4d8dc83c7a4c72ea9c2e",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-17T15:16:02.523Z",
+      "review_lease_owner": "github-run-29591013197-1",
+      "review_lease_comment_id": "5004672775",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "582f6851d6780c689d08c6557d0bd39ca626103810b5b5800ca39220f9d62f7c",
+      "finding_id": null,
       "status": "skipped",
       "actions": [],
       "reason": "comment version already processed in ledger"
@@ -85,19 +1173,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3189,
+    "total_ms": 9904,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 493
+        "ms": 1114
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1558
       },
       {
         "name": "classify_comment_commands",
-        "ms": 138
+        "ms": 3320
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +1201,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2360
+        "ms": 3752
       },
       {
         "name": "append_ledger",
