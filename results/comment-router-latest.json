@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T03:34:06.411Z",
+  "generated_at": "2026-07-17T03:35:30.109Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T00:34:04.274Z",
+  "since": "2026-07-17T00:35:27.607Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    108107
+    109561
   ],
   "comment_ids": [
-    4998634176
+    4998633948
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:108107:4998634176:2026-07-17T03:16:48Z:re_review",
-      "comment_id": "4998634176",
-      "comment_version_key": "4998634176:2026-07-17T03:16:48Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/108107#issuecomment-4998634176",
+      "idempotency_key": "comment-router:openclaw/openclaw:109561:4998633948:2026-07-17T03:16:45Z:re_review",
+      "comment_id": "4998633948",
+      "comment_version_key": "4998633948:2026-07-17T03:16:45Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109561#issuecomment-4998633948",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 108107,
+      "issue_number": 109561,
       "author": "lzyyzznl",
       "author_id": 41978486,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T03:16:48Z",
-      "comment_updated_at": "2026-07-17T03:16:48Z",
+      "comment_created_at": "2026-07-17T03:16:45Z",
+      "comment_updated_at": "2026-07-17T03:16:45Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -77,67 +77,53 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(ui): add AbortSignal.timeout to nostr profile fetch calls",
-        "body": "## Summary\n\n**Problem**: `putNostrProfile` and `importNostrProfile` in the channels page do not set a deadline on their fetch calls. If the Nostr gateway stops responding, these fetches hang indefinitely, blocking profile configuration submission and import for the channel.\n\n**Solution**: Add `AbortSignal.timeout(15_000)` to both fetch calls. When the gateway does not respond within 15 seconds, the signal aborts, the fetch rejects, and the caller propagates the error — the UI can then surface the failure to the user rather than silently hanging.\n\n**What changed / NOT changed**: One new constant `NOSTR_PROFILE_TIMEOUT_MS` (15 s) and one `signal` parameter added to each of the two existing `fetch()` calls in `ui/src/pages/channels/nostr-profile-ops.ts`. No API, CLI, config surface, or public interface changed. No dependencies added.\n\n**merge-risk declaration**: No — timeout addition to background network fetches. No session state, auth flow, message delivery, or security boundary involved. Error path (rejected fetch → thrown in async function) already exists.\n\n## What Problem This Solves\n\n**Problem**:\n`putNostrProfile` and `importNostrProfile` in the channels page do not set a deadline on their fetch calls. If the Nostr gateway stops responding, these fetches hang indefinitely, blocking profile configuration submission and import for the channel.\n\n**Root Cause**:\n`putNostrProfile` and `importNostrProfile` in the channels page do not set a deadline on their fetch calls. If the Nostr gateway stops responding, these fetches hang indefinitely, blocking profile configuration submission and import for the channel.\n\n**Solution**:\nAdd `AbortSignal.timeout(15_000)` to both fetch calls. When the gateway does not respond within 15 seconds, the signal aborts, the fetch rejects, and the caller propagates the error — the UI can then surface the failure to the user rather than silently hanging.\n\n## Evidence\n### 1. Exact-path real-time evidence with the ACTUAL 15s timeout\n\nBoth `putNostrProfile` and `importNostrProfile` were exercised with the exact fetch call pattern (same URL path, method, headers, body shape, signal) against a genuinely stalled local HTTP endpoint. Unlike the earlier submission which used a 5s timeout for expedience, **this run uses the actual 15s production timeout**.\n\nTranscript (`docs/.local/scan-20260715-02/evidence-15s.log`):\n\n```\n═══ Real-path evidence for PR #108107 ═══\nTimeout: 15000ms (matches source constant)\n\n─── Test: putNostrProfile (PUT) with 15000ms timeout ───\n  → PUT http://127.0.0.1:45700/api/channels/nostr/evidence-test-account/profile\n  → signal: AbortSignal.timeout(15000)\n  → stalled — server will not respond\n  ✓ TIMEOUT after 15002ms (expected ~15000ms) — name=\"TimeoutError\"\n\n─── Test: importNostrProfile (POST) with 15000ms timeout ───\n  → POST http://127.0.0.1:45700/api/channels/nostr/evidence-test-account/profile/import\n  → signal: AbortSignal.timeout(15000)\n  → stalled — server will not respond\n  ✓ TIMEOUT after 15000ms (expected ~15000ms) — name=\"TimeoutError\"\n```\n\n**Both functions correctly abort stalled requests at 15s.** Without the fix, these fetch calls would hang indefinitely.\n\n### 2. Error propagation — caller recovery path\n\nThe callers in `channels-page.ts` both wrap the calls in try/catch:\n\n```\ntry {\n  const { data, response } = await putNostrProfile({...});\n  // ... normal flow: status checks, success state ...\n} catch (err) {\n  this.nostrProfileFormState = {\n    ...currentForm,\n    saving: false,                          // form is re-enabled\n    error: `Profile update failed: ${String(err)}`,  // user sees the error\n    success: null,\n  };\n}\n```\n\nWhen the 15s timeout fires:\n1. `fetch()` rejects with `TimeoutError`\n2. The async function propagates the rejection as-is (no try/catch inside the ops module)\n3. The caller's `catch (err)` sets `this.nostrProfileFormState.error` to `\"Profile update failed: TimeoutError\"`\n4. The form's `saving: false` resets the button, allowing the user to retry\n\nNo silent hang, no stuck form, no zombie state. The user sees an error within 15 seconds and can retry with a click.\n\n### 3. 15s deadline: rationale against slow-gateway false positives\n\nReviewer concern: 15s may false-positive under a slow gateway.\n\n**Comparison with common infrastructure timeouts:**\n\n| Layer | Component | Default timeout |\n|-------|-----------|-----------------|\n| Client | **Our AbortSignal.timeout** | **15s** |\n| Proxy | Nginx proxy_read_timeout | 60s |\n| Proxy | AWS ALB idle timeout | 60s |\n| Proxy | Cloudflare HTTP/1.1 timeout | 100s |\n| Proxy | Heroku router timeout | 30s |\n| Proxy | GCP HTTP(S) LB timeout | 30s |\n\n**Why 15s is safe:**\n- 15s is strictly *inside* (less than) all common proxy/gateway idle timeouts. The client-side abort fires before any upstream timeout could — the client controls when to give up.\n- Normal Nostr gateway requests complete in <2s (simple CRUD — PUT/POST a JSON profile, response is synchronous).\n- Even a genuinely slow gateway (e.g., 10s relay fan-out) completes well within 15s.\n- If a deployment needs more headroom, the constant is one line at the top of the file.\n- If the gateway is down rather than slow, any timeout value is correct; the purpose is to not hang forever.\n\n**Edge cases considered:**\n- **Fast resolution**: If the fetch completes before 15s, `AbortSignal.timeout` is a no-op (the signal is irrelevant after completion).\n- **Signal sharing**: Each call creates a fresh `AbortSignal.timeout()` in its argument — no cross-request signal contamination.\n- **Navigation away**: If the user navigates away before 15s, the signal fires harmlessly on the unmounted promise (no memory leak, `AbortSignal.timeout` is self-cleaning).\n\n### 4. Unit tests\n\n```\n RUN  v4.1.9\n ✓ putNostrProfile > passes AbortSignal.timeout(15000)   2ms\n ✓ putNostrProfile > rejects on timeout                15009ms\n ✓ importNostrProfile > passes AbortSignal.timeout(15000) 0ms\n ✓ importNostrProfile > rejects on timeout              15014ms\n\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n```\n\nAll 4 tests pass. Test 1 and 3 verify the signal is passed to `fetch()`. Test 2 and 4 use fake timers to verify the timeout rejection fires at exactly 15s.\n## Tests and validation\n\n- `npx vitest run ui/src/pages/channels/nostr-profile-ops.test.ts` → exit 0, 4 passed\n- Real-path evidence with actual 15s timeout → both functions abort stalled requests (see transcript above)\n- Error propagation verified → caller try/catch surfaces TimeoutError to UI and resets form state\n\n### Round 2: Invocation of changed exports with Control UI recovery\n\nThis addresses reviewer concerns that the earlier evidence recreated the fetch shape but did not invoke the changed exports or show Control UI recovery. The transcript below calls `putNostrProfile` and `importNostrProfile` directly, then simulates the caller's catch block to demonstrate recovery.\n\n```\n RUN  v4.1.9\n\n  TEST 1: putNostrProfile invocation with mock fetch\n  fetch(PUT /api/channels/nostr/test-account-123/profile)\n    signal: AbortSignal.timeout(15000) → present\n    body:     {\"name\":\"Test User\",\"about\":\"A test profile\",\"picture\":\"...\",\"display_name\":\"Test User\"}\n    headers:  {\"Content-Type\":\"application/json\",\"X-CSRF\":\"test-token\"}\n  putNostrProfile returns:\n    result.data        = {\"ok\":true,\"persisted\":true,\"error\":null}\n    result.response.ok = true\n  ✓ Export invoked: putNostrProfile returned typed { data, response }\n\n  TEST 2: importNostrProfile invocation with mock fetch\n  fetch(POST /api/channels/nostr/test-account-123/profile/import)\n    signal: AbortSignal.timeout(15000) → present\n    body:   {\"autoMerge\":true}\n  importNostrProfile returns:\n    result.data         = {\"ok\":true,\"imported\":{\"name\":\"Imported User\",\"about\":\"Imported from relays\"},\"saved\":true}\n    result.response.ok  = true\n  ✓ Export invoked: importNostrProfile returned typed { data, response }\n\n  TEST 3: Control UI recovery — timeout propagates to caller catch block\n  Simulating caller's catch block from channels-page.ts:\n    try {\n      const { data, response } = await putNostrProfile({...});\n    } catch (err) {\n      this.nostrProfileFormState = {\n        ...currentForm,\n        saving: false,\n        error: `Profile update failed: ${String(err)}`,\n        success: null,\n      };\n    }\n  Caller form state BEFORE request:  {\"saving\":true,\"importing\":false,\"error\":null,\"success\":\"Publishing...\"}\n\n  ✓ putNostrProfile > passes AbortSignal.timeout(15000)   2ms\n  ✓ importNostrProfile > passes AbortSignal.timeout(15000) 0ms\n\n  TIMEOUT after 15s → catch block fires\n  err.name:  TimeoutError\n  Caller form state AFTER recovery: {\"saving\":false,\"importing\":false,\"error\":\"Profile update failed: TimeoutError: The operation was aborted due to timeout\",\"success\":null}\n  ✓ Control UI recovered:\n    - saving: false   (submit button re-enabled)\n    - error shown     (user sees failure reason)\n    - success: null   (no stale success message)\n\n  TEST 4: Control UI recovery — server error path (non-ok response)\n  Server 500 → puts caller into recovery path:\n  recoveredState = {\"saving\":false,\"error\":\"Relay unavailable\",\"success\":null}\n  ✓ saving=false, error surfaced to user\n\n ✓ Test Files  1 passed (1)\n ✓      Tests  6 passed (6)\n```\n\n**What this covers beyond the earlier submission:**\n- Tests 1-2: Direct invocation of `putNostrProfile()` and `importNostrProfile()` as imported exports — shows they return typed `{ data, response }` objects with the correct URL, method, headers, timeout signal, and body\n- Test 3: End-to-end Control UI recovery simulation — caller form state transitions from `{saving: true}` to `{saving: false, error: \"Profile update failed: TimeoutError\"}` when the 15s timeout fires\n- Test 4-6: Server error recovery (500 → error surfaced, button re-enabled), plus signal passing verification for both exports\n\n## Risk checklist\n\n- [x] This change is backwards compatible\n- [x] This change has been tested with existing configurations\n- [ ] I have updated relevant documentation — not needed, internal mechanism change\n- [ ] Breaking changes (if any) are documented in Summary — no breaking changes\n\n/cc @openclaw/clawsweeper",
-        "branch": "fix/scan-20260715-02-nostr-profile",
-        "head_sha": "c626320133cc1b5b0b47b8a22e9452a75b7ddad0",
+        "title": "fix(scripts): preserve UTF-16 surrogate pairs in firecrawl truncation",
+        "body": "\"## Summary\\n\\nReplace `value.slice(0, max)` with `truncateUtf16Safe()` in the `truncate` helper inside `scripts/firecrawl-compare.ts` to preserve emoji during text truncation.\\n\\n## What Problem This Solves\\n\\n**Problem**: The `truncate()` function uses `value.slice(0, max)` which can split a UTF-16 surrogate pair (common in emoji), producing a broken character in diagnostic output.\\n\\n**Root Cause**: Raw `.slice()` operates on UTF-16 code units, so a supplementary-plane character (\\ud83d\\udd25 = 2 code units) at the boundary is cut in half, leaving orphaned surrogates.\\n\\n**Solution**: Replace `.slice(0, max)` with `truncateUtf16Safe(value, max)`, which adjusts the truncation boundary away from surrogate pair splits.\\n\\n## Evidence\\n\\n**Real environment tested**: Linux 6.17.0-35-generic, Node.js v25.9.0\\n\\n**Exact steps or command run after this patch**:\\n```bash\\nnode --input-type=module -e \\\"\\nimport { truncateUtf16Safe as n } from './packages/normalization-core/dist/utf16-slice.mjs';\\nconsole.log(n('abcde\\ud83d\\udd25fgh', 6));\\n\\\"\\n# Output: abcde \\u2014 emoji excluded rather than broken\\n```\\n\\n**What was not tested**: No integration tests. The change is limited to a script helper function.\\n\\n## Tests and validation\\n\\n- Verified manually: `n('abcde\\ud83d\\udd25fgh', 6)` returns `'abcde'` \\u2014 the fire emoji surrogate pair is correctly excluded rather than producing a broken character\\n\\n## Risk checklist\\n\\n- [x] This change is backwards compatible\\n- [x] This change has been tested with existing configurations\\n- [ ] I have updated relevant documentation\\n- [ ] Breaking changes (if any) are documented in Summary\\n\\nmerge-risk: low\\n\"",
+        "branch": "fix/scan-20260717-4-utf16-slice-firecrawl",
+        "head_sha": "384f72b09099e46bd7451ffb030fd0dbb974f6a7",
         "author": "lzyyzznl",
         "labels": [
-          "app: web-ui",
-          "size: S",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "scripts",
+          "size: XS",
+          "triage: needs-pr-context"
         ],
         "files": [
           {
-            "path": "ui/src/pages/channels/nostr-profile-ops.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "ui/src/pages/channels/nostr-profile-ops.ts",
-            "additions": 4,
-            "deletions": 0,
+            "path": "scripts/firecrawl-compare.ts",
+            "additions": 2,
+            "deletions": 1,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 72,
-        "deletions": 0,
+        "changedFiles": 1,
+        "additions": 2,
+        "deletions": 1,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-108107",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108107.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-109561",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109561.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 91,
-          "gatingTotal": 86,
+          "total": 80,
+          "gatingTotal": 75,
           "counts": {
-            "SUCCESS": 67,
-            "SKIPPED": 20,
-            "FAILURE": 4
+            "FAILURE": 1,
+            "SUCCESS": 50,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-compact-small-4:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "openclaw/ci-gate:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "checks-node-compact-small-4:FAILURE",
-            "check-lint:FAILURE",
-            "check-test-types:FAILURE",
-            "openclaw/ci-gate:FAILURE"
+            "Real behavior proof:FAILURE"
           ],
           "externalBlockers": []
         }
@@ -155,19 +141,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2603,
+    "total_ms": 2866,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 519
+        "ms": 530
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1530
+        "ms": 1885
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -183,7 +169,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 467
+        "ms": 365
       },
       {
         "name": "append_ledger",
