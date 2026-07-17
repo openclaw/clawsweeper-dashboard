@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T04:51:43.302Z",
+  "generated_at": "2026-07-17T04:52:30.339Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T01:51:41.619Z",
+  "since": "2026-07-17T01:52:29.391Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -40,13 +40,13 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/99772#issuecomment-4999067566",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 99772,
-      "author": "SunnyShu0925",
-      "author_id": 265248434,
+      "issue_number": 108590,
+      "author": "earlvanze",
+      "author_id": 3733346,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T04:46:55Z",
-      "comment_updated_at": "2026-07-17T04:46:55Z",
-      "comment_body_sha256": "27251055d7809bb955ab61e05e17ef72506584920eb71b13ab653d3f39f5ab8e",
+      "comment_created_at": "2026-07-17T04:48:05Z",
+      "comment_updated_at": "2026-07-17T04:48:05Z",
+      "comment_body_sha256": "67da690c4aa46240d947cd8fcfb25fbd8a2c469f3b924a6a8fefc9712424d396",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,129 +74,30 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(agents): drop orphaned thinking blocks when NO_REPLY text leaves an assistant message with only thinking content (#99620)",
-        "body": "## What Problem This Solves\n\nNO_REPLY yield-turn assistant messages with thinking blocks cause a permanent 400 loop after gateway restart when orphaned thinking blocks merge with adjacent messages into `[thinking, thinking, tool_use]`. After stripping silent text, if the remaining content is only thinking blocks, the entire message is dropped (return null) to prevent the merge.\n- Problem: `normalizeAssistantReplayBlockContent` drops NO_REPLY text but preserves companion thinking blocks. After yield artifacts are cleaned up, two assistants become adjacent. `validateAnthropicTurns` merges them into `[thinking, thinking, tool_use]`, which Anthropic rejects with \"cannot be modified.\"\n- Solution: After stripping silent text, check if remaining content is only thinking blocks. If so, drop the entire message (return null).\n- What changed: `src/agents/embedded-agent-runner/replay-history.ts` — 4 lines added to `normalizeAssistantReplayBlockContent`\n- What did NOT change: Normal replay without NO_REPLY; messages with tool_use companions; non-thinking providers; config/env surface\n\n## Change Type\n\n- [x] Bug fix\n- [ ] Feature\n- [ ] Refactor required for the fix\n- [ ] Docs\n- [ ] Security hardening\n- [ ] Chore/infra\n\n## Scope\n\n- [x] Gateway / orchestration\n- [ ] Skills / tool execution\n- [ ] Auth / tokens\n- [ ] Memory / storage\n- [ ] Integrations\n- [ ] API / contracts\n- [ ] UI / DX\n- [ ] CI/CD / infra\n\n## Linked Issue/PR\n\n- Related to #99620\n- [x] This PR fixes a bug or regression\n\n## Motivation\n\nSessions affected by NO_REPLY yield-turn thinking merge enter a permanent 400 loop on every subsequent request, requiring manual `/new` to recover. 5 production sessions were bricked in a single day (2026-07-03) per issue reporter. The fix is narrow — it only drops orphaned thinking blocks when the companion text was a silent reply — so it carries no risk for normal replay paths.\n\n## Evidence\n\n### Layer 1: Runtime payload shape proof (no API key required)\n\nThe following compares the EXACT Anthropic API payload structure produced by OpenClaw's normalizer + Anthropic converter, with and without the orphaned-thinking guard. This is the actual payload that OpenClaw would send to the Anthropic API.\n\n**Before fix** (`origin/main` — orphaned thinking survives):\n```console\nNormalized: 4 → 4 msgs\n  [0] user [text]\n  [1] assistant [thinking]              ← ORPHANED: only thinking block\n  [2] assistant [thinking, text]\n  [3] user [text]\n\nAnthropic payload: 4 entries\n  [0] user \n  [1] assistant [thinking]              ← adjacent orphan!\n  [2] assistant [thinking, text]\n  [3] user \n\nAssistant block types: [[\"thinking\"], [\"thinking\", \"text\"]]\n❌ BROKEN: adjacent assistant with [thinking] orphan → Anthropic 400\n```\n\n**After fix** (PR #99772 — orphaned message dropped):\n```console\nNormalized: 4 → 3 msgs\n  [0] user [text]\n  [1] assistant [thinking, text]        ← clean, orphan dropped\n  [2] user [text]\n\nAnthropic payload: 3 entries\n  [0] user [text]\n  [1] assistant [thinking, text]\n  [2] user [text]\n\nAssistant block types: [[\"thinking\", \"text\"]]\n✅ CLEAN: no orphaned thinking blocks\n```\n\nProof script: `scripts/proof-99772-payload-shape.mjs` — self-contained, uses actual OpenClaw runtime imports (`stripInternalMetadataForDisplay`, `isSilentReplyPayloadText`).\n\n### Layer 2: Live DeepSeek API test (thinking-capable provider)\n\nBoth before-fix and after-fix payload shapes were sent to `api.deepseek.com/anthropic/v1/messages` with a real thinking-enabled endpoint. DeepSeek's `deepseek-chat` model supports thinking blocks (similar shape to Anthropic).\n\n**After-fix payload (2 messages, clean):** ✅ HTTP 200 accepted\n```\n1 thinking block, text: \"1, 2, 3.\", stop_reason: end_turn\n```\n\n**Before-fix payload (3 messages, orphaned [thinking]):** ✅ HTTP 200 accepted\n```\n1 thinking block, text: \"1, 2, 3\", stop_reason: end_turn\n```\n*DeepSeek does not enforce Anthropic's thinking-signature replay validation, so it accepts the orphaned shape. Anthropic rejects this same shape with HTTP 400 \"cannot be modified\".*\n\nProof script: `scripts/proof-99772-deepseek-live.mjs` — shell script using curl.\n\n### Layer 3: Source-level normalization proof\n\n```bash\nnode --import tsx -e \"\nimport {normalizeAssistantReplayContent} from './src/agents/embedded-agent-runner/replay-history.js';\nconst input = [\n  {role:'user', content:[{type:'text', text:'continue'}]},\n  {role:'assistant', content:[{type:'thinking', thinking:'step by step...'}, {type:'text', text:'NO_REPLY'}]},\n  {role:'assistant', content:[{type:'thinking', thinking:'I know...'}, {type:'text', text:'result is 42'}]},\n];\nconst out = normalizeAssistantReplayContent(input);\nconsole.log('Input:', 3, '-> Output:', out.length);\nconsole.log('Orphaned dropped:', out.length < 3);\n\"\n```\n\nBefore fix (`origin/main`):\n```\nInput count: 3 -> Output count: 3\n  [0] assistant types=[thinking]       ← ORPHANED\n  [1] assistant types=[thinking, text]\nOrphaned thinking dropped: false\n```\n\nAfter fix (PR #99772):\n```\nInput count: 3 -> Output count: 2\n  [0] assistant types=[thinking, text] ← orphaned msg DROPPED\nOrphaned thinking dropped: true\n```\n\n### Matrix comparison\n\n| Input pattern | Before (main) | After (PR) | Expected |\n|---|---|---|---|\n| `user -> [thinking, NO_REPLY] -> [thinking, text] -> user` | 3 msgs, orphaned `[thinking]` survives | **2 msgs**, orphaned dropped | Corrected |\n| `user -> [thinking, text] -> user` (no NO_REPLY) | 2 msgs, unchanged | 2 msgs, unchanged | Preserved |\n| `user -> [thinking, NO_REPLY, tool_use] -> [thinking, text] -> user` | tool_use prevents drop | tool_use prevents drop | Preserved |\n\n### Test results\n\n- `replay-history.test.ts`: 40 passed (including 4 new regression tests)\n- `thinking.test.ts`: 47 passed\n- **Total**: 87 tests, all passing\n\n### What was NOT tested\n\n- **Live Anthropic API round-trip**: No Anthropic API key available. The before-fix payload shape (`[thinking, thinking, tool_use]`) is proven at the payload construction level, but the actual Anthropic API rejection has not been reproduced in this PR's CI. The runtime payload shape proof (Layer 1) shows the exact payload Anthropic would reject.\n- **The broader Anthropic replay fix (#99383)**: Closed without merge on 2026-07-16. This PR's narrow NO_REPLY guard remains the only open fix for #99620.\n\n## Root Cause\n\n`normalizeAssistantReplayBlockContent` drops silent-reply text blocks but preserves companion thinking blocks. When yield artifacts are subsequently cleaned up, two assistants become adjacent. `validateAnthropicTurns` merges them into `[thinking, thinking, tool_use]`, which Anthropic rejects because thinking blocks with valid signatures cannot be modified on replay.\n\n## Regression Test Plan\n\n- `replay-history.test.ts` — 4 new tests covering direct NO_REPLY drop, adjacent tool-use boundary, tool_use sibling preservation, and metadata-stripped NO_REPLY + 36 existing tests (40 total)\n- `thinking.test.ts` — 47 tests pass unchanged\n- **Total**: 87 tests, all passing\n\n## User-visible / Behavior Changes\n\nSessions affected by NO_REPLY yield-turn thinking merge will recover on the next provider request instead of entering a permanent 400 loop. Users with no NO_REPLY yield-turns experience no change.\n\n## Security Impact\n\n- [x] New permissions/capabilities? No\n- [x] Secrets/tokens handling changed? No\n- [x] New/changed network calls? No\n- [x] Command/tool execution surface changed? No\n- [x] Data access scope changed? No\n\n## Human Verification\n\n- Verified scenarios: NO_REPLY yield with thinking (3-msg sequence), adjacent tool-use boundary, tool_use sibling preservation, metadata-stripped NO_REPLY\n- Edge cases checked: Non-NO_REPLY text preserved, tool_use companions prevent drop, user messages preserved\n- What you did NOT verify: Live Anthropic API round-trip (no API key available)\n\n## Compatibility / Migration\n\n- [x] Backward compatible? Yes\n- [x] Config/env changes? No\n- [x] Migration needed? No\n\n## Best-fix Verdict\n\n- **Best fix**: Yes — the fix is at the right boundary (replay normalization layer), narrow enough to carry no risk, and targets the exact shape that causes the 400 error\n- **Refactor needed**: No — broader completed-turn thinking replay policy was tracked by #99383 (closed without merge); this narrow fix is the remaining path for #99620\n- **Alternative considered**: Strip all thinking blocks on replay (approached by #99383) — broader but carries more review surface; this narrow fix can land independently\n\n## AI Assistance\n\n- **AI-assisted**: Yes\n- **Co-Authored-By**: Claude Opus 4.7 <noreply@anthropic.com>\n- **Human confirmed understanding of code changes**: Yes\n\n## Risks and Mitigations\n\n- **Highest risk area**: Dropping persisted assistant replay content for Anthropic thinking-enabled sessions\n- **Mitigation**: The guard only fires when (a) silent text was dropped AND (b) the remaining content is exclusively thinking/redacted_thinking blocks. Messages with tool_use or real text companions are never dropped\n- **Compatibility**: No config, env, or migration impact. Only affects the narrow path where NO_REPLY yield-turn produces orphaned thinking blocks\n\nRelated to #99620\n",
-        "branch": "fix/no-reply-merge-thinking-99620",
-        "head_sha": "4e151881e461c8c3978ccefa2006cb9f2cc3c26e",
-        "author": "sunnyshu0925",
-        "labels": [
-          "agents",
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
-        ],
-        "files": [
-          {
-            "path": "src/agents/embedded-agent-runner/replay-history.test.ts",
-            "additions": 95,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/replay-history.ts",
-            "additions": 31,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 126,
-        "deletions": 1,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-99772",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-99772.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 114,
-          "gatingTotal": 109,
-          "counts": {
-            "SUCCESS": 69,
-            "QUEUED": 2,
-            "IN_PROGRESS": 14,
-            "SKIPPED": 28,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Scan shared kit from iOS:QUEUED",
-            "Scan iOS dead code:IN_PROGRESS",
-            "Scan shared kit from macOS:QUEUED",
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-large-6:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-prompt-snapshots:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan shared kit from iOS:QUEUED",
-            "Scan iOS dead code:IN_PROGRESS",
-            "Scan shared kit from macOS:QUEUED",
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-large-6:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-prompt-snapshots:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1875,
+    "total_ms": 3622,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 389
+        "ms": 538
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1202
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 100
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -212,7 +113,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 192
+        "ms": 2674
       },
       {
         "name": "append_ledger",
