@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T16:08:20.883Z",
+  "generated_at": "2026-07-17T16:08:28.884Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T13:08:20.314Z",
+  "since": "2026-07-17T13:08:26.321Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    104967
+    110064
   ],
   "comment_ids": [
-    5004999435
+    5005009198
   ],
-  "status_comment_id": 5005132013,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:104967:5004999435:2026-07-17T15:49:18Z:re_review",
-      "comment_id": "5004999435",
-      "comment_version_key": "5004999435:2026-07-17T15:49:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/104967#issuecomment-5004999435",
+      "idempotency_key": "comment-router:openclaw/openclaw:110064:5005009198:2026-07-17T15:50:31Z:re_review",
+      "comment_id": "5005009198",
+      "comment_version_key": "5005009198:2026-07-17T15:50:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110064#issuecomment-5005009198",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 104967,
-      "author": "qingminglong",
-      "author_id": 34085845,
+      "issue_number": 110064,
+      "author": "LiLan0125",
+      "author_id": 274403989,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T15:49:18Z",
-      "comment_updated_at": "2026-07-17T15:49:18Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "comment_created_at": "2026-07-17T15:50:31Z",
+      "comment_updated_at": "2026-07-17T15:50:31Z",
+      "comment_body_sha256": "e8f6e31a2b89eb57cf3bc975ce180f6acc456081c08f41a7363fadc16633a5fa",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -72,183 +72,84 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 97175,
-          "dispatch_key": "router-484a7ce3adb658a1",
-          "dispatched_at": "2026-07-17T16:07:59.604Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-17T16:08:00.739Z",
-          "response_comment_id": "5005132013",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(context-engine): bound deferred turn maintenance with a per-task timeout (AI-assisted)",
-        "body": "## What Problem This Solves\n\nA post-turn context-engine **deferred turn maintenance** run can wedge (for example on plugin lock contention) with **no per-task timeout below the ~360s session-level abort**. While it is wedged it holds its maintenance lane, so a user message queued behind it on the same session can wait minutes before being processed, even though the model is healthy. `session.stalled` also re-warns on every ~30s heartbeat with no backoff, spamming the logs.\n\nThis matches the report in #96703: an interactive session effectively hangs until a manual stop.\n\n## Why This Change Was Made\n\nThree concrete gaps in core code (independent of any specific context-engine plugin):\n\n1. **No per-task timeout was available on the maintenance enqueue.** `scheduleDeferredTurnMaintenance` enqueued the maintenance worker via `enqueueCommandInLane(...)` with no options. The command queue already supports a per-task timeout (`taskTimeoutMs` → rejects with `CommandLaneTaskTimeoutError` and releases the lane), but the maintenance lane never wired it up, so an operator hitting the wedge had no knob below the session-level abort.\n2. **A timed-out maintenance worker was not fenced.** Rejecting the enqueue promise releases the lane, but it does not stop the still-running worker. A wedged worker could later call `runtimeContext.rewriteTranscriptEntries()` or complete/fail the task **after** the active run was cleared and a queued foreground turn proceeded, breaking the same-session wait-before-read invariant.\n3. **`session.stalled` had no log backoff.** `session.stuck` and `session.long_running` already throttle repeats; `session.stalled` did not.\n\nThis change adds the bound + fence mechanism and ships it **opt-in / disabled by default**, so existing deployments whose background maintenance legitimately runs longer than a couple of minutes are not force-cancelled on upgrade. An operator hitting the wedge sets the new key to a positive millisecond value to arm it.\n\n## User Impact\n\n- **No behavior change on upgrade unless configured.** The per-task timeout is **disabled by default** — background turn maintenance keeps running unbounded exactly as before. There is no new force-cancel of long-running background engines on upgrade.\n- Operators experiencing the wedge **opt in** by setting `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs` to a positive millisecond value (absent or `0` keeps it disabled). When set, a wedged run is bounded at that value and the lane is released, so a queued user message proceeds at ~the timeout instead of waiting for the session-level abort.\n- When the bound is armed and fires, late maintenance side effects are **fenced**: the runtime-owned `rewriteTranscriptEntries` wrapper and the worker's terminal complete/fail/descriptor writes become no-ops, so a non-cooperative plugin cannot corrupt session state after the foreground turn has resumed. When the bound is disabled, the fence is never armed.\n- A persistently stalled session no longer floods the logs; the first `session.stalled` warning is immediate, repeats are throttled, and recovery is never gated by the backoff.\n\n### Changes\n\n- `command-queue`: add an optional `onTaskTimeout` hook fired synchronously when the per-task timeout rejects, before the lane is released.\n- `context-engine-maintenance`: resolve an **opt-in** per-task timeout from `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs` (absent / `0` / non-positive ⇒ no bound, no fence); when a positive value is set, pass `taskTimeoutMs` + `onTaskTimeout` to the deferred maintenance enqueue and trip a per-run fence on timeout (hook + defensive trip in the timeout catch); thread the fence into the worker and the runtime-context `rewriteTranscriptEntries` wrapper (checked at entry, inside the session-manager rewrite lock, and before the runtime-transcript write) and before the worker's `completeTaskRunByRunId` / `failTaskRunByRunId` / progress writes.\n- `context-engine-maintenance`: scope the timeout classification to the resolved maintenance lane — only this deferred lane's `CommandLaneTaskTimeoutError` trips the timeout/fence path; a foreign-lane queue timeout surfacing on the enqueue falls through to the normal schedule-failure path (the lane is computed once and reused for enqueue + classification so they cannot drift).\n- `session.stalled`: apply the existing `session.stuck`/`session.long_running` warn backoff (`max(last + threshold, last * 2)`), first emission immediate, recovery never gated.\n- Config schema accepts `0` (`nonnegative`) as the explicit \"disable\" sentinel; help/types/docs document the opt-in default.\n- New unit coverage: queue `onTaskTimeout` hook; timeout disabled by default and when set to `0`; configured bound + fence arming; late rewrite fenced after timeout; timed-out task not resurrected to succeeded/failed; checkpoint-after-timeout ordering; `session.stalled` backoff.\n\n## Evidence\n\nAI-assisted PR (implemented with an AI coding agent; author reviewed and understands the change).\n\n**Static / unit validation** (this branch):\n- `tsgo:core`, `tsgo:test:src` — clean\n- `command-queue.test.ts` — 34 passed; `context-engine-maintenance.test.ts` — 60 passed (incl. disabled-by-default, `0`-disables, and fence cases)\n- `oxfmt --check` + oxlint on touched files — clean\n- `CHANGELOG.md` not touched (left for maintainers at landing)\n\n**Real runtime reproduction (end-to-end, in a container).** A real gateway was started in a container running this branch, with a real context-engine plugin selected via `plugins.slots.contextEngine` whose `info.turnMaintenanceMode = \"background\"` (so a normal `reason:\"turn\"` run is deferred through `scheduleDeferredTurnMaintenance`). Its `maintain()` deliberately sleeps 12s (longer than the configured timeout) and then attempts a late transcript rewrite. The bound was **explicitly opted in** for the test: `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs = 5000`. Two real agent turns were run on one session. Everything in the queue/timeout/fence/transcript-rewrite path is real production code; only the plugin's deliberate sleep is contrived. Logs redacted (provider/model/host/ids replaced with placeholders):\n\n```\n[T+0.00s] [context-engine] deferred turn maintenance queued taskId=<id-1> sessionKey=<session> lane=context-engine-turn-maintenance:<session>\n[T+0.00s] [wedge] maintain#1 START                       # deferred maintenance begins, will sleep 12s\n[T+2.87s] (queued) second turn is waiting behind the in-flight deferred maintenance on the session lane\n[T+5.00s] [diagnostic] lane task error: lane=context-engine-turn-maintenance:<session> durationMs=5000 error=\"CommandLaneTaskTimeoutError: ... task timed out after 5000ms\"\n[T+5.00s] [agent/embedded] deferred context engine maintenance timed out: sessionKey=<session> taskId=<id-1> taskTimeoutMs=5000\n[T+5.06s] [agent/embedded] embedded run start: <turn-2>   # queued turn RELEASED at the 5s timeout — NOT after the 12s wedge, NOT after the ~360s session abort\n[T+12.00s] [wedge] maintain#1 WOKE after 12000ms sleep, attempting late rewrite   # the wedged worker finally wakes, 7s after the lane was released\n[T+12.01s] [wedge] maintain#1 late rewrite result: {\"changed\":false,\"bytesFreed\":0,\"rewrittenEntries\":0,\"reason\":\"maintenance fenced after timeout\"}   # FENCED -> no-op\n```\n\nFence scope is correct: the second turn's **foreground** maintenance (not timed out) is **not** fenced (`reason: \"no replacements requested\"`); only the timed-out **deferred** runs are fenced. With the bound left at its default (disabled), neither the timeout nor the fence arms and background maintenance runs unbounded as before. A scripted reproduction is available on request.\n\nCloses #96703\n",
-        "branch": "fix/turn-maintenance-per-task-timeout",
-        "head_sha": "2bee5f8e2eddaa14f643b996936e214a031129ae",
-        "author": "jerry-xin",
+        "title": "fix(clickclack): resolve SecretRef tokens at runtime",
+        "body": "Closes #98428\n\n## What Problem This Solves\n\nFixes an issue where users configuring ClickClack with a SecretRef-backed token could pass `openclaw secrets audit --allow-exec`, but gateway startup and outbound delivery treated non-`env` SecretRefs as unavailable and reported the channel account as not configured.\n\n## Why This Change Was Made\n\nClickClack now keeps a non-secret inspect snapshot for setup/status while resolving runtime token reads through the shared SecretRef runtime resolver. Gateway startup and outbound delivery use the runtime account snapshot, so `env`, `file`, and `exec` SecretRefs materialize before ClickClack HTTP/WebSocket clients are created.\n\nThis does not add new config fields or change ClickClack target routing; it aligns the existing token schema, secret contract, and runtime behavior.\n\n## User Impact\n\nUsers can configure `channels.clickclack.token` or `channels.clickclack.accounts.*.token` with managed SecretRefs directly. Resolvable SecretRefs count as configured for status/setup surfaces without exposing token values, and runtime paths receive the resolved token for startup and message delivery.\n\n## Evidence\n\nTargeted ClickClack regression tests on latest head:\n\n```text\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH node scripts/run-vitest.mjs extensions/clickclack/src/accounts.test.ts extensions/clickclack/src/gateway.test.ts extensions/clickclack/src/outbound.test.ts\n\nTest Files  3 passed (3)\nTests  59 passed (59)\n```\n\nClickClack plugin suite on latest head:\n\n```text\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH node scripts/run-vitest.mjs extensions/clickclack\n\nTest Files  15 passed (15)\nTests  150 passed (150)\n```\n\nShared SecretRef contract tests from the issue review:\n\n```text\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH node scripts/run-vitest.mjs src/secrets/runtime-config-collectors-channels.test.ts src/secrets/target-registry.test.ts src/secrets/target-registry.docs.test.ts\n\nTest Files  3 passed (3)\nTests  11 passed (11)\n```\n\nType and formatting checks:\n\n```text\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH pnpm tsgo:extensions\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH pnpm tsgo:test:extensions\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH pnpm format extensions/clickclack/src/accounts.ts extensions/clickclack/src/accounts.test.ts extensions/clickclack/src/gateway.ts extensions/clickclack/src/gateway.test.ts extensions/clickclack/src/outbound.ts extensions/clickclack/src/outbound.test.ts\ngit diff --check\n```\n\nAttempted local changed-code gate:\n\n```text\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH node scripts/check-changed.mjs -- extensions/clickclack/src/accounts.ts extensions/clickclack/src/accounts.test.ts extensions/clickclack/src/gateway.ts extensions/clickclack/src/gateway.test.ts extensions/clickclack/src/outbound.ts extensions/clickclack/src/outbound.test.ts\n```\n\nThe local gate delegated to Blacksmith/Testbox but could not start because the local `crabbox` binary failed its basic sanity check:\n\n```text\n[crabbox] selected binary failed basic --version/--help sanity checks\n```\n\nHosted PR CI later ran the changed-code gate successfully on this PR.\n\n## Real behavior proof\n\n**Behavior addressed:** ClickClack runtime token reads now resolve configured SecretRefs before gateway/outbound clients are created, while inspect snapshots can treat configured SecretRefs as configured without exposing token values.\n\n**Environment tested:** Linux source checkout, Node 24.16.0, patched `extensions/clickclack/src/accounts.ts` imported directly through `node --import tsx`, with a real local `exec` SecretRef provider invoked through `process.execPath`.\n\n**Steps run after the patch:** Called the actual patched `resolveClickClackAccount` and `resolveClickClackRuntimeAccount` production functions from source against a ClickClack config whose token is an `exec` SecretRef.\n\n**Evidence after fix:** Command and output from the patched source path:\n\n```text\nPATH=/home/0668001394/.config/nvm/versions/node/v24.16.0/bin:$PATH node --import tsx --no-warnings --input-type=module <<'NODE_PROOF'\nimport fs from 'node:fs';\nimport os from 'node:os';\nimport path from 'node:path';\nimport {\n  resolveClickClackAccount,\n  resolveClickClackRuntimeAccount,\n} from './extensions/clickclack/src/accounts.ts';\n\nconst tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clickclack-proof-'));\nconst resolver = path.join(tempDir, 'resolve-clickclack-token.cjs');\nconst payload = JSON.stringify({\n  protocolVersion: 1,\n  values: { CLICKCLACK_SERVICE_TOKEN: '  exec-token-from-proof  ' },\n});\nfs.writeFileSync(\n  resolver,\n  `let input = \"\";\\nprocess.stdin.setEncoding(\"utf8\");\\nprocess.stdin.on(\"data\", (chunk) => {\\n  input += chunk;\\n});\\nprocess.stdin.on(\"end\", () => {\\n  process.stdout.write(${JSON.stringify(`${payload}\\n`)});\\n});\\n`,\n  'utf8',\n);\n\nconst cfg = {\n  channels: {\n    clickclack: {\n      enabled: true,\n      baseUrl: 'https://clickclack.example',\n      workspace: 'main',\n      token: {\n        source: 'exec',\n        provider: 'clickclack_exec',\n        id: 'CLICKCLACK_SERVICE_TOKEN',\n      },\n    },\n  },\n  secrets: {\n    providers: {\n      clickclack_exec: {\n        source: 'exec',\n        command: process.execPath,\n        args: [resolver],\n        jsonOnly: true,\n        allowInsecurePath: true,\n      },\n    },\n  },\n};\n\nconst inspectAccount = resolveClickClackAccount({ cfg });\nconst runtimeAccount = await resolveClickClackRuntimeAccount({ cfg });\nconsole.log(JSON.stringify({\n  inspect: {\n    configured: inspectAccount.configured,\n    tokenLength: inspectAccount.token.length,\n  },\n  runtime: {\n    configured: runtimeAccount.configured,\n    token: runtimeAccount.token,\n    workspace: runtimeAccount.workspace,\n  },\n}, null, 2));\n\nfs.rmSync(tempDir, { recursive: true, force: true });\nNODE_PROOF\n```\n\nOutput:\n\n```text\n{\n  \"inspect\": {\n    \"configured\": true,\n    \"tokenLength\": 0\n  },\n  \"runtime\": {\n    \"configured\": true,\n    \"token\": \"exec-token-from-proof\",\n    \"workspace\": \"main\"\n  }\n}\n```\n\n**Observed result after the fix:** The inspect account reports configured without exposing the token, and the runtime account resolves the `exec` SecretRef into the trimmed ClickClack token used by gateway/outbound paths.\n\n**Not tested:** A live ClickClack server connection was not run; network behavior is covered by the existing ClickClack plugin tests and the production-path SecretRef materialization proof above.\n",
+        "branch": "fix/98428-clickclack-secretrefs",
+        "head_sha": "4e89aa18d0238b3b65a562543ae39b456ee246d6",
+        "author": "lilan0125",
         "labels": [
-          "docs",
-          "agents",
-          "size: XL",
+          "size: M",
           "proof: sufficient",
           "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 auth-provider",
+          "merge-risk: 🚨 message-delivery",
+          "merge-risk: 🚨 availability",
+          "status: ⏳ waiting on author"
         ],
         "files": [
           {
-            "path": "docs/reference/session-management-compaction.md",
+            "path": "extensions/clickclack/src/accounts.test.ts",
+            "additions": 97,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/clickclack/src/accounts.ts",
+            "additions": 113,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/clickclack/src/gateway.test.ts",
+            "additions": 76,
+            "deletions": 10,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/clickclack/src/gateway.ts",
             "additions": 2,
-            "deletions": 0,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance-abort-signal.ts",
-            "additions": 130,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance-descriptor.ts",
-            "additions": 86,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance-fence.ts",
-            "additions": 65,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
-            "additions": 605,
-            "deletions": 0,
+            "path": "extensions/clickclack/src/outbound.test.ts",
+            "additions": 36,
+            "deletions": 5,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
-            "additions": 166,
-            "deletions": 199,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
-            "additions": 238,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/transcript-rewrite.ts",
-            "additions": 96,
-            "deletions": 56,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.help.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/schema.labels.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 8,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-recovery-coordinator.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic-session-state.ts",
-            "additions": 5,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.test.ts",
-            "additions": 46,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/logging/diagnostic.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.test.ts",
-            "additions": 42,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/process/command-queue.types.ts",
-            "additions": 7,
-            "deletions": 0,
+            "path": "extensions/clickclack/src/outbound.ts",
+            "additions": 9,
+            "deletions": 6,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 19,
-        "additions": 1534,
-        "deletions": 255,
+        "changedFiles": 6,
+        "additions": 333,
+        "deletions": 39,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-97175",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-97175.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110064",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110064.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 111,
-          "gatingTotal": 106,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SUCCESS": 48,
-            "SKIPPED": 28,
-            "IN_PROGRESS": 34,
-            "NEUTRAL": 1
+            "SUCCESS": 46,
+            "SKIPPED": 43
           },
           "blockers": [
             "build-artifacts:IN_PROGRESS",
@@ -328,26 +229,26 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-17T16:07:58.876Z"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2557,
+    "total_ms": 2783,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 489
+        "ms": 413
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2065
       },
       {
         "name": "classify_comment_commands",
@@ -367,11 +268,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1988
+        "ms": 221
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
