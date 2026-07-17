@@ -2,15 +2,15 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-104054"
 mode: "autonomous"
-run_id: "29586222090"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29586222090"
+run_id: "29598353784"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29598353784"
 head_sha: "ea22ada84dd043203619e1f11484d083342f0cd7"
-workflow_conclusion: "success"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-17T14:06:54.415Z"
-canonical: "https://github.com/openclaw/openclaw/pull/104054"
+published_at: "2026-07-17T17:06:33.111Z"
+canonical: "#104054"
 canonical_issue: null
-canonical_pr: "https://github.com/openclaw/openclaw/pull/104054"
+canonical_pr: "#104054"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
@@ -25,17 +25,17 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29586222090](https://github.com/openclaw/clawsweeper/actions/runs/29586222090)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29598353784](https://github.com/openclaw/clawsweeper/actions/runs/29598353784)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
-Canonical: https://github.com/openclaw/openclaw/pull/104054
+Canonical: #104054
 
 ## Summary
 
-Repair the writable contributor branch for #104054 against current main, reconcile the compact-preview truncation change, rerun exact-head validation and Codex review, and preserve @zhangguiping-xydt's credit. Merge and close remain outside this worker's permissions.
+Make PR #104054 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
@@ -66,7 +66,7 @@ Repair the writable contributor branch for #104054 against current main, reconci
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| https://github.com/openclaw/openclaw/pull/104054 | fix_needed | planned | canonical | The canonical PR contains a narrow, evidenced fix and its contributor branch is writable, but it remains behind current main. The calibrated automerge workflow requires branch repair, current-main reconciliation, changed checks, and a clean Codex review for the exact repaired head before the comment router can consider merge. |
+| #104054 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
