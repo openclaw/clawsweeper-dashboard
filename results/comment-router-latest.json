@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-17T15:01:49.423Z",
+  "generated_at": "2026-07-17T15:01:51.353Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T12:01:47.116Z",
+  "since": "2026-07-17T12:01:48.425Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    109997
+    109825
   ],
   "comment_ids": [
-    5004520832
+    5004442420
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:109997:5004520832:2026-07-17T14:53:47Z:re_review",
-      "comment_id": "5004520832",
-      "comment_version_key": "5004520832:2026-07-17T14:53:47Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/109997#issuecomment-5004520832",
+      "idempotency_key": "comment-router:openclaw/openclaw:109825:5004442420:2026-07-17T14:44:51Z:re_review",
+      "comment_id": "5004442420",
+      "comment_version_key": "5004442420:2026-07-17T14:44:51Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109825#issuecomment-5004442420",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 109997,
-      "author": "YangManBOBO",
-      "author_id": 156181593,
+      "issue_number": 109825,
+      "author": "Monkey-wusky",
+      "author_id": 66244686,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T14:53:47Z",
-      "comment_updated_at": "2026-07-17T14:53:47Z",
-      "comment_body_sha256": "035bf5e2f0fcac9b0427c3d093088e1755a4bfe8fca11042dffca4c81f179029",
+      "comment_created_at": "2026-07-17T14:44:51Z",
+      "comment_updated_at": "2026-07-17T14:44:51Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "review",
@@ -74,45 +74,32 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "write",
+      "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(qqbot): queued and in-flight messages are lost when the gateway resumes after reconnect or restart",
-        "body": "Closes #109996\n\n## What Problem This Solves\n\nFixes an issue where QQ Bot users' messages would silently vanish — no reply, no error — whenever the gateway connection dropped, the server requested a reconnect, or the gateway process restarted while their message was still queued or being processed.\n\nThe QQ gateway replays only events with `seq` greater than the RESUME seq, but the channel committed (and persisted to the SQLite session store) each frame's seq at receipt, before the queued handler ran. Any message in flight or in the in-memory per-peer queue at disconnect/restart time was skipped by the resume replay and permanently lost. Handler failures had the same outcome: the message was logged-and-dropped locally while the already-advanced seq defeated the protocol's replay. This is the same defect family as the ClickClack reconnect-cursor race fixed in #108577, with the added severity that the premature cursor is persisted across process restarts (5-minute resume window).\n\n## Why This Change Was Made\n\nMessage-frame seqs now commit to the RESUME watermark only when the message settles. A new `SeqWatermark` tracks in-flight message seqs: the resumable value stays just below the oldest unsettled message, so RESUME replays anything still queued, in flight, or failed; frames without queued work (READY, RESUMED, interactions, acks) commit immediately, exactly as before. Settling covers every terminal state: handler completed, handler failed with a logged drop (the existing failure contract), or intentional discard (queue-full eviction, urgent queue clear). Failed handlers settle deliberately: the watermark is connection-wide and the queue keeps processing later messages after a failure, so holding the cursor behind one poison message would replay already-successful traffic for unrelated peers on every reconnect. The watermark therefore stays behind only messages that are genuinely still queued or in flight — exactly the restart/reconnect loss window this PR closes. The previously fire-and-forget message dispatch also gets a rejection handler so routing failures are logged and left pending for replay. Heartbeats intentionally do NOT use the watermark: they report the latest received frame seq (receive cursor) so the client never looks behind while a handler is running; only RESUME and persisted session state use the settlement watermark.\n\nDelivery semantics move from at-most-once (silent loss) to at-least-once across reconnects: a crash after a handler completes but before the throttled session save can redeliver an already-handled message. That matches the durable-before-ack convention used by the Telegram/WhatsApp/Slack/Signal channels.\n\n## User Impact\n\nQQ Bot messages received while an agent turn is running — or queued behind one — now survive reconnects, server-driven RECONNECTs, and gateway restarts within the resume window: the gateway replays them and the bot answers. Previously they disappeared with no trace. No config, protocol, or persisted-state shape changes.\n\n## Evidence\n\n### Live behavior proof (real GatewayConnection, real `ws` client, protocol-compatible local gateway)\n\nDriver: the production `GatewayConnection` (real websocket client, real reconnect/backoff, real event dispatcher and per-peer message queue) connected to a local WebSocket server implementing the QQ gateway protocol: HELLO → IDENTIFY → READY(s=1), and RESUME → replay events with `seq > resume seq`. A message event `s=2` is delivered while its handler is still running, then the server drops the socket.\n\nBefore (current `main`) — the client resumes at the already-committed seq and the message is lost:\n\n```\n[server] IDENTIFY received — sending READY (s=1)\n[proof] delivering message event seq=2 (handler will hang in flight)\n[client] handler invoked for m-inflight (call #1)\n[server] dropping the client connection (transient network failure)\n[client] WebSocket closed: 1006\n[server] RESUME received with seq=2 — replaying 0 event(s) with seq>2\n[proof] FINAL: resumeSeq=2 handledAfterReplay=(none)\n```\n\nAfter (this patch) — the client resumes below the unprocessed message, the server replays it, and it is handled:\n\n```\n[server] RESUME received with seq=1 — replaying 1 event(s) with seq>1\n[client] handler invoked for m-inflight (call #2)\n[client] handler COMPLETED for m-inflight\n[proof] FINAL: resumeSeq=1 handledAfterReplay=m-inflight\n```\n\n### Regression coverage\n\n- `seq-watermark.test.ts` (new): commit/register/settle semantics, out-of-order settles, replay boundary, session reset.\n- `gateway-connection.test.ts` (4 new integration tests): message seq is not committed until the handler completes; with a message in flight, heartbeats report the latest received seq (2) while reconnect RESUME asks for replay below the unprocessed message (1); a failed handler settles and a failure-then-later-success reconnect resumes past both (no cross-peer replay amplification); queue-full eviction settles so the watermark cannot wedge.\n- Against unfixed `main`, all 4 new integration tests fail (RESUME seq advances past the in-flight message); the 7 pre-existing disconnect-status tests pass unchanged in both states.\n- `node scripts/run-vitest.mjs` on `seq-watermark.test.ts` + `gateway-connection.test.ts` + `message-queue.test.ts` → 26 passed.\n- Pre-existing `outbound-dispatch.test.ts` failures on this machine reproduce identically without this change (unrelated outbound media-path surface).\n- Scoped `oxlint`, `oxfmt`, and `git diff --check` pass on the five changed files.\n\n### Sibling-surface context\n\nThe receive-path audit that found this also checked the other channels for the same premature-cursor family: Telegram's default isolated ingress advances its offset only after durable spooling, WhatsApp journals inbound before ack, Slack and Signal are durable-before-ack, and iMessage clamps its catchup cursor below failed rows — qqbot was the remaining gateway-resume surface committing before processing.\n\n\n\n",
-        "branch": "fix/qqbot-resume-seq-watermark",
-        "head_sha": "e74c2d88aac3b01e07cda3b846c37afe6f8cfeb1",
-        "author": "yangmanbobo",
+        "title": "fix(feishu): cancel non-OK streaming card response body before throwing",
+        "body": "## What Problem This Solves\n\n`FeishuStreamingSession` makes HTTP requests to the Feishu/Lark API through `fetchWithSsrFGuard`. When the API returns a non-OK response, the code throws immediately without canceling the response body. Three sites are affected: the shared card-operation helper (covers update, replace, note, close), the tenant-token request, and the card-create request.\n\n## Why This Change Was Made\n\nFollows the same pattern as #109519 (Google Chat), #109508 (docs search), #109701 (MSTeams), and #109728 (APNs relay) — cancel the response body before throwing so that upstream streams are drained and connections released.\n\n## User Impact\n\nNo user-facing change. Prevents resource leaks when Feishu/Lark API returns non-OK status codes for streaming card operations.\n\n## Evidence\n\n### Real HTTP server proof\n\n```\n$ node scripts/proofs/feishu-streaming-card-cancel-proof.mjs\nServer: http://127.0.0.1:35958\n\n=== BEFORE (throw without body.cancel) ===\n  503 Service Unavailable — body UNCONSUMED, no cancel\n\n=== AFTER (body?.cancel before throw) ===\n  503 Service Unavailable\n  body?.cancel() executed ✓\n  [server] /card-operation → client canceled stream ✓\n\n=== PR diff (streaming-card.ts:120, + 2 more sites) ===\n  if (!response.ok) {\n+   await response.body?.cancel().catch(() => undefined);\n    throw createFeishuApiError(...)\n```\n\nThe proof script starts a real HTTP server returning 503 with a slow JSON stream, then exercises the exact cancel-before-throw pattern. The server confirms `client canceled stream ✓`, demonstrating that `body?.cancel()` reaches the server and releases the connection.\n\n### Unit tests\n\nTwo new tests in `streaming-card.test.ts` verify:\n- Tenant-token fetch: 503 response → `response.body.cancel()` called once, error contains status code\n- Card-create request: 503 response → `response.body.cancel()` called once, error propagated correctly",
+        "branch": "fix/feishu-cancel-nonok-body",
+        "head_sha": "c51ed0ac4248a54fed1606befc2f5e8057967d31",
+        "author": "monkey-wusky",
         "labels": [
-          "size: M",
-          "channel: qqbot",
+          "channel: feishu",
+          "size: S",
           "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 message-delivery",
-          "status: ⏳ waiting on author"
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/qqbot/src/engine/gateway/gateway-connection.test.ts",
-            "additions": 235,
+            "path": "extensions/feishu/src/streaming-card.test.ts",
+            "additions": 55,
             "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/gateway/gateway-connection.ts",
-            "additions": 61,
-            "deletions": 11,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/qqbot/src/engine/gateway/message-queue.ts",
-            "additions": 31,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/qqbot/src/engine/gateway/seq-watermark.test.ts",
-            "additions": 90,
+            "path": "extensions/feishu/src/streaming-card.ts",
+            "additions": 3,
             "deletions": 0,
             "changeType": "ADDED"
           },
@@ -123,470 +110,50 @@
             "changeType": "ADDED"
           }
         ],
-        "changedFiles": 5,
-        "additions": 482,
-        "deletions": 14,
+        "changedFiles": 2,
+        "additions": 58,
+        "deletions": 0,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-109997",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109997.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-109825",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109825.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 83,
-          "gatingTotal": 78,
+          "total": 89,
+          "gatingTotal": 84,
           "counts": {
-            "SKIPPED": 35,
-            "SUCCESS": 47,
+            "SUCCESS": 41,
+            "SKIPPED": 42,
+            "FAILURE": 5,
             "NEUTRAL": 1
           },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/clawsweeper:650:5004327734:2026-07-17T14:31:35Z:clawsweeper_needs_human",
-      "comment_id": "5004327734",
-      "comment_version_key": "5004327734:2026-07-17T14:31:35Z",
-      "comment_url": "https://github.com/openclaw/clawsweeper/pull/650#issuecomment-5004327734",
-      "repo": "openclaw/clawsweeper",
-      "target_branch": "main",
-      "issue_number": 650,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T14:31:35Z",
-      "comment_updated_at": "2026-07-17T14:31:35Z",
-      "comment_body_sha256": "94b89fab1b4c0863ce80dc3b9997fcad0f6184d84e7d8e7b05dcc0e66a858eaa",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper needs human",
-      "intent": "clawsweeper_needs_human",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "- [P1] A maintainer should verify the real deferred publisher-to-proof transition and exact freshness behavior before merging; there is no narrow code defect for an automated repair worker to address.; Cleared: The diff adds no dependency, third-party action, permission, or credential expansion, and the proposed close remains behind deterministic freshness and bounded proof checks. (sha=6ecaf43fb185bdb3871796c0b7d67cf1eee43870)",
-      "review_summary": "Adds a typed deferred publication outcome that routes PR close-coverage retries from the immutable publisher into the proof-capable apply lane while preserving freshness checks and rollout compatibility.\n\nReproducibility: yes. The linked live runs and current publisher control flow provide a high-confidence source reproduction: an immutable artifact returning `retry_pr_close_coverage_proof` is treated as failed and retried without gaining proof credentials.",
-      "review_followup": "- [P1] A maintainer should verify the real deferred publisher-to-proof transition and exact freshness behavior before merging; there is no narrow code defect for an automated repair worker to address.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "6ecaf43fb185bdb3871796c0b7d67cf1eee43870",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-17T14:28:01.483Z",
-      "review_lease_owner": "github-run-29587851472-1",
-      "review_lease_comment_id": "5004271681",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "930f31784177568f3a3a249b6821066aaddf058fcbb9d22ef0cec13275598aaf",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(publish): defer close-proof retries to proof lane",
-        "body": "## Summary\n\nFixes #635's `retry_pr_close_coverage_proof` publisher loop: an immutable exact-result publisher cannot run the Codex-backed close-coverage proof, so replaying that same artifact repeatedly exhausts publication attempts and dead-letters it.\n\n## Problem\n\nThe live incident left close-coverage retry artifacts in the publisher/DLQ path. The publisher has no proof credentials, whereas the bounded read-only `apply-proof` lane does. Replaying the immutable artifact cannot change that capability boundary.\n\n## Implementation\n\n- persist a durable `deferred / close_coverage_deferred` publisher completion and let the existing proof-capable lane select it;\n- never route a deferred close recommendation directly;\n- preserve the old `refresh_required / close_coverage_retry` completion for an in-flight workflow that has new helper code but lacks the new workflow opt-in;\n- retain the source lease through the proof handoff, complete the command status as a completed review with explicit downstream proof gating, and accept only the exact trusted status-comment churn;\n- fail closed if the reviewed source revision, PR activity, or human activity changed; PATCH-style command-status updates match their raw `updated_at` and timeline `created_at` separately.\n\n## Validation\n\n```text\npnpm run build\npnpm run build:repair\npnpm run build:dashboard\npnpm exec oxfmt --check <all 9 touched files>\nnode --test --test-name-pattern \"trusted deferred close-proof command status|masked by a deferred|defers a close-coverage|close-coverage deferral|legacy close-coverage|exact event review hands immutable|select proposed PR closes\" test/apply-pr-coverage-proof-close.test.ts test/repair/event-apply-proof.test.ts test/dashboard-worker.test.ts test/sweep-workflow.test.ts test/repair/workflow-utils.test.ts\ngit diff --check\n```\n\nAll focused checks passed (7 tests). The regression tests prove both that an unchanged trusted command-status handoff reaches the bounded proof lane and that a title/body source edit is rejected before Codex proof or close work.\n\nCodex review closeout:\n\n- `codex review --uncommitted`: clean after the final PATCH/timeline fix.\n- `codex review --base origin/main`: clean; it found the publisher, queue, workflow, and apply-freshness flow internally consistent.\n\n`actionlint` is not installed on this Windows host. The broad workflow suite has pre-existing Windows/WSL baseline failures because the default `docker-desktop` WSL distro lacks `/bin/bash`; this PR's targeted workflow and queue tests pass.\n\n## Risks and rollout\n\n- The deferred path covers only the exact `retry_pr_close_coverage_proof` outcome. It does not automatically replay or alter existing DLQ rows.\n- The proof lane remains bounded and read-only until its normal guarded apply step; no close is authorized by the publisher handoff itself.\n- This touches `.github/workflows/sweep.yml`; GitHub workflow OAuth/token scope and the normal repository write-token behavior remain an operational risk to verify in CI.\n\n## Related\n\nFixes #635.\n\nRelated: #634 and #641.\n",
-        "branch": "codex/csw-041-publish-close-coverage",
-        "head_sha": "6ecaf43fb185bdb3871796c0b7d67cf1eee43870",
-        "author": "brokemac79",
-        "labels": [
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 automation",
-          "P1",
-          "rating: 🦪 silver shellfish"
-        ],
-        "files": [
-          {
-            "path": ".github/workflows/sweep.yml",
-            "additions": 18,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "dashboard/exact-review-queue.ts",
-            "additions": 18,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/clawsweeper.ts",
-            "additions": 84,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/repair/event-apply-proof.ts",
-            "additions": 17,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/repair/publish-event-result.ts",
-            "additions": 70,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/apply-pr-coverage-proof-close.test.ts",
-            "additions": 243,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/dashboard-worker.test.ts",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/repair/event-apply-proof.test.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/sweep-workflow.test.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 9,
-        "additions": 564,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawsweeper-650",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-650.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 8,
-          "gatingTotal": 7,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 7
-          },
           "blockers": [
-            "pnpm check:FAILURE"
+            "build-artifacts:FAILURE",
+            "checks-node-changed-1:FAILURE",
+            "checks-node-changed-2:FAILURE",
+            "check-lint:FAILURE",
+            "openclaw/ci-gate:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
-            "pnpm check:FAILURE"
+            "build-artifacts:FAILURE",
+            "checks-node-changed-1:FAILURE",
+            "checks-node-changed-2:FAILURE",
+            "check-lint:FAILURE",
+            "openclaw/ci-gate:FAILURE"
           ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
-      "author_readonly_authorized": false,
-      "reason": "PR is not opted into ClawSweeper autofix or automerge"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/clawsweeper:650:5004257225:2026-07-17T14:23:47Z:re_review",
-      "comment_id": "5004257225",
-      "comment_version_key": "5004257225:2026-07-17T14:23:47Z",
-      "comment_url": "https://github.com/openclaw/clawsweeper/pull/650#issuecomment-5004257225",
-      "repo": "openclaw/clawsweeper",
-      "target_branch": "main",
-      "issue_number": 650,
-      "author": "brokemac79",
-      "author_id": 255583030,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T14:23:47Z",
-      "comment_updated_at": "2026-07-17T14:23:47Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(publish): defer close-proof retries to proof lane",
-        "body": "## Summary\n\nFixes #635's `retry_pr_close_coverage_proof` publisher loop: an immutable exact-result publisher cannot run the Codex-backed close-coverage proof, so replaying that same artifact repeatedly exhausts publication attempts and dead-letters it.\n\n## Problem\n\nThe live incident left close-coverage retry artifacts in the publisher/DLQ path. The publisher has no proof credentials, whereas the bounded read-only `apply-proof` lane does. Replaying the immutable artifact cannot change that capability boundary.\n\n## Implementation\n\n- persist a durable `deferred / close_coverage_deferred` publisher completion and let the existing proof-capable lane select it;\n- never route a deferred close recommendation directly;\n- preserve the old `refresh_required / close_coverage_retry` completion for an in-flight workflow that has new helper code but lacks the new workflow opt-in;\n- retain the source lease through the proof handoff, complete the command status as a completed review with explicit downstream proof gating, and accept only the exact trusted status-comment churn;\n- fail closed if the reviewed source revision, PR activity, or human activity changed; PATCH-style command-status updates match their raw `updated_at` and timeline `created_at` separately.\n\n## Validation\n\n```text\npnpm run build\npnpm run build:repair\npnpm run build:dashboard\npnpm exec oxfmt --check <all 9 touched files>\nnode --test --test-name-pattern \"trusted deferred close-proof command status|masked by a deferred|defers a close-coverage|close-coverage deferral|legacy close-coverage|exact event review hands immutable|select proposed PR closes\" test/apply-pr-coverage-proof-close.test.ts test/repair/event-apply-proof.test.ts test/dashboard-worker.test.ts test/sweep-workflow.test.ts test/repair/workflow-utils.test.ts\ngit diff --check\n```\n\nAll focused checks passed (7 tests). The regression tests prove both that an unchanged trusted command-status handoff reaches the bounded proof lane and that a title/body source edit is rejected before Codex proof or close work.\n\nCodex review closeout:\n\n- `codex review --uncommitted`: clean after the final PATCH/timeline fix.\n- `codex review --base origin/main`: clean; it found the publisher, queue, workflow, and apply-freshness flow internally consistent.\n\n`actionlint` is not installed on this Windows host. The broad workflow suite has pre-existing Windows/WSL baseline failures because the default `docker-desktop` WSL distro lacks `/bin/bash`; this PR's targeted workflow and queue tests pass.\n\n## Risks and rollout\n\n- The deferred path covers only the exact `retry_pr_close_coverage_proof` outcome. It does not automatically replay or alter existing DLQ rows.\n- The proof lane remains bounded and read-only until its normal guarded apply step; no close is authorized by the publisher handoff itself.\n- This touches `.github/workflows/sweep.yml`; GitHub workflow OAuth/token scope and the normal repository write-token behavior remain an operational risk to verify in CI.\n\n## Related\n\nFixes #635.\n\nRelated: #634 and #641.\n",
-        "branch": "codex/csw-041-publish-close-coverage",
-        "head_sha": "6ecaf43fb185bdb3871796c0b7d67cf1eee43870",
-        "author": "brokemac79",
-        "labels": [
-          "status: 📣 needs proof",
-          "merge-risk: 🚨 automation",
-          "P1",
-          "rating: 🦪 silver shellfish"
-        ],
-        "files": [
-          {
-            "path": ".github/workflows/sweep.yml",
-            "additions": 18,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "dashboard/exact-review-queue.ts",
-            "additions": 18,
-            "deletions": 3,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/clawsweeper.ts",
-            "additions": 84,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/repair/event-apply-proof.ts",
-            "additions": 17,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/repair/publish-event-result.ts",
-            "additions": 70,
-            "deletions": 13,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/apply-pr-coverage-proof-close.test.ts",
-            "additions": 243,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/dashboard-worker.test.ts",
-            "additions": 71,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/repair/event-apply-proof.test.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/sweep-workflow.test.ts",
-            "additions": 26,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 9,
-        "additions": 564,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawsweeper-650",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-650.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "UNSTABLE",
-        "review_decision": "",
-        "checks": {
-          "total": 8,
-          "gatingTotal": 7,
-          "counts": {
-            "FAILURE": 1,
-            "SUCCESS": 7
-          },
-          "blockers": [
-            "pnpm check:FAILURE"
-          ],
-          "pending": [],
-          "terminalBlockers": [
-            "pnpm check:FAILURE"
-          ],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
+      "author_readonly_authorized": true,
       "reason": "matching ClawSweeper response comment already exists"
-    },
-    {
-      "idempotency_key": "clawsweeper-repair:openclaw/clawsweeper:648:5002448452:2026-07-17T13:37:52Z:clawsweeper_auto_merge",
-      "comment_id": "5002448452",
-      "comment_version_key": "5002448452:2026-07-17T13:37:52Z",
-      "comment_url": "https://github.com/openclaw/clawsweeper/pull/648#issuecomment-5002448452",
-      "repo": "openclaw/clawsweeper",
-      "target_branch": "main",
-      "issue_number": 648,
-      "author": "clawsweeper[bot]",
-      "author_id": 274271284,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-17T10:56:34Z",
-      "comment_updated_at": "2026-07-17T13:37:52Z",
-      "comment_body_sha256": "8448753a3b25443fb6ad81b6aa2eae71d32643cbdbb5d9f65e21f7b7923896a6",
-      "status_comment_id": null,
-      "trigger": "trusted_bot",
-      "command": "clawsweeper auto merge",
-      "intent": "clawsweeper_auto_merge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": true,
-      "trusted_bot_author": "clawsweeper[bot]",
-      "automation_source": "clawsweeper",
-      "repair_reason": "structured ClawSweeper verdict: pass (sha=0e00da738bd5898f3dfbea227301034d135e3c28)",
-      "review_summary": "Consolidates automerge repair-workflow reliability details into the Worker Health dashboard section and updates focused dashboard tests without changing telemetry collection or the API payload.\n\nReproducibility: not applicable. This PR reorganizes existing dashboard presentation rather than fixing a reproducible runtime bug.",
-      "review_followup": "- No automated repair is warranted because the exact reviewed head has no actionable defect and is already opted into automerge.",
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": "0e00da738bd5898f3dfbea227301034d135e3c28",
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": "2026-07-17T13:34:54.680Z",
-      "review_lease_owner": "github-run-29584271855-1",
-      "review_lease_comment_id": "5003803307",
-      "expected_item_updated_at": null,
-      "expected_source_revision": "0af09669e3c8d141b6fef87e73259f01bb5ae46777b31938eb1dbcca1f3f5f8c",
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
-    },
-    {
-      "idempotency_key": "comment-router:openclaw/clawsweeper:648:5003787598:2026-07-17T13:30:27Z:automerge",
-      "comment_id": "5003787598",
-      "comment_version_key": "5003787598:2026-07-17T13:30:27Z",
-      "comment_url": "https://github.com/openclaw/clawsweeper/pull/648#issuecomment-5003787598",
-      "repo": "openclaw/clawsweeper",
-      "target_branch": "main",
-      "issue_number": 648,
-      "author": "hxy91819",
-      "author_id": 8814856,
-      "author_association": "MEMBER",
-      "comment_created_at": "2026-07-17T13:30:27Z",
-      "comment_updated_at": "2026-07-17T13:30:27Z",
-      "comment_body_sha256": "b20841dd047d73b0d7cf464b323b7162a153e6790811fed6e52ea044ec073391",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "automerge",
-      "intent": "automerge",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "write",
-      "target": {
-        "kind": "pull_request",
-        "title": "Consolidate automerge worker health",
-        "body": "## What changed\n\n- removed the standalone Automerge Reliability sidebar panel\n- consolidated automerge repair workflow activity, stalls, failures, recoveries, and unresolved failures into Worker Health\n- kept PR and workflow run links while moving average runtime into secondary detail\n- labeled the data as Automerge worker operations so it is not confused with Automerge Product Health success metrics\n\n## Why\n\nAutomerge repair workflow reliability is an operational worker signal. Presenting it as a peer panel beside Worker Health made it too easy to confuse workflow failures with the separate product-level automerge success rate.\n\nThe workflow collection, cache, API payload, and hero attention signal remain unchanged.\n\n## Validation\n\n- `pnpm run build:dashboard`\n- `node --test test/dashboard-worker.test.ts` (136 passed)\n- `pnpm run check`\n- autoreview: clean, no accepted/actionable findings (`patch is correct`, confidence 0.93)\n\n",
-        "branch": "feature/consolidate-automerge-worker-health",
-        "head_sha": "0e00da738bd5898f3dfbea227301034d135e3c28",
-        "author": "hxy91819",
-        "labels": [
-          "clawsweeper:automerge",
-          "P3",
-          "status: 🚀 automerge armed",
-          "rating: 🦞 diamond lobster"
-        ],
-        "files": [
-          {
-            "path": "dashboard/worker.ts",
-            "additions": 17,
-            "deletions": 11,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "test/dashboard-worker.test.ts",
-            "additions": 15,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 2,
-        "additions": 32,
-        "deletions": 16,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-clawsweeper-648",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-clawsweeper-648.md",
-        "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
-        "review_decision": "",
-        "checks": {
-          "total": 8,
-          "gatingTotal": 7,
-          "counts": {
-            "SUCCESS": 8
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": true,
-      "author_readonly_authorized": false,
-      "reason": "automerge already completed after this command"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -595,21 +162,21 @@
   },
   "short_circuited": false,
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 2637,
+    "total_ms": 3166,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 515
+        "ms": 654
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1703
+        "ms": 2185
       },
       {
         "name": "classify_comment_commands",
-        "ms": 2518
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -625,7 +192,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 330
+        "ms": 238
       },
       {
         "name": "append_ledger",
