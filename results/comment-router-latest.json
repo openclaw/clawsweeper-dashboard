@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T08:52:07.792Z",
+  "generated_at": "2026-07-18T08:51:50.211Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T05:52:07.232Z",
+  "since": "2026-07-18T05:51:47.149Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110535
+    110485
   ],
   "comment_ids": [
-    5010636669
+    5010590988
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,19 +34,19 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110535:5010636669:2026-07-18T08:47:04Z:re_review",
-      "comment_id": "5010636669",
-      "comment_version_key": "5010636669:2026-07-18T08:47:04Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110535#issuecomment-5010636669",
+      "idempotency_key": "comment-router:openclaw/openclaw:110485:5010590988:2026-07-18T08:30:29Z:re_review",
+      "comment_id": "5010590988",
+      "comment_version_key": "5010590988:2026-07-18T08:30:29Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110485#issuecomment-5010590988",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 108089,
-      "author": "ljy-1351",
-      "author_id": 301734764,
+      "issue_number": 110485,
+      "author": "ralf003",
+      "author_id": 206904126,
       "author_association": "NONE",
-      "comment_created_at": "2026-07-18T08:47:04Z",
-      "comment_updated_at": "2026-07-18T08:47:04Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "comment_created_at": "2026-07-18T08:30:29Z",
+      "comment_updated_at": "2026-07-18T08:30:29Z",
+      "comment_body_sha256": "284445425b74f19672a4d262667db346234e7f12597ff80c7b826a16eac7492a",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,7 +74,76 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): extract Undici cause.code for ECONNRESET/ECONNREFUSED/ETIMEDOUT",
+        "body": "## Problem\nUndici (Node.js `fetch()` implementation) wraps SocketError (ECONNRESET, ECONNREFUSED, ETIMEDOUT) in a cause chain. The current code in `extractTransportErrorDetails` reads `error.code`, `error.error`, and `error.errorCode`, but misses `error.cause.code` where Undici stores these network error codes.\n\n## Fix\nAdded `error.cause.code` as the final fallback in `extractTransportErrorDetails` before returning the raw error message. One line changed in production code.\n\n## Changes\n- `src/agents/transport-stream-shared.ts`: One-line addition — reads `error.cause.code` as final fallback, and exports `extractTransportErrorDetails` for testability\n- `src/agents/transport-stream-shared.test.ts`: 2 new unit tests\n  - Undici cause.code extraction test (simulates real Undici error shape)\n  - Priority verification (cause.code checked last, never shadows existing paths)\n\n## Testing\n- 24/24 tests passing (agents-core + agents-support)\n\n## Real Behavior Proof\n\n### Live Undici Error Capture (2026-07-18, Node.js v24.16.0)\n\nReal `fetch()` call to a closed port via Undici:\n\n```json\n{\n  \"name\": \"TypeError\",\n  \"message\": \"fetch failed\",\n  \"cause\": {\n    \"code\": \"ECONNREFUSED\",\n    \"errno\": -4078,\n    \"syscall\": \"connect\"\n  }\n}\n```\n\n**Key observation**: `top-level error.code` is `undefined` on Undici-fetch failures. The error code (`ECONNREFUSED`) is only available at `error.cause.code`. Without this fix, `extractTransportErrorDetails` returns `errorCode: undefined`, and the failover classifier (`classifyFailoverReasonFromCode`) cannot identify the error as a transient network failure.\n\n### Reproduction Script Output\n\n```\nREAL UNDICI fetch() ERROR SHAPE VERIFICATION\n\nTest 1: fetch(\"https://127.0.0.1:19999\") -> TypeError: fetch failed\n  Top-level code: undefined\n  cause.code: ECONNREFUSED\n  Fix effective: YES — cause.code is the only source of the error code\n\nTest 2: fetch(\"https://127.0.0.1:1443\") -> TypeError: fetch failed\n  Top-level code: undefined\n  cause.code: ECONNREFUSED\n  Fix effective: YES — same Undici wrapping behavior\n```\n\n### Full Error Code Extraction Test\n\n```\n6 Undici network error types tested (ECONNRESET, ECONNREFUSED, ETIMEDOUT, ENOTFOUND, UND_ERR_SOCKET, UND_ERR_CONNECT_TIMEOUT):\n  Before fix: All 6 return errorCode=undefined (failover NOT triggered)\n  After fix:  All 6 return correct errorCode (failover correctly triggered as \"timeout\")\n\n3 non-Undici error types tested:\n  All unchanged — priority order preserved\n```\n\n### Failover Chain\n\n```\nfetch() -> ECONNRESET\n  -> Undici wraps: TypeError { message: \"fetch failed\", cause: { code: \"ECONNRESET\" } }\n  -> extractTransportErrorDetails (before fix): errorCode = undefined\n  -> classifyFailoverReasonFromCode(undefined) = null (no failover)\n  -> REQUEST FAILS\n\n  -> extractTransportErrorDetails (after fix): errorCode = \"ECONNRESET\"\n  -> classifyFailoverReasonFromCode(\"ECONNRESET\") = \"timeout\"\n  -> Failover to next provider\n  -> REQUEST SUCCEEDS\n```\n\n## Risk\nExtremely low. One-line logic change, new code path only activates when existing fallbacks fail, no existing behavior modified. The `cause.code` path is the last resort in the chain (`errorCode` > `code` > `error.code` > `cause.code`).",
+        "branch": "fix/ecnreset-fallback",
+        "head_sha": "268f45221d8d0b09619dccca8177e7d7c39f3891",
+        "author": "ralf003",
+        "labels": [
+          "agents",
+          "size: XS",
+          "P2",
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "src/agents/transport-stream-shared.test.ts",
+            "additions": 20,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/transport-stream-shared.ts",
+            "additions": 4,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 24,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110485",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110485.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 122,
+          "gatingTotal": 117,
+          "counts": {
+            "FAILURE": 3,
+            "SUCCESS": 77,
+            "SKIPPED": 41,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "pending": [],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "check-dependencies:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,19 +154,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2103,
+    "total_ms": 3418,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 334
+        "ms": 884
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1859
       },
       {
         "name": "classify_comment_commands",
-        "ms": 42
+        "ms": 100
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +182,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1544
+        "ms": 355
       },
       {
         "name": "append_ledger",
