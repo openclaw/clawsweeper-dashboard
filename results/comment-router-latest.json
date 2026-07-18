@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T22:26:49.705Z",
+  "generated_at": "2026-07-18T22:27:04.589Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T19:26:47.667Z",
+  "since": "2026-07-18T19:27:02.895Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    83933
+    110382
   ],
   "comment_ids": [
-    5013133264
+    5013159404
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5013159522,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:5013133264:2026-07-18T22:16:06Z:re_review",
-      "comment_id": "5013133264",
-      "comment_version_key": "5013133264:2026-07-18T22:16:06Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-5013133264",
+      "idempotency_key": "comment-router:openclaw/openclaw:110382:5013159404:2026-07-18T22:25:00Z:re_review",
+      "comment_id": "5013159404",
+      "comment_version_key": "5013159404:2026-07-18T22:25:00Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110382#issuecomment-5013159404",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "target_branch": "main",
+      "issue_number": 110382,
+      "author": "TheAngryPit",
+      "author_id": 7040636,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T22:16:06Z",
-      "comment_updated_at": "2026-07-18T22:16:06Z",
-      "comment_body_sha256": "55437c66cf70034250ca824b70866ecbb837cf6b37a4943dba4f83d50ca17b8b",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-18T22:25:00Z",
+      "comment_updated_at": "2026-07-18T22:25:00Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 5013159522,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,181 +72,113 @@
       "expected_item_updated_at": null,
       "expected_source_revision": "66211b73ee1396fc94bdaf35a403e5effea39377019e0fe1bc47bc704ff1d161",
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110382,
+          "dispatch_key": "router-cf70cdeecbaa5f65",
+          "dispatched_at": "2026-07-18T22:27:05.268Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-18T22:27:06.145Z",
+          "response_comment_id": "5013159522",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cron): skip deleteAfterRun and preserve counters for manual runs (#83538)",
-        "body": "## What Problem This Solves\n\n`openclaw cron run` (a manual/operator run) on a `deleteAfterRun` one-shot (\"at\") job used to delete the job on success — consuming the one-shot so its scheduled fire never happened (issue #83538). Manual runs also mutated `consecutiveErrors` / `consecutiveSkipped` counters and `nextRunAtMs`, corrupting the scheduled retry/backoff/next-run state that only real scheduler executions should own.\n\nThe root cause is that `applyJobResult()` had no notion of *who* triggered a run: manual, scheduled (timer), and the gateway on-exit watcher all shared one finalization path, so `shouldDelete` and the counter mutations fired for every successful run regardless of origin.\n\n## Why This Change Was Made\n\nThe fix threads an explicit `CronRunOrigin` (`\"timer\" | \"watcher-terminal\" | \"operator\"`) through cron finalization. `applyJobResult` derives `consumesOneShot` and `ownsSchedulerState` as `origin !== \"operator\"` and records `lastRunWasManual = origin === \"operator\"`, so operator runs record the outcome only (never consume a `deleteAfterRun` one-shot, never touch scheduler counters / `nextRunAtMs` / enabled state), while `timer` and `watcher-terminal` runs keep consuming and owning scheduler state — preserving the merged on-exit `deleteAfterRun` contract from #104550.\n\n`origin` is kept strictly internal. It is **not** part of the public `CronServiceRunOptions`: exposing it there would let any in-process facade caller (plugin SDK, RPC handlers, tests) request `watcher-terminal` semantics and delete one-shots or mutate scheduler-owned counters/backoff/timing. Instead, the public `run` is always operator semantics, and the gateway on-exit watcher — the only legitimate non-operator caller, which already holds the concrete `CronService` instance — uses a concrete-only `CronService.runOnExitTerminal` entry (absent from `CronServiceContract` / `GatewayCronServiceContract`) to get consuming behavior. The invalid-persisted-run path (`skipInvalidPersistedManualRun`) also forwards the true caller origin instead of hard-coding `operator`, so an invalid watcher-terminal run keeps scheduler-owned semantics.\n\n## User Impact\n\n- Debugging/manually running a scheduled `deleteAfterRun` job no longer silently cancels its upcoming scheduled fire.\n- Manual runs no longer corrupt retry backoff, auto-disable, or next-run timing of scheduled jobs.\n- Gateway on-exit watcher-terminal one-shots continue to be consumed exactly as before (no regression for the #104550 contract).\n- The scheduler-consuming origin is no longer reachable through the public cron API, so plugins/RPC/tests cannot accidentally (or intentionally) delete one-shots or mutate scheduler state via `run`.\n\n## Evidence\n\nReal-setup proof at the current head using a **real running OpenClaw gateway process and the real `openclaw cron` CLI** (not a vitest/function harness). Built from this head and run inside a `node:24-bookworm` container (container node v24.18.0; the repo engines floor is 24.15.0), against a real on-disk cron store (sqlite).\n\n```\nHead: c071ce7ca34e7a41e4fafab4a8863960fb9403c7\nGateway: OpenClaw 2026.7.2 (c071ce7)   dist/build-info.json commit = c071ce7c...\n\nBuilt-artifact fix verification (fix compiled into the running gateway):\n  dist/server-cron-*.js contains:\n    async runOnExitTerminal(id, payload) { ... }\n    run: (jobId, payload) => cron.runOnExitTerminal(jobId, payload)\n  'watcher-terminal' occurs only inside runOnExitTerminal; the public run path\n  forwards no origin.\n\nPART A — OPERATOR PRESERVATION (real `openclaw cron run`)\n  $ openclaw cron add \"partA-ok-preserve\" --at \"+2h\" --command \"echo ...\" --delete-after-run\n    -> id 3c309f88..., nextRunAtMs 1784045230759\n  $ openclaw cron run 3c309f88... --wait\n    -> {\"status\":\"ok\", exitCode 0}          (operator path, success)\n  $ openclaw cron get 3c309f88...\n    -> job STILL PRESENT, enabled:true, deleteAfterRun:true,\n       nextRunAtMs 1784045230759 (UNCHANGED), lastRunWasManual:true,\n       no consecutiveErrors / no backoff mutation\n  => successful operator run did NOT consume the one-shot, scheduler state intact.\n\nPART B — WATCHER-TERMINAL CONSUMPTION (real gateway on-exit watcher cycle)\n  $ openclaw cron add \"partB-onexit-consume\" --on-exit \"sleep 8; echo ...\" \\\n        --command \"echo ...\" --delete-after-run\n  # real gateway watcher armed + spawned the watched process (seen in ps):\n  #   bash -lc sleep 8   /   sleep 8\n  [cron] cron-exit: watcher armed { jobId: a27c2044... }\n  [cron] cron-exit: watched command exited; firing job { exitCode: 0 }\n  $ openclaw cron get a27c2044...      -> \"cron job not found\"\n  $ openclaw cron list                 -> only the 2 PART A jobs remain\n  $ sqlite3 .../openclaw.sqlite 'select job_id from cron_jobs'  -> 2 rows (no partB)\n  => real on-exit watcher-terminal run DID consume/delete the successful one-shot.\n\nOVERALL: PASS — driven end-to-end through a live gateway + operator CLI + real\non-disk store. Operator and watcher-terminal origins are cleanly separated, and\nthe scheduler-consuming origin is unreachable from the public cron API.\n```\n\nUnit/regression coverage at head: the public `CronServiceContract.run` preserves a `deleteAfterRun` one-shot (operator semantics, no scheduler-state mutation) even though it can no longer request another origin, `CronService.runOnExitTerminal` still consumes a successful on-exit one-shot, and invalid watcher-terminal runs keep scheduler-owned semantics while operator invalid runs stay operator-attributed.\n\nPersisted-state coverage for `lastRunWasManual` (`timer.backoff-config-readback.test.ts`, real on-disk sqlite store): a **fresh store** where a manual/operator error run persists `lastRunWasManual: true`, reloads from sqlite, and keeps the natural next-run slot (no backoff floor, `consecutiveErrors` untouched) so the scheduled fire still triggers on a fresh service state; and an **upgraded store** whose persisted job predates the field (no `lastRunWasManual` on disk) — on reload the absent field is treated as a scheduled run, so the error backoff window still applies and the past-due slot is correctly suppressed. This proves the new optional field degrades safely for both new and pre-existing stores.\n\n### Proof equivalence: transcript head → current head\n\nThe live-setup transcript above was captured at `c071ce7c`. The branch head has since been rebased onto newer `main` (current head `c42041b0`). Scoped to the cron runtime surface exercised by the transcript (`src/cron/service/`, `src/gateway/server-cron.ts`), the full non-test delta between `c071ce7c` and the current head is:\n\n- **`export`-keyword removals on now-module-local symbols** — `onTimer`, `executeJobCore` (`timer.ts`); `resetActiveCronTaskRunsForTests`, `CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS` (`active-run-cancellation.ts`); `DEFAULT_JOB_TIMEOUT_MS`, `AGENT_TURN_SAFETY_TIMEOUT_MS` (`timeout-policy.ts`). Values and in-module usage unchanged; no prod file outside each defining module imported them.\n- **test-support extraction** — `timer.ts` and `active-run-cancellation.ts` now expose those test-only helpers via a `globalThis` symbol registered inside an `if (process.env.VITEST || process.env.NODE_ENV === \"test\")` guard, imported by new `*.test-support.ts` modules. This block is a no-op in a production gateway.\n- **four appended `/* oxlint-disable max-lines */` directive comments** (`jobs.ts`, `ops.ts`, `timer.ts`, `server-cron.ts`).\n- **rebased-in `main` change #104430 (\"cap trigger script tool access\")** — `mergeCronPayload` and its `toolsAllow` helpers moved out of `jobs.ts` into the new `src/cron/service/payload-merge.ts`, with cross-payload-kind `toolsAllow` marker handling. This is genuine upstream behavior on the `cron.update` payload-merge / trigger-script tool-access surface, disjoint from scheduler counters and one-shot consumption; it arrived through the rebase and is not part of this PR's proof scope.\n- **`server-cron.ts` `toolsAllow` type-guard simplification** — the trigger-script call now reads `job.payload.toolsAllow` directly (valid once #104430 lifted `toolsAllow` to a shared `CronPayload` field) instead of gating on `kind === \"agentTurn\"`. This is on the trigger-script tool-access path, not the `runOnExitTerminal` / delete-after-run wiring.\n\nNone of these touch the delete-after-run / origin / backoff / one-shot-consumption / scheduler-state control flow. The `CronRunOrigin` threading, `consumesOneShot` / `ownsSchedulerState` (`origin !== \"operator\"`), `lastRunWasManual` (`origin === \"operator\"`), `shouldDelete = wouldDelete && consumesOneShot` in `timer.ts`, the `ops.ts` origin forwarding, and the `runOnExitTerminal` wiring in `server-cron.ts` are unchanged. The recorded operator-preservation and watcher-terminal-consumption behavior therefore holds on the current head. Reviewers can confirm the delta with:\n\n```\ngit diff c071ce7c c42041b00bec162b9d7851010db37ad1bb56e818 -- src/cron/service/ src/gateway/server-cron.ts\n```\n\n\n### Follow-up fix: manual ok run must not strand the one-shot slot\n\nA further defect on the same origin-threading surface: a **due** `deleteAfterRun` one-shot `at` job that receives an **operator (manual) ok run** keeps its `nextRunAtMs` preserved (operator runs do not consume the one-shot), but `computeJobNextRunAtMs`'s `at`-branch collapsed the pending slot to `undefined` whenever the last run status was `ok`. The next expired-slot maintenance recompute then wiped the slot, stranding the job as a zombie that never fires and never deletes. Existing coverage only exercised `skipped` runs, so the `ok` path was missed.\n\nFix: the ok-branch collapse in `computeJobNextRunAtMs` is now guarded by `lastRunWasManual !== true`, so only a scheduler-owned (timer) ok run retires the slot; manual/operator ok runs leave the pending scheduled fire intact. This reuses the already-persisted `lastRunWasManual` field, so it is restart-safe with no new state or migration (an absent field on a pre-upgrade store is treated as a scheduled run, preserving prior behavior). A regression test drives a manual ok run on a due deleteAfterRun one-shot through the maintenance recompute and a restart reload (slot preserved both times), then a real scheduled timer tick that fires and deletes it.\n",
-        "branch": "fix/cron-delete-after-run-manual-83538",
-        "head_sha": "522b44b51785eddd96def13185b8a50eca2cccfa",
-        "author": "jerry-xin",
+        "title": "fix(gateway): isolate wizard exits from shared process",
+        "body": "Closes #110545\n\n## What Problem This Solves\n\nGateway RPC wizard sessions inherited two CLI-owned behaviors that do not belong to a shared host process:\n\n- setup/channel runners could terminate the Gateway through `runtime.exit()`;\n- remote callers could not state whether setup should install the daemon, so downstream clients had to rely on an implicit CLI default.\n\nIn the Windows Companion beta.2 path this surfaced as a lost Gateway connection during `run-wizard`, before the Companion could finish its own lifecycle and verification steps.\n\nDownstream consumer: openclaw/openclaw-windows-node#999.\n\n## Why This Change Was Made\n\nThe Gateway owns the RPC process and request boundary, so both fixes belong in the same owner seam:\n\n- run setup and channel RPC wizards with `createNonExitingRuntime()`;\n- treat only `ExitError(0)` as normal wizard completion;\n- preserve non-zero exits as explicit session errors;\n- add optional `installDaemon` to `WizardStartParamsSchema` and forward `true`, `false`, or omission unchanged;\n- keep RPC safety defaults `skipUi: true` and `suppressGatewayTokenOutput: true` explicit.\n\nThis consolidates and replaces #109412 so the protocol contract and host-lifecycle fix are reviewed together rather than as overlapping edits to the same handler and tests.\n\n## User Impact\n\nRemote onboarding and channel setup no longer own the lifecycle of the Gateway hosting their session. Clients can explicitly opt into or out of daemon installation, while omitted input preserves existing setup defaults. Invalid/failing wizard exits remain visible as errors.\n\n## Evidence\n\nExact proof head: `76ea9be30531d7eae9fff4e8c2f7402460e3cdca`.\n\n- Official protocol generators ran in a disposable Node 24 Bookworm container pinned to `sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059`.\n- `pnpm protocol:check` passed after regenerating the tracked Swift model. Android generated outputs remained byte-for-byte unchanged.\n- `src/gateway/server-methods/wizard.test.ts`: 1 file, 7 tests passed.\n- Exact-head Gateway/WebSocket proof in `src/gateway/gateway.test.ts`: 1 file, 12 tests passed.\n- Zero-exit case: the wizard called `runtime.exit(0)`, completed with `status=done`, and the same connected Gateway answered a subsequent `health` RPC.\n- Non-zero case: the wizard called `runtime.exit(23)`, returned `status=error` with the exit code, and the same connected Gateway answered a subsequent `health` RPC.\n- `oxfmt --check src/gateway/gateway.test.ts` passed.\n- Redacted synthetic proof log SHA-256: `04a4ec91b61d940a3d3ecc1c2c943a37a4c491a56920532376943b7220bbf243`.\n- Scoped `openclaw-autoreview` on the generated Swift correction: clean, no accepted/actionable findings, correctness confidence 0.99.\n- Scoped `openclaw-autoreview` on the Gateway/WebSocket proof: clean, no accepted/actionable findings, correctness confidence 0.94.\n- `git diff --check` passed before each commit. No dependencies, workflow permissions, provider configuration, credentials, or runtime state changed.\n\nFailed-first evidence: downstream #999 reproduced the official beta.2 failure as a lost Gateway connection during `run-wizard`. The consolidated core fix now has direct exact-head process-lifecycle proof; refreshed PR CI and the downstream #999 exact-artifact run remain the final integration gates.\n\nAI-assisted: yes. The operator directed scope and acceptance criteria; the agent traced the owner boundary, consolidated the overlapping PR, ran isolated proof, and used scoped Auto-review.\n\n## Agent Transcript\n\n<details>\n<summary>Redacted operator/agent transcript</summary>\n\n```text\nOperator: Follow each repository's contribution rules. Use one issue and one PR per repo, and consolidate overlapping OpenClaw work instead of maintaining redundant PRs.\nAgent: OpenClaw issue #110545 owns the RPC wizard lifecycle defect. PR #110382 consolidates the non-exiting runtime fix with the installDaemon projection from closed PR #109412; Windows PR #999 is the downstream consumer.\nOperator: Do not push before testing everything, keep a ledger of repeated errors, run Auto-review, and provide inspectable proof.\nAgent: The Windows E2E failure was traced to the Gateway losing its process during wizard execution. The first refreshed core CI then exposed a stale generated Swift protocol model, not a new Companion defect.\nOperator: Is the OpenClaw version at least as ready as the Companion PR?\nAgent: Not yet. The protocol artifact was regenerated with the official generator, protocol checks and focused tests passed, and the one-file correction passed scoped Auto-review.\nAgent: ClawSweeper still required direct process-lifecycle evidence, so the Gateway WebSocket integration now proves both zero and non-zero exits remain session-local and that the same Gateway responds to health afterward. All 12 Gateway integration tests passed, followed by a second clean scoped Auto-review.\n```\n\nNo secrets, credentials, raw logs, private prompts, local user data, or runtime content are included.\n\n</details>\n",
+        "branch": "codex/fix-gateway-wizard-rpc-exits",
+        "head_sha": "76ea9be30531d7eae9fff4e8c2f7402460e3cdca",
+        "author": "theangrypit",
         "labels": [
           "app: web-ui",
           "gateway",
-          "size: XL",
-          "proof: supplied",
+          "size: M",
           "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "packages/gateway-protocol/src/schema/cron.ts",
-            "additions": 2,
+            "path": "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+            "additions": 4,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service-contract.ts",
+            "path": "packages/gateway-protocol/src/schema/wizard.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service.failure-alert.test.ts",
-            "additions": 87,
-            "deletions": 19,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.removal-postcommit.test.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.restart-catchup.test.ts",
+            "path": "src/gateway/gateway.test.ts",
             "additions": 45,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
-            "additions": 204,
-            "deletions": 47,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service.trigger-eval.test.ts",
-            "additions": 12,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/cron/service.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/jobs.ts",
-            "additions": 15,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.regression.test.ts",
-            "additions": 186,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/ops.ts",
-            "additions": 28,
-            "deletions": 14,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/state.ts",
-            "additions": 12,
+            "path": "src/gateway/server-methods/wizard.test.ts",
+            "additions": 137,
             "deletions": 0,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           },
           {
-            "path": "src/cron/service/timer.backoff-config-readback.test.ts",
-            "additions": 130,
-            "deletions": 6,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.regression.test.ts",
-            "additions": 916,
-            "deletions": 63,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/service/timer.ts",
-            "additions": 313,
-            "deletions": 254,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/cron/types.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server-cron.ts",
-            "additions": 4,
-            "deletions": 1,
+            "path": "src/gateway/server-methods/wizard.ts",
+            "additions": 38,
+            "deletions": 18,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 17,
-        "additions": 1979,
-        "deletions": 414,
+        "changedFiles": 5,
+        "additions": 225,
+        "deletions": 20,
         "is_clawsweeper_pr": false,
         "cluster_id": "automerge-openclaw-openclaw-108974",
         "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108974.md",
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-83933",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-83933.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110382",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110382.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 114,
-          "gatingTotal": 109,
+          "total": 119,
+          "gatingTotal": 114,
           "counts": {
-            "SUCCESS": 73,
-            "SKIPPED": 32,
-            "FAILURE": 8,
+            "SUCCESS": 83,
+            "SKIPPED": 33,
+            "QUEUED": 2,
             "NEUTRAL": 1
           },
           "blockers": [
-            "checks-node-compact-small-12:FAILURE",
-            "checks-node-compact-small-4:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "openclaw/ci-gate:FAILURE"
+            "Scan shared kit from iOS:QUEUED",
+            "Scan shared kit from macOS:QUEUED"
           ],
-          "pending": [],
-          "terminalBlockers": [
-            "checks-node-compact-small-12:FAILURE",
-            "checks-node-compact-small-4:FAILURE",
-            "check-prod-types:FAILURE",
-            "check-lint:FAILURE",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-additional-extension-package-boundary:FAILURE",
-            "openclaw/ci-gate:FAILURE"
+          "pending": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan shared kit from macOS:QUEUED"
           ],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-18T22:27:04.765Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -257,19 +189,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2275,
+    "total_ms": 3701,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 383
+        "ms": 355
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1307
+        "ms": 1227
       },
       {
         "name": "classify_comment_commands",
-        "ms": 17
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -281,11 +213,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 237
+        "ms": 1996
       },
       {
         "name": "append_ledger",
