@@ -1,17 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T15:10:06.740Z",
-  "repo": "openclaw/agent-skills",
+  "generated_at": "2026-07-18T15:09:30.145Z",
+  "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T12:10:05.767Z",
+  "since": "2026-07-18T12:09:26.063Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1000,
-  "item_numbers": [],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "max_comments": 1,
+  "item_numbers": [
+    109053
+  ],
+  "comment_ids": [
+    5011747099
+  ],
+  "status_comment_id": 5011747250,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 0,
@@ -28,7 +32,128 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:109053:5011747099:2026-07-18T15:07:19Z:re_review",
+      "comment_id": "5011747099",
+      "comment_version_key": "5011747099:2026-07-18T15:07:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109053#issuecomment-5011747099",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 109053,
+      "author": "hugenshen",
+      "author_id": 16300669,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-18T15:07:19Z",
+      "comment_updated_at": "2026-07-18T15:07:19Z",
+      "comment_body_sha256": "da05c65ea9c777c1b1e6b55ea77733d9260943f78b45e10332568d664b7fc427",
+      "status_comment_id": 5011747250,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 109053,
+          "dispatch_key": "router-4c58545a40952af2",
+          "dispatched_at": "2026-07-18T15:09:32.132Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-18T15:09:35.143Z",
+          "response_comment_id": "5003598815",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(voice-call): clamp continue poll RPCs to remaining deadline",
+        "body": "## What Problem This Solves\n\n`voicecall continue` polls `voicecall.continue.result` until an overall continue\ndeadline. Sleep between polls already clamped to the remaining budget, but each\nGateway RPC still used a fixed `VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS` (5s).\n\nNear the deadline, the final poll could therefore overrun the user-facing\ncontinue timeout by up to a full 5 seconds: the CLI waited on a Gateway request\nwhose timeout was larger than the time left on the continue budget.\n\n## Why This Change Was Made\n\nBefore every `voicecall.continue.result` call, compute `remainingMs` against the\nexisting continue deadline and pass\n`min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs)` into\n`callVoiceCallGateway`. Also skip sleep when no budget remains.\n\nThis keeps a single overall continue deadline (no new config/timeout surface)\nand makes the blocking Gateway RPC honor the same budget the sleep path already\nused.\n\n## User Impact\n\n**Before:** A pending continue near its deadline could block ~5s longer than the\nconfigured continue/poll timeout while waiting on `voicecall.continue.result`.\n\n**After:** Each poll RPC and sleep is capped by the remaining continue deadline,\nso the CLI fails closed at that budget instead of overrunning it.\n\n## Evidence\n\n- Changed: `extensions/voice-call/src/cli.ts`,\n  `extensions/voice-call/src/cli.test.ts`\n- Production path: `voicecall continue` → `voicecall.continue.start` →\n  `pollVoiceCallContinueGateway` → `callVoiceCallGateway(\"voicecall.continue.result\", …,\n  { timeoutMs: min(5000, remainingMs) })` → `callGatewayFromCli` (`timeout` option)\n- Compatibility: overall continue deadline / poll interval / default 5s Gateway\n  cap unchanged; only the final-request overrun is removed\n\n## Real behavior proof\n\n### Behavior or issue addressed\n\nWhen a continue poll is close to its deadline, the next\n`voicecall.continue.result` Gateway RPC uses the remaining budget (e.g. 1500ms),\nnot a full 5s. A Gateway that never answers `continue.result` is aborted at that\nclamped budget, so total wall time stays near the continue deadline instead of\ndeadline + ~5s.\n\n### Canonical reachability path\n\n`program.command(\"continue\")` → `voicecall.continue.start` →\n`pollVoiceCallContinueGateway` → `callVoiceCallGateway(\"voicecall.continue.result\",\n{ operationId }, { timeoutMs: min(5000, remainingMs) })` →\n`callGatewayFromCli(..., { timeout: String(timeoutMs) })` → real Gateway WebSocket\ntransport abort\n\n### Shared helper / provider constraint check\n\nUses the existing `callVoiceCallGateway` / `callGatewayFromCli` timeout option;\nno new Gateway method, config key, or deadline policy. Sleep already clamped to\nremaining budget; this change makes the RPC side match.\n\n### Real environment tested\n\n**Real Gateway WebSocket (production CLI path, no `callGatewayFromCli` mock):**\n\n- Live `ws://127.0.0.1:<port>` minimal Gateway speaking `connect` +\n  `voicecall.continue.start` / `voicecall.continue.result`\n- Auth via `OPENCLAW_GATEWAY_TOKEN`; isolated `OPENCLAW_STATE_DIR`\n- `continue.start` returns `pending` with `pollTimeoutMs: 1500`\n- `continue.result` never answers (forces client-side RPC timeout)\n- Node v22.23.1, PR head `acd395e9`\n\n**Focused caller-path regression (clock-controlled):**\n\nWith `pollTimeoutMs: 1000` and a frozen clock leaving `remainingMs = 100` before\nthe second Gateway call, the poll RPC is invoked as `timeout: \"100\"` (not\n`\"5000\"`).\n\n### Exact steps or command run after this patch\n\n```bash\n# Real Gateway WS proof (production callGatewayFromCli → live socket)\nnode scripts/run-vitest.mjs \\\n  extensions/voice-call/src/cli.gateway-deadline.proof.test.ts \\\n  --reporter=verbose\n\n# Focused clamp argument regression\nnode scripts/run-vitest.mjs extensions/voice-call/src/cli.test.ts \\\n  -t \"clamps continue.result gateway timeout to the remaining poll deadline\" \\\n  --reporter=verbose\n```\n\n### Evidence after fix\n\n**Real Gateway WebSocket — pending continue.result, clamped RPC budget**\n\n```text\nGateway methods seen: [\"connect\",\"voicecall.continue.start\",\"connect\",\"voicecall.continue.result\"]\ncontinue.result arrivals (never answered): 1\nGateway-reported RPC timeout: 1500ms\nobserved total continue wall time: 1588ms (deadline 1500ms)\ntimed-out as expected: gateway timeout after 1500ms\npre-fix worst-case (unclamped final 5000ms RPC): ~6500ms\n\n✓ clamps continue.result against a live Gateway WS and bounds wall time 1630ms\n```\n\n**Wall-clock stall stub (granted budget honored end-to-end)**\n\n```text\ngranted continue.result RPC timeouts (ms): [1200]\nfinal poll RPC timeout: 1200ms (default would be 5000ms)\nobserved total continue wall time: 1202ms (deadline 1200ms)\npre-fix worst-case (unclamped final poll): ~5002ms\ntimed-out as expected: voicecall continue timed out waiting for gateway operation\n\n✓ clamps the final continue.result RPC to the remaining deadline and bounds total wall time 1204ms\n```\n\n**Focused unit regression**\n\n```text\n✓ clamps continue.result gateway timeout to the remaining poll deadline\n  callGatewayFromCli nth=2\n    method: voicecall.continue.result\n    opts: { json: true, timeout: \"100\" }\n```\n\n### Observed result after fix\n\nAgainst a live Gateway WebSocket that withholds `voicecall.continue.result`:\n\n1. The transport aborts with `gateway timeout after 1500ms` — the clamped\n   remaining continue budget, not the old fixed 5000ms RPC timeout.\n2. Total CLI wall time is ~1588ms (≈ 1500ms deadline), not ~6500ms\n   (deadline + unclamped 5s).\n3. Real protocol frames observed: `connect` → `voicecall.continue.start` →\n   `connect` → `voicecall.continue.result`.\n\n### What was not tested\n\n- Live Twilio / provider voice call audio (this change is CLI↔Gateway poll\n  deadline math only)\n- Legacy `voicecall.continue` fallback path when `continue.start` is unknown\n  (unchanged by this PR)\n\n### Fix classification\n\nbugfix — timeout overrun / deadline clamp\n\n## AI Assistance\n\nAI-assisted. Author reviewed the remaining-deadline clamp on the continue poll\nRPC, real Gateway WebSocket proof (live `continue.result` stall), focused\nregression coverage, and removed the incorrect Tlon proof previously pasted\ninto this PR body.\n",
+        "branch": "fix/voice-call-continue-poll-remaining",
+        "head_sha": "acd395e9da31e0c803ee26323f0f9b79c3f67954",
+        "author": "hugenshen",
+        "labels": [
+          "channel: voice-call",
+          "size: S",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/voice-call/src/cli.test.ts",
+            "additions": 39,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/voice-call/src/cli.ts",
+            "additions": 15,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 54,
+        "deletions": 3,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-109053",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109053.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 95,
+          "gatingTotal": 90,
+          "counts": {
+            "SUCCESS": 52,
+            "SKIPPED": 42,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-18T15:09:30.484Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "version_not_terminal"
@@ -37,19 +162,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 1214,
+    "total_ms": 10119,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 930
+        "ms": 519
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1429
+        "ms": 2474
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 319
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -65,11 +190,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 241
+        "ms": 5978
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
