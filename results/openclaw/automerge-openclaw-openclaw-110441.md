@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-110441"
 mode: "autonomous"
-run_id: "29651409453"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29651409453"
+run_id: "29651631100"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29651631100"
 head_sha: "cd5d9408342d79a137a3a99ce13aadfbdcff44d3"
-workflow_conclusion: "success"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-18T16:12:55.288Z"
+published_at: "2026-07-18T16:28:43.644Z"
 canonical: "#110441"
 canonical_issue: null
-canonical_pr: "https://github.com/openclaw/openclaw/pull/110441"
-actions_total: 2
+canonical_pr: "#110441"
+actions_total: 1
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29651409453](https://github.com/openclaw/clawsweeper/actions/runs/29651409453)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29651631100](https://github.com/openclaw/clawsweeper/actions/runs/29651631100)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #110441
 
 ## Summary
 
-#110441 remains the sole open canonical PR. Its focused two-file cleanup patch has a passed Codex review, no hydrated human or review-bot findings, and passing source-head checks, but ClawSweeper records that the head is behind current main and the prior repair attempt failed during dependency setup. Emit a fresh contributor-branch repair artifact to rebase once, preserve ZengWen-DT's credit, validate the exact repaired head, and re-run Codex review; do not merge or close.
+Make PR #110441 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 2 |
+| Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,8 +66,7 @@ Canonical: #110441
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #110441 | fix_needed | planned | canonical | The source PR is useful, narrow, and branch-writable, but it is not merge-ready until a clean rebase onto current main and fresh exact-head validation complete. |
-| #110441 | build_fix_artifact | planned | canonical | A deterministic in-place repair is safer than a replacement PR. No close, merge, comment, or label action is authorized by this worker result. |
+| #110441 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
