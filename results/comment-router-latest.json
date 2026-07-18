@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T08:31:45.174Z",
+  "generated_at": "2026-07-18T08:31:57.936Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T05:31:42.642Z",
+  "since": "2026-07-18T05:31:56.485Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    109924
+    110526
   ],
   "comment_ids": [
-    5010588557
+    5010522809
   ],
   "status_comment_id": 5010588655,
   "max_autoclose_targets": 8,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:109924:5010588557:2026-07-18T08:29:35Z:re_review",
-      "comment_id": "5010588557",
-      "comment_version_key": "5010588557:2026-07-18T08:29:35Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/109924#issuecomment-5010588557",
+      "idempotency_key": "comment-router:openclaw/openclaw:110526:5010522809:2026-07-18T08:05:55Z:re_review",
+      "comment_id": "5010522809",
+      "comment_version_key": "5010522809:2026-07-18T08:05:55Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110526#issuecomment-5010522809",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 109924,
-      "author": "markfietje",
-      "author_id": 4325889,
+      "target_branch": null,
+      "issue_number": 110526,
+      "author": "wangmiao0668000666",
+      "author_id": 290215524,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T08:29:35Z",
-      "comment_updated_at": "2026-07-18T08:29:35Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 5010588655,
+      "comment_created_at": "2026-07-18T08:05:55Z",
+      "comment_updated_at": "2026-07-18T08:05:55Z",
+      "comment_body_sha256": "a13ffb60ae01184e4ff3ffafbf7ae63394afad97c11a4d31bb7416c7a4c8c768",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -95,24 +95,71 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "feat(gateway): pre-handshake WS verifyClient with Sec-Fetch-Site and forwarded-header hardening",
-        "body": "## What Problem This Solves\n\nOpenClaw's gateway validates browser `Origin` on the WebSocket path only **post-handshake** (in `src/gateway/server/ws-connection/connect-admission.ts`, after the socket is already open). This leaves gaps the WebSocket upgrade phase is the only reliable place to close:\n\n- **Header-smuggling / contradiction attacks** — a client forging `X-Forwarded-For` to disagree with `Forwarded` (or vice-versa) to confuse the resolved client IP / trust decision.\n- **Cross-site WebSocket initiations (CSRF / DNS-rebinding class)** — there is no `Sec-Fetch-Site` gate anywhere in `main`.\n- **Proto contradiction** — `X-Forwarded-Proto` / `Forwarded proto` disagreeing with the actual socket transport (without breaking legitimate TLS-terminating trusted proxies).\n\nThis PR adds a self-contained **pre-handshake** `verifyClient` gate on the gateway `WebSocketServer({ noServer: true })`, so unauthenticated or forged clients never complete the HTTP 101 upgrade. This is the WebSocket-upgrade sibling of the HTTP ingress CSRF work already on `main` (#102834, #96486) and complements the origin-allowlist work in #98924 (which decides *which* origins pass, not *when/how the gate runs*). The existing post-handshake origin check in `connect-admission.ts` is unchanged and remains authoritative for role-scoped decisions.\n\n## Why This Change Was Made\n\n- **Pre-handshake beats post-handshake** — a rejected client never gets a live socket.\n- **Reuses the shared `checkBrowserOrigin`** rather than reinventing origin logic.\n- **All strictness is opt-in and default-off** (`gateway.security.strictHeaderValidation`, `rejectUntrustedProxyHeaders`, `rejectCrossSiteWebSocketRequests`), so existing deployments have **zero behavior change**. Non-browser clients (CLI, native apps) send no `Origin` and pass through; they authenticate post-handshake as today.\n- **Trusted proxies are correctly exempted** from the proto-mismatch check — a TLS-terminating proxy legitimately presents plaintext to the gateway.\n\n## User Impact\n\n- Network-exposed gateways gain a pre-handshake defense against forged forwarded headers and cross-site WebSocket CSRF, with **no config change required** for existing users (all new behavior opt-in).\n- Operators who want stricter posture can enable:\n  - `gateway.security.strictHeaderValidation` — reject duplicate / comma-chained sensitive proxy headers and proto contradictions.\n  - `gateway.security.rejectUntrustedProxyHeaders` — reject proxy headers from non-trusted peers.\n  - `gateway.security.rejectCrossSiteWebSocketRequests` — reject `Sec-Fetch-Site: cross-site` / `cross-origin` WebSocket upgrades. **Off by default**; opt in only when every legitimate browser WS client is same-origin to the gateway.\n\n## Evidence\n\n### Current-head live WebSocket Upgrade proof\n\nA real `node:http` server with a real `ws.WebSocketServer({ noServer: true, verifyClient })`, wired through the **production** `createGatewayVerifyClient` from this branch, was sent real HTTP Upgrade requests over a raw socket (the same wire path the production gateway uses — not a mock). Sensitive-header duplicate/chain cases are sent as raw duplicate header lines, because Node's normalized `req.headers` collapses them before handler code runs; `validateSensitiveHeaders` reads `req.rawHeaders` to catch exactly that.\n\n```\n== LIVE WS UPGRADE PROOF (head 5924fb1314e) ==\n\n[duplicate x-forwarded-for (two raw lines)] (strict ON)\n    [verify-client] verifyClient: strict header validation failed: x-forwarded-for\n    HTTP/1.1 400 Bad Request  -> REJECTED ✓\n\n[duplicate Host (raw; Node drops 2nd in req.headers)] (strict ON)\n    [verify-client] verifyClient: strict header validation failed: host\n    HTTP/1.1 400 Bad Request  -> REJECTED ✓\n\n[comma-chained x-forwarded-for] (strict ON)\n    [verify-client] verifyClient: strict header validation failed: x-forwarded-for\n    HTTP/1.1 400 Bad Request  -> REJECTED ✓\n\n[native client, no Origin] (default)\n    HTTP/1.1 101 Switching Protocols  -> ACCEPTED ✓\n\n[trusted proxy + proxy headers] (strict ON + trusted)\n    HTTP/1.1 101 Switching Protocols  -> ACCEPTED ✓\n\n[duplicate xff but strict OFF (default)] (no breakage)\n    HTTP/1.1 101 Switching Protocols  -> ACCEPTED ✓\n\nRESULT: ALL CASES PASSED\n```\n\nThis directly proves the two reviewer asks on the current head:\n- **Duplicate sensitive-header rejection** — cases 1–3 show `strictHeaderValidation` rejects duplicate and comma-chained `x-forwarded-for` / `host` at the 101 boundary, reading from `req.rawHeaders` so Node's normalized view can't hide the duplicates.\n- **Accepted compatibility case** — case 4 (native client, no Origin) and case 5 (trusted proxy presenting proxy headers under `strictHeaderValidation`) both complete the upgrade; case 6 confirms the default-off posture introduces zero breakage for the existing duplicate-header traffic some proxies emit.\n\n### Full behavior matrix (unit + wire, this branch)\n\n| # | Scenario | Observed |\n|---|---|---|\n| 1 | Native client, no Origin | `101 Switching Protocols` |\n| 2 | Loopback-alias browser (`localhost`→`127.0.0.1`, cross-site) — v2026.4.15 contract | `101 Switching Protocols` |\n| 3 | Allowed browser Origin (allowlist) | `101 Switching Protocols` |\n| 4 | Disallowed browser Origin | `403 Forbidden` |\n| 5 | Cross-site WS rejection (flag opt-in) | `403 Forbidden` |\n| 6 | Forwarded-header contradiction (IPv6) | `400 Bad Request` |\n| 7 | Forwarded-header agreement (IPv6 bracketed+port vs bracketed) | `101 Switching Protocols` |\n| 8 | Proto mismatch from untrusted peer | `400 Bad Request` |\n| 9 | Proto mismatch from trusted proxy (TLS-terminating) | `101 Switching Protocols` |\n| 10 | Untrusted proxy headers (opt-in) | `403 Forbidden` |\n| 11 | Literal `null` Origin (opaque context) | `403 Forbidden` |\n\nTests: `src/gateway/server/verify-client.test.ts` (11/11 passing), `tsgo` core typecheck clean, `oxlint`/`oxfmt` clean on touched files.\n\n## Scope\n\n- **In scope:** `src/gateway/server/verify-client.ts` (new, wired at `server-runtime-state.ts`), `src/gateway/forwarded-headers.ts` (validators), their tests, and the `gateway.security.*` config surface in `src/config/types.gateway.ts` + `src/config/zod-schema.gateway.ts`.\n- **Out of scope:** the `#98924` allowlist-wildcard contract and the broader `gateway.browserOrigins` policy direction.\n\n## Related\n\n- Sibling enforcement: #98924 (`allowedOriginPatterns`).\n- Prior art this complements (addressed on `main`): #102834 (HTTP ingress CSRF under `auth.mode=none`), #96486 (CSRF via `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`, reused verbatim here).\n",
-        "branch": "feat/gateway-ws-verify-client",
-        "head_sha": "de832bb75b2f3e30331e84750321506e93ccae90",
-        "author": "markfietje",
+        "title": "fix(googlechat): journal webhook events before ack",
+        "body": "## What Problem This Solves\n\nThe Google Chat webhook acks inbound events with HTTP 200 **before** dispatching them. `extensions/googlechat/src/monitor-webhook.ts:353-363` fires `void runDetachedWebhookWork(() => params.processEvent(...))` and immediately answers `res.statusCode = 200; res.end(\"{}\")`. There is no journal anywhere on the path — `monitor-routing.ts` wires `processEvent` straight to dispatch.\n\nA gateway crash (or restart, OOM, deploy) in the window between the 200 and the detached dispatch permanently loses the user message: Google Chat treats the 200 as final delivery and does not retry webhooks. A dispatch failure is only logged (`runtime.error`), never recovered. The user sees their message vanish with no error on either side.\n\n## Why This Change Was Made\n\nThis mirrors the maintainer-blessed inbound-durability wave already landed for sibling channels: sms #109866 (Twilio webhook spool), msteams #110357 (journal before webhook ack), discord #110274, whatsapp #110418, imessage #110409, mattermost #110386. Google Chat was the remaining webhook channel with the ack-then-lose window.\n\nMechanism, owner boundary, and storage follow the sms spool shape exactly:\n\n- **Journal before ack** (`monitor-webhook.ts`): after auth + parse, `MESSAGE` events are admitted through `target.ingress.enqueue(event)` — a durable append to the existing shared-state `channel_ingress_events` queue (`runtime.state.openChannelIngressQueue`, same seam sms/msteams/discord already use; **no schema change**). Only after SQLite commits does the webhook answer 200. An enqueue failure propagates to the plugin HTTP route layer, which answers 500 — a honest non-ack instead of a false one.\n- **Dedupe key** = the Google Chat message resource name (`spaces/<space>/messages/<message>`, the platform uniqueness contract), lane = space name, matching msteams' `event_id = activity.id, lane = conversation.id`.\n- **Drain + replay** (`monitor-ingress.ts`, new): `createGoogleChatIngressSpool` wraps `createChannelIngressDrain` with retry/dead-letter classification and 24h/20k completed + 30d/1k failed tombstones (sms values). The owning monitor (`monitor.ts`) drains on a 500ms interval and once at startup, so events journaled before a crash replay after restart; entries are tombstoned only after turn adoption via `bindIngressLifecycleToReplyOptions` wired into `core.channel.inbound.run({ turnAdoptionLifecycle })`.\n- **Journal boundary**: `CARD_CLICKED` approval clicks and space lifecycle events run dedicated non-agent workflows and keep the existing detached path — the same twin-check boundary msteams #110357 used (messageUpdate/votes/consent excluded). No SDK/core changes; everything lives in the googlechat plugin.\n\n## User Impact\n\n- A gateway crash or restart no longer loses Google Chat user messages that were already acked: they replay from the durable queue on startup.\n- Redelivered duplicates (same `message.name`) are acked without dispatching twice, via completed tombstones.\n- If durable admission itself fails (e.g. state DB unavailable), Google gets a 500 instead of a false 200, so the failure is visible instead of silent.\n- No config, schema, or API changes; CARD_CLICKED approval flow unchanged.\n\n## Evidence\n\n### Loss window (before fix, `origin/main` @ `00eb33fe8e`)\n\n`monitor-webhook.ts:351-363`: detached `runDetachedWebhookWork(processEvent)` + immediate `res.statusCode = 200; res.end(\"{}\")`. Reverse verification: with the prod fix reverted (`git checkout HEAD -- monitor-webhook.ts monitor.ts monitor-types.ts`), the new durability test goes red exactly at the durability assertion:\n\n```\nFAIL extensions/googlechat/src/monitor.webhook-durability.test.ts\n  × replays a 200-acked message after a restart that killed dispatch\nAssertionError: expected [] to deeply equal [ ObjectContaining{…} ]\n  - Expected: [ { id: \"spaces/AAA/messages/durable-1\", laneKey: \"space:spaces/AAA\" } ]\n  + Received: []        ← 200 already sent, nothing journaled: message lost on restart\n```\n\n### Authenticated-path proof (real JWT verification, round 1 proof upgrade)\n\n`monitor.webhook-durability-auth.test.ts` drives the **real inbound auth stack** end to end: POST through the real webhook handler, the real `verifyGoogleChatRequest` (`extensions/googlechat/src/auth.ts`), the real cert fetch through `fetchWithSsrFGuard`, and `google-auth-library`'s `verifySignedJwtWithCertsAsync` RS256 verification of a JWT really signed in-process (`iss: chat@system.gserviceaccount.com`, `aud: <project-number>`). Only the Google cert host (`www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com`) is rerouted to a loopback impersonator serving the matching RSA public key via a `vi.fn` fetch stub — the same accepted proof standard as the reply-delivery proof in #110147 (same plugin, same message-delivery class). No credentials are mocked; the auth middleware is fully real.\n\nTranscript summary (all assertions from the passing run):\n\n```\nPOST /googlechat  Authorization: Bearer <real RS256 JWT>\n  -> production verifyGoogleChatRequest\n  -> cert fetch observed at https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com (rerouted to loopback)\n  -> google-auth-library verifySignedJwtWithCertsAsync: signature VALID\nresponse: 200 {}\ndispatch ran before restart:        false\nlistPending() after the 200:        [ { id: \"spaces/AAA/messages/authed-1\", laneKey: \"space:spaces/AAA\" } ]\ncrash (spool.dispose, no drain)\nrestart: fresh spool, same stateDir\ndeliverAfterRestart:                called exactly 1x with journaled event (text \"authenticated hello\" intact)\nsecond restart:                     no redispatch (completed tombstone holds)\n\nforgery control: same claims/kid signed by an unserved key\nresponse: 401 (before any journaling)\nlistPending():                      []   (nothing replays)\n```\n\n### Real-behavior proof (after fix)\n\n`monitor.webhook-durability.test.ts` drives the **real webhook handler** through a real loopback HTTP server (`withServer` from `plugin-sdk/test-env`) with the real body reader, rate/in-flight limiters, and a real SQLite ingress queue in a temp state dir:\n\n1. `POST /googlechat` with a `MESSAGE` event → **200 `{}`** (auth stubbed via `vi.mock(\"./auth.js\")`, the only mock; admission path is fully real).\n2. Assert dispatch never ran and the event **is durable**: `listPending()` returns `{ id: \"spaces/AAA/messages/durable-1\", laneKey: \"space:spaces/AAA\" }`.\n3. Simulate crash: `spool.dispose()` with no drain.\n4. Fresh spool over the same state dir (restart) → `drainOnce()` → dispatch called **exactly once** with the journaled event payload intact (`message.text: \"are you there?\"`, user, eventTime preserved).\n5. Second restart → tombstone holds, **no second dispatch**.\n\n`monitor-ingress.test.ts` (real SQLite queue, no mocks) additionally proves: pending-event recovery across instances, **claimed-mid-dispatch reclaim** after owner death (the crash-between-claim-and-adopt window), completed-tombstone dedupe (`kind: \"completed\", duplicate: true` on re-enqueue, single dispatch), space-based lane key, and refusal to journal a `MESSAGE` event without `message.name`.\n\n### Test suite\n\n```\n$ node scripts/run-vitest.mjs extensions/googlechat/src/monitor-ingress.test.ts \\\n    extensions/googlechat/src/monitor.webhook-durability.test.ts \\\n    extensions/googlechat/src/monitor.webhook-durability-auth.test.ts \\\n    extensions/googlechat/src/monitor-webhook.test.ts \\\n    extensions/googlechat/src/monitor.webhook-routing.test.ts \\\n    extensions/googlechat/src/monitor.test.ts\nTest Files  6 passed (6)\n     Tests  42 passed (42)\n```\n\nFull `extensions/googlechat` suite: 216/217 — the single failure (`setup.test.ts` \"configures service-account auth and webhook audience\") fails identically on a clean `origin/main` checkout (verified via `git stash`), pre-existing and unrelated to this diff.\n\n### tsgo / lint / format\n\n```\n$ node scripts/run-tsgo.mjs -p tsconfig.extensions.json\n(only the 3 pre-existing packages/net-policy/src/ip.ts errors; zero in touched files)\n$ oxlint -c .oxlintrc.json <touched files>   → 0 findings\n$ oxfmt --check <touched files>              → clean\n$ git diff --check                           → clean\n```\n\n",
+        "branch": "fix/googlechat-webhook-durability",
+        "head_sha": "b0554a71bc8e8cc9e80ce0fcbecbd37773093ce1",
+        "author": "wangmiao0668000666",
         "labels": [
-          "gateway",
-          "size: L",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 security-boundary",
+          "channel: googlechat",
+          "size: XL",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/config/schema.help.runtime.ts",
+            "path": "extensions/googlechat/src/monitor-ingress.test.ts",
+            "additions": 196,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor-ingress.ts",
+            "additions": 137,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor-types.ts",
             "additions": 8,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor-webhook.test.ts",
+            "additions": 134,
+            "deletions": 19,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor-webhook.ts",
+            "additions": 19,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor.ts",
+            "additions": 42,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor.webhook-durability-auth.test.ts",
+            "additions": 326,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor.webhook-durability.test.ts",
+            "additions": 177,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "extensions/googlechat/src/monitor.webhook-routing.test.ts",
+            "additions": 6,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
@@ -166,51 +213,49 @@
           }
         ],
         "changedFiles": 9,
-        "additions": 682,
-        "deletions": 0,
+        "additions": 1045,
+        "deletions": 21,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-109924",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109924.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110526",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110526.md",
         "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 114,
-          "gatingTotal": 109,
+          "total": 86,
+          "gatingTotal": 81,
           "counts": {
-            "SKIPPED": 34,
-            "SUCCESS": 69,
-            "FAILURE": 10,
+            "SUCCESS": 41,
+            "SKIPPED": 36,
+            "QUEUED": 4,
+            "FAILURE": 4,
             "NEUTRAL": 1
           },
           "blockers": [
-            "build-artifacts:FAILURE",
-            "QA Smoke CI (profile 1/4):FAILURE",
-            "QA Smoke CI (profile 2/4):FAILURE",
-            "QA Smoke CI (profile 3/4):FAILURE",
-            "QA Smoke CI (profile 4/4):FAILURE",
-            "checks-node-compact-large-2:FAILURE",
-            "checks-node-compact-small-1:FAILURE",
-            "checks-node-compact-small-6:FAILURE",
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
             "check-lint:FAILURE",
+            "check-dependencies:FAILURE",
+            "check-test-types:FAILURE",
             "openclaw/ci-gate:FAILURE"
           ],
-          "pending": [],
+          "pending": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED"
+          ],
           "terminalBlockers": [
-            "build-artifacts:FAILURE",
-            "QA Smoke CI (profile 1/4):FAILURE",
-            "QA Smoke CI (profile 2/4):FAILURE",
-            "QA Smoke CI (profile 3/4):FAILURE",
-            "QA Smoke CI (profile 4/4):FAILURE",
-            "checks-node-compact-large-2:FAILURE",
-            "checks-node-compact-small-1:FAILURE",
-            "checks-node-compact-small-6:FAILURE",
             "check-lint:FAILURE",
+            "check-dependencies:FAILURE",
+            "check-test-types:FAILURE",
             "openclaw/ci-gate:FAILURE"
           ],
           "externalBlockers": []
@@ -229,15 +274,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 5332,
+    "total_ms": 1639,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 553
+        "ms": 395
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1864
+        "ms": 974
       },
       {
         "name": "classify_comment_commands",
@@ -257,7 +302,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2790
+        "ms": 189
       },
       {
         "name": "append_ledger",
