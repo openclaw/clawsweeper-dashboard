@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T10:56:26.717Z",
+  "generated_at": "2026-07-18T11:00:23.464Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T07:56:26.170Z",
+  "since": "2026-07-18T08:00:20.871Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    104920
+    108200
   ],
   "comment_ids": [
-    5010971072
+    5010999290
   ],
-  "status_comment_id": 5010988244,
+  "status_comment_id": 5010999471,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:104920:5010971072:2026-07-18T10:47:41Z:re_review",
-      "comment_id": "5010971072",
-      "comment_version_key": "5010971072:2026-07-18T10:47:41Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/104920#issuecomment-5010971072",
+      "idempotency_key": "comment-router:openclaw/openclaw:108200:5010999290:2026-07-18T10:58:12Z:re_review",
+      "comment_id": "5010999290",
+      "comment_version_key": "5010999290:2026-07-18T10:58:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108200#issuecomment-5010999290",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 104920,
-      "author": "xydigit-zt",
-      "author_id": 294751694,
+      "target_branch": "main",
+      "issue_number": 108200,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T10:47:41Z",
-      "comment_updated_at": "2026-07-18T10:47:41Z",
+      "comment_created_at": "2026-07-18T10:58:12Z",
+      "comment_updated_at": "2026-07-18T10:58:12Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 5010988244,
+      "status_comment_id": 5010999471,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,9 +72,151 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 108200,
+          "dispatch_key": "router-f6e3b4918255c166",
+          "dispatched_at": "2026-07-18T11:00:24.467Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-18T11:00:25.561Z",
+          "response_comment_id": "5010999471",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(config): bound external catalog file reads with size limit",
+        "body": "\n## Summary\nReplace unbounded `fs.readFileSync` with bounded `readRegularFileSync` (16 MiB cap) for external plugin catalog files.  Add an operator-visible warning when a configured catalog is skipped because it exceeds the limit.\n\n## What Problem This Solves\n`resolveExternalCatalogPreferOver` in `src/config/plugin-auto-enable.prefer-over.ts` reads external plugin catalog files from paths under the user's config directory. The read used `fs.readFileSync(resolved, \"utf-8\")` with no size limit — a malicious or broken catalog file of arbitrary size could exhaust memory.\n\nSame class of issue fixed in [#101472](https://github.com/openclaw/openclaw/pull/101472) (hooks manifest), [#101775](https://github.com/openclaw/openclaw/pull/101775) (heartbeat file), [#101773](https://github.com/openclaw/openclaw/pull/101773) (plugin manifests), and [#109652](https://github.com/openclaw/openclaw/pull/109652) (secrets plans).\n\n## Root Cause\n- `fs.readFileSync` loads the entire file into memory before `JSON.parse`\n- The existing catch block silently swallows ALL read errors, so even a bounded rejection would be invisible to operators\n\n## Why This Fix\n1. Switch to `readRegularFileSync` (same bounded reader used by `src/plugins/marketplace.ts`) with a 16 MiB cap\n2. Resolve symlinks via `fs.realpathSync` before the bounded read (matching the marketplace.ts pattern)\n3. **New**: Catch the `File exceeds` error specifically and log a warning so operators know a configured catalog was skipped — unlike parse/permission errors which mean the file is genuinely unusable\n\n## User Impact\n- **Before**: A 32 MiB `catalog.json` is loaded entirely into memory. If the bounded read rejects it, no diagnostic is emitted.\n- **After**: The file is rejected at the stat check before any read. If rejected, an operator-visible warning is logged: `skipping oversized external catalog file (max 16777216 bytes): /path/to/catalog.json`\n\n## Evidence\n- **Diagnostic**: Warning is logged when an oversized catalog is skipped (new regression test)\n- **Symlink compatibility**: Symlinked catalog files work end-to-end (regression test)\n- **Selection continuity**: When a catalog is skipped, plugin auto-enable continues with the next candidate instead of crashing or silently changing behavior\n- `node scripts/run-vitest.mjs src/config/plugin-auto-enable.channels.test.ts` — 19/19 passed\n\n## Real Behavior Proof\n\n### Oversized catalog is rejected with a diagnostic (terminal proof)\n\n```bash\n$ NODE_ENV=test node --import tsx -e \"\nimport { writeFileSync, mkdirSync } from 'node:fs';\nimport { tmpdir } from 'node:os';\nimport { join } from 'node:path';\nconst dir = join(tmpdir(), 'proof-' + process.pid);\nmkdirSync(join(dir, 'plugins'), { recursive: true });\n// 20 MiB catalog — exceeds the 16 MiB cap\nwriteFileSync(join(dir, 'plugins', 'catalog.json'), JSON.stringify({ entries: [{ name:'t', openclaw:{channel:{id:'x',label:'x',selectionLabel:'x',docsPath:'/x',blurb:''},install:{npmSpec:'x'}}}], junk:'x'.repeat(20*1024*1024) }));\nconst m = await import('./src/config/plugin-auto-enable.prefer-over.js');\nconst env = { ...process.env, OPENCLAW_STATE_DIR: dir, HOME: dir, OPENCLAW_BUNDLED_PLUGINS_DIR: '/nx' };\n// This would have loaded 20 MiB into memory with fs.readFileSync;\n// with readRegularFileSync the stat check rejects it before any read.\nm.shouldSkipPreferredPluginAutoEnable({ config:{}, entry:{pluginId:'p',kind:'channel-configured',channelId:'p'}, configured:[{pluginId:'s',kind:'channel-configured',channelId:'s'}], env, registry:{plugins:[]}, isPluginDenied:()=>false, isPluginExplicitlyDisabled:()=>false, preferOverCache:new Map() });\n\"\n[config/plugin-catalog] skipping oversized external catalog file (max 16777216 bytes): /tmp/proof-.../plugins/catalog.json\n```\n\n### Test results\n\n```bash\n$ node scripts/run-vitest.mjs src/config/plugin-auto-enable.channels.test.ts\n ✓ |runtime-config| src/config/plugin-auto-enable.channels.test.ts (19 tests)\n     ✓ uses env-scoped catalog metadata for preferOver auto-enable decisions\n     ✓ memoizes external catalog preferOver lookups within one auto-enable pass\n     ✓ reads external catalog files through a symlink\n     ✓ warns when an oversized catalog is skipped and continues selection\n```\n\n## Tests and Validation\n- `node scripts/run-vitest.mjs src/config/plugin-auto-enable.channels.test.ts` — 19/19 passed\n- `git diff --check` clean\n",
+        "branch": "fix/google-realtime-live-session-timeout",
+        "head_sha": "75381646cb8ef2b9597dc4345236953810401bf8",
+        "author": "zenglingbiao",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/config/plugin-auto-enable.channels.test.ts",
+            "additions": 120,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/config/plugin-auto-enable.prefer-over.ts",
+            "additions": 24,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 144,
+        "deletions": 6,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108200",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108200.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 118,
+          "gatingTotal": 113,
+          "counts": {
+            "SUCCESS": 48,
+            "SKIPPED": 39,
+            "IN_PROGRESS": 29,
+            "FAILURE": 1,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-large-7:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:FAILURE",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-large-7:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "check-test-types:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-18T11:00:23.745Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,19 +227,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 2146,
+    "total_ms": 5416,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 453
+        "ms": 477
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2002
       },
       {
         "name": "classify_comment_commands",
-        "ms": 12
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,11 +255,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1599
+        "ms": 2812
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
