@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T14:32:33.452Z",
+  "generated_at": "2026-07-18T14:34:11.021Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T11:32:33.179Z",
+  "since": "2026-07-18T11:34:08.688Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110005
+    110071
   ],
   "comment_ids": [
-    5011626849
+    5011632160
   ],
-  "status_comment_id": 5011627056,
+  "status_comment_id": 5011632278,
   "max_autoclose_targets": 8,
-  "scanned_comments": 0,
-  "commands_seen": 0,
-  "actionable": 0,
+  "scanned_comments": 1,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -32,28 +32,183 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:110071:5011632160:2026-07-18T14:32:09Z:re_review",
+      "comment_id": "5011632160",
+      "comment_version_key": "5011632160:2026-07-18T14:32:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110071#issuecomment-5011632160",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 110071,
+      "author": "hugenshen",
+      "author_id": 16300669,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-18T14:32:09Z",
+      "comment_updated_at": "2026-07-18T14:32:09Z",
+      "comment_body_sha256": "66f5c070a2c748a6ac7e378bfc8467461a535872e30d93f0416f1f4e76fdc723",
+      "status_comment_id": 5011632278,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110071,
+          "dispatch_key": "router-44b7212440d627dd",
+          "dispatched_at": "2026-07-18T14:34:12.212Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-18T14:34:13.843Z",
+          "response_comment_id": "5011632278",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(thread-ownership): bound forwarder JSON reads and cap mention cache",
+        "body": "## What Problem This Solves\n\nThe `thread-ownership` plugin's Slack ownership check calls an internal forwarder\n(`{forwarderUrl}/api/v1/ownership/{channelId}/{threadTs}`) and, on a `409`\nresponse, previously parsed the body with unbounded `await resp.json()`. A\nmisconfigured or hostile forwarder can return an arbitrarily large body and force\nthe Node process to buffer it before parse — an easy OOM vector.\n\nSeparately, the in-memory `mentionedThreads` cache only expired entries by a\n5-minute TTL, with no entry-count cap. Busy multi-channel Slack workspaces could\ngrow that map without bound between TTL sweeps.\n\n## Why This Change Was Made\n\n- Parse conflict bodies with `readProviderJsonResponse` and an **explicit**\n  `OWNERSHIP_CONFLICT_MAX_BYTES` (64 KiB). The helper default is 16 MiB; this\n  endpoint only returns a tiny `{ owner }` object, so the tighter cap is\n  intentional.\n- Cap `mentionedThreads` at 1,000 entries via `pruneMapToMaxSize` (oldest-inserted\n  eviction). Under extreme five-minute churn, eviction can re-enable the\n  ownership check for the oldest mentioned threads (documented delivery tradeoff).\n\n## User Impact\n\nNormal forwarder responses are unchanged: small `409 {\"owner\":\"...\"}` still\ncancels the send. Oversized conflict bodies fail open (allow send) after a\nbounded read error, matching existing network-error fail-open. Mention-cache\neviction may rarely resume ownership enforcement for the oldest threads after\n>1,000 distinct mentions within the TTL window.\n\n## Evidence\n\n### Real behavior proof\n\n#### Behavior or issue addressed\n\nBounded 409 JSON parsing on the production `message_sending` ownership path;\noversized bodies fail open; normal conflict still cancels; mention cache evicts\nat 1,000 entries.\n\n#### Canonical reachability path\n\n`message_sending` hook → `fetchWithSsrFGuard(forwarderUrl/api/v1/ownership/...)`\n→ `readProviderJsonResponse(..., { maxBytes: OWNERSHIP_CONFLICT_MAX_BYTES })`\n→ `{ cancel: true }` or catch fail-open.\n\n#### Real environment tested\n\nLocal trusted checkout; Vitest with mocked fetch plus a real `node:http`\nloopback forwarder (no Slack workspace credentials).\n\n#### Exact steps or command run after this patch\n\n```bash\nnode scripts/run-vitest.mjs extensions/thread-ownership/index.test.ts --reporter=verbose\n```\n\n#### Evidence after fix\n\n```text\n✓ cancels when thread owned by another agent 6ms\n✓ fails open on network error 0ms\n✓ fails open when a 409 conflict body exceeds the ownership JSON bound 1ms\n✓ bounds live forwarder 409 bodies over loopback HTTP 238ms\n✓ evicts oldest mention cache entries once the cache exceeds its cap 22ms\n Test Files  1 passed (1)\n      Tests  24 passed (24)\n```\n\nThe loopback case starts a real HTTP server as `SLACK_FORWARDER_URL`, then:\n1) returns a small `409 {\"owner\":\"other-agent\"}` → send cancelled;\n2) streams a body larger than 64 KiB → ownership check fails with `exceeds … bytes`\n   and the send is allowed (fail-open).\n\n#### Observed result after fix\n\nNormal conflict cancellation preserved; oversized 409 bodies are bounded and\nfail open; mention cache eviction proven at the 1,000-entry cap.\n\n#### What was not tested\n\nLive Slack workspace / production forwarder credentials; multi-agent A/B channel\ntraffic under real load.\n\n#### Fix classification\n\nbugfix — unbounded forwarder JSON read + unbounded mention cache\n\n## AI Assistance\n\nAI-assisted. Author reviewed the production caller path and the focused proof output.\n",
+        "branch": "fix/thread-ownership-bound-json",
+        "head_sha": "b145f986eadf83722f385eeeb32c12001eeb0930",
+        "author": "hugenshen",
+        "labels": [
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof",
+          "extensions: thread-ownership"
+        ],
+        "files": [
+          {
+            "path": "extensions/thread-ownership/index.test.ts",
+            "additions": 148,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/thread-ownership/index.ts",
+            "additions": 26,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 174,
+        "deletions": 5,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110071",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110071.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BLOCKED",
+        "review_decision": "",
+        "checks": {
+          "total": 78,
+          "gatingTotal": 73,
+          "counts": {
+            "SUCCESS": 27,
+            "CANCELLED": 1,
+            "SKIPPED": 35,
+            "IN_PROGRESS": 15
+          },
+          "blockers": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-18T14:34:11.353Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 449,
+    "total_ms": 6615,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 211
+        "ms": 515
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 1641
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 49
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -69,7 +224,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 177
+        "ms": 4272
       },
       {
         "name": "append_ledger",
