@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T11:16:52.820Z",
+  "generated_at": "2026-07-18T11:19:07.755Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T08:16:52.328Z",
+  "since": "2026-07-18T08:19:04.918Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110516
+    108217
   ],
   "comment_ids": [
-    5011044427
+    5011050913
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5011051018,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 0,
-  "actionable": 0,
+  "commands_seen": 1,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -32,28 +32,238 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:108217:5011050913:2026-07-18T11:16:56Z:re_review",
+      "comment_id": "5011050913",
+      "comment_version_key": "5011050913:2026-07-18T11:16:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108217#issuecomment-5011050913",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 108217,
+      "author": "zenglingbiao",
+      "author_id": 290951975,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-18T11:16:56Z",
+      "comment_updated_at": "2026-07-18T11:16:56Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
+      "status_comment_id": 5011051018,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 108217,
+          "dispatch_key": "router-fae164ea930041af",
+          "dispatched_at": "2026-07-18T11:19:08.846Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-18T11:19:09.936Z",
+          "response_comment_id": "5011051018",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cron): honor AbortSignal in waitForActiveCronTaskRuns poll",
+        "body": "## Summary\nAdd optional `AbortSignal` parameter to `waitForActiveCronTaskRuns` so callers can cancel the drain poll instead of blocking until the deadline expires.\n\n## What Problem This Solves\n`waitForActiveCronTaskRuns` in `src/cron/service/active-run-cancellation.ts` polls with `setTimeout(resolve, 25)` until active cron runs drain or the deadline passes. The polling loop does not check any abort signal — a caller that wants to cancel the wait (e.g. a second restart signal arriving during the drain) has no way to stop the loop early. The function always blocks for up to `timeoutMs`, even when the caller already knows the result doesn't matter.\n\n**Code evidence**: [active-run-cancellation.ts:109-111](https://github.com/openclaw/openclaw/blob/main/src/cron/service/active-run-cancellation.ts#L109-L111) — bare `setTimeout(resolve, …)` in `new Promise` without `AbortSignal` awareness.\n\nSame class of bug fixed in [#109805](https://github.com/openclaw/openclaw/pull/109805) (auto-reply transient-HTTP retry backoff) and [#109913](https://github.com/openclaw/openclaw/pull/109913) (discord 429 retry backoff).\n\n## Root Cause\nThe polling loop in `waitForActiveCronTaskRuns` uses a bare `setTimeout`-based sleep with no connection to the caller's lifecycle. If the caller's operation is cancelled mid-wait, the function still blocks.\n\n## Why This Fix\nAdd optional `signal?: AbortSignal` parameter. When the signal fires, clear the timer and resolve immediately — the function returns the current drain state (`{ drained: false, active: N }`) which the caller already handles gracefully. Resolving (not rejecting) preserves backward compatibility: existing callers ignore the result when `drained` is false.\n\nPattern from #109805:\n```typescript\n// Before: bare setTimeout — ignores abort\nawait new Promise<void>((resolve) => { setTimeout(resolve, ms); });\n// After: honors abort signal\nawait new Promise<void>((resolve) => {\n  const timer = setTimeout(resolve, ms);\n  signal?.addEventListener(\"abort\", () => { clearTimeout(timer); resolve(); }, { once: true });\n});\n```\n\n## User Impact\n- **Before**: Gateway restart drain always waits the full 1-second `waitForActiveCronTaskRuns` timeout even when the restart is superseded.\n- **After**: A second abort signal during drain returns near-instantly, speeding up restart churn.\n\n## Evidence\n- `waitForActiveCronTaskRuns` with real `AbortController` and wall-clock timers (no `vi.mock`, no fake timers)\n- Before: abort at 100ms → function still waits ~10000ms (the full timeout) → **FAIL**\n- After: abort at 100ms → function returns ~100ms → **PASS**\n\n## Real Behavior Proof\n\n### Before (on main, bare `setTimeout`)\n\n```bash\n$ node --import tsx scripts/proof-cron-drain-abort.mjs\nresult: drained=false active=1\nelapsed: 10005ms (timeout=10000ms, aborted@100ms)\nFAIL: waited 10005ms despite abort at 100ms — signal was ignored\n```\n\n### After (with fix)\n\n```bash\n$ node --import tsx scripts/proof-cron-drain-abort.mjs\nresult: drained=false active=1\nelapsed: 101ms (timeout=10000ms, aborted@100ms)\nPASS: aborted signal returned near-instantly\n```\n\n## Tests and Validation\n- `node scripts/run-vitest.mjs src/cron/service/active-run-cancellation.test.ts` — 6/6 passed (3 existing + 3 new)\n- `git diff --check` clean\n",
+        "branch": "fix/openai-image-gen-body-idle-timeout",
+        "head_sha": "fbf039a140b4134c161a9dbaf19d4444c70e87eb",
+        "author": "zenglingbiao",
+        "labels": [
+          "cli",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/gateway-cli/run-loop.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/active-run-cancellation.test.ts",
+            "additions": 55,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/active-run-cancellation.ts",
+            "additions": 19,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 3,
+        "additions": 76,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108217",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108217.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 118,
+          "gatingTotal": 113,
+          "counts": {
+            "SUCCESS": 38,
+            "SKIPPED": 39,
+            "IN_PROGRESS": 40,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/4):IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 3/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-large-7:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-14:IN_PROGRESS",
+            "checks-node-compact-small-15:IN_PROGRESS",
+            "checks-node-compact-small-16:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "build-artifacts:IN_PROGRESS",
+            "QA Smoke CI (profile 1/4):IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 3/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-large-7:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-14:IN_PROGRESS",
+            "checks-node-compact-small-15:IN_PROGRESS",
+            "checks-node-compact-small-16:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-18T11:19:08.068Z"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 793,
+    "total_ms": 5713,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 456
+        "ms": 522
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2197
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -65,11 +275,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 302
+        "ms": 2867
       },
       {
         "name": "append_ledger",
