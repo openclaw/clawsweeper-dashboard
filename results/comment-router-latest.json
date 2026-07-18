@@ -1,25 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T14:11:36.688Z",
-  "repo": "openclaw/openclaw",
+  "generated_at": "2026-07-18T14:11:44.469Z",
+  "repo": "openclaw/shellbench",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T11:11:34.543Z",
+  "since": "2026-07-18T11:11:43.236Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1,
-  "item_numbers": [
-    110721
-  ],
-  "comment_ids": [
-    5011561180
-  ],
-  "status_comment_id": 5011561306,
+  "max_comments": 1000,
+  "item_numbers": [],
+  "comment_ids": [],
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 1,
-  "commands_seen": 1,
-  "actionable": 1,
+  "scanned_comments": 6,
+  "commands_seen": 0,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -32,213 +28,7 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:110721:5011561180:2026-07-18T14:09:32Z:re_review",
-      "comment_id": "5011561180",
-      "comment_version_key": "5011561180:2026-07-18T14:09:32Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110721#issuecomment-5011561180",
-      "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 110721,
-      "author": "hugenshen",
-      "author_id": 16300669,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T14:09:32Z",
-      "comment_updated_at": "2026-07-18T14:09:32Z",
-      "comment_body_sha256": "6b08b5b8a06a1114c6bea1da7d85838f6cad80ad4c0ec6b1c8c5b6c7066d9b72",
-      "status_comment_id": 5011561306,
-      "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 110721,
-          "dispatch_key": "router-0731191053cdf93c",
-          "dispatched_at": "2026-07-18T14:11:37.306Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-18T14:11:38.196Z",
-          "response_comment_id": "5011561306",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(doctor): stream heartbeat transcript scans without full-file reads",
-        "body": "## What Problem This Solves\n\nDoctor heartbeat main-session repair loaded the entire session transcript with `fs.readFileSync` before deciding whether the main session was heartbeat-poisoned. A large JSONL transcript (common after long heartbeat-only ownership) forced the whole file into one string during `openclaw doctor` state integrity. Chunked reads alone were also insufficient if a single JSONL record (or a missing newline) kept growing the carry buffer.\n\n## Why This Change Was Made\n\nScan the transcript with a fixed-size sync chunk reader (`openSync` + `readSync` + `StringDecoder`) and cap retained JSONL records at 256 KiB. Oversized incomplete or complete records fail closed (no heartbeat classification / no repair) so memory stays bounded even for malformed transcripts. Keep the call sites synchronous because `resolveHeartbeatMainSessionRepairCandidate` runs inside the session-store update path.\n\n## User Impact\n\n`openclaw doctor --fix` can classify and move heartbeat-owned main sessions even when the transcript is multi-megabyte, without risking an OOM from a single full-file string read or an unbounded carry buffer. Mixed transcripts and oversized single records still block repair.\n\n## Evidence\n\n### Real behavior proof\n\n#### Behavior or issue addressed\n\nLarge heartbeat-only transcripts are scanned in chunks; doctor still moves the poisoned main session; a single oversized JSONL record declines repair; the transcript path is never loaded via `readFileSync`.\n\n#### Canonical reachability path\n\n`openclaw doctor --fix --yes` → `noteStateIntegrity` → `repairHeartbeatPoisonedMainSession` → `resolveHeartbeatMainSessionRepairCandidate` → `summarizeTranscriptHeartbeatMessages` (chunked scan + record cap).\n\n#### Real environment tested\n\nLocal trusted source checkout; isolated `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` fixture with an ~82 KiB heartbeat-only JSONL (661 heartbeat user turns); focused Vitest for multi-chunk repair and oversized-record decline.\n\n#### Exact steps or command run after this patch\n\n```bash\n# Fixture: OPENCLAW_STATE_DIR=<tmp>/state, OPENCLAW_CONFIG_PATH=<tmp>/openclaw.json\n# sessions.json main entry -> cli-proof-heartbeat.jsonl (~82 KiB heartbeat-only JSONL)\nnode ./openclaw.mjs doctor --fix --yes\n\nnode scripts/run-vitest.mjs src/commands/doctor-state-integrity.test.ts \\\n  -t \"multi-chunk heartbeat|single JSONL record exceeds\" --reporter=verbose\n```\n\n#### Evidence after fix\n\nReal CLI (`openclaw doctor --fix --yes`) against the isolated fixture:\n\n```text\n◇  State integrity\n│  - Main session agent:main:main appears to be a heartbeat-owned session\n│    (661 heartbeat-only user message(s)).\n│    Doctor can move it to\n│    agent:main:heartbeat-recovered-2026-07-18t14-08-16.517z and let the\n│    next interactive launch create a fresh main session.\n\n◇  Doctor changes\n│  - Moved heartbeat-owned main session agent:main:main to\n│    agent:main:heartbeat-recovered-2026-07-18t14-08-16.517z.\n\nDoctor complete.\n```\n\nPost-run store keys:\n\n```text\nBEFORE: agent:main:main\nAFTER:  agent:main:heartbeat-recovered-2026-07-18t14-08-16.517z\n        main=missing\n        sid=cli-proof-heartbeat\ndoctor_exit=0\n```\n\nFocused Vitest:\n\n```text\n✓ repairs a multi-chunk heartbeat transcript without loading it via readFileSync 134ms\n✓ declines repair when a single JSONL record exceeds the scanner record cap 62ms\n Test Files  1 passed (1)\n      Tests  2 passed | 33 skipped (35)\n```\n\n#### Observed result after fix\n\nMulti-chunk heartbeat transcripts repair via real doctor CLI; oversized single JSONL records decline classification and leave `agent:main:main` in place; mixed transcripts still block repair.\n\n#### What was not tested\n\nInteractive TTY doctor prompts; multi-GB live operator state directories outside the isolated fixture.\n\n#### Fix classification\n\nbugfix — unbounded transcript/record retention during doctor heartbeat repair\n\n## AI Assistance\n\nAI-assisted. Author reviewed the production caller path, CLI fixture output, and focused proof.\n",
-        "branch": "fix/doctor-heartbeat-transcript-stream",
-        "head_sha": "1f1fb378ed6d090a44e4e19ef69b73b1de4b405b",
-        "author": "hugenshen",
-        "labels": [
-          "commands",
-          "size: S",
-          "P2",
-          "rating: 🦪 silver shellfish",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/commands/doctor-heartbeat-main-session-repair.test-support.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-heartbeat-main-session-repair.ts",
-            "additions": 78,
-            "deletions": 22,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-state-integrity.test.ts",
-            "additions": 87,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 172,
-        "deletions": 22,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110721",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110721.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
-        "review_decision": "",
-        "checks": {
-          "total": 112,
-          "gatingTotal": 107,
-          "counts": {
-            "SUCCESS": 39,
-            "SKIPPED": 34,
-            "IN_PROGRESS": 38,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/4):IN_PROGRESS",
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 3/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-large-5:IN_PROGRESS",
-            "checks-node-compact-large-6:IN_PROGRESS",
-            "checks-node-compact-large-7:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-13:IN_PROGRESS",
-            "checks-node-compact-small-14:IN_PROGRESS",
-            "checks-node-compact-small-15:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Security High (process-exec-boundary):IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "QA Smoke CI (profile 1/4):IN_PROGRESS",
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 3/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-compact-large-1:IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-large-5:IN_PROGRESS",
-            "checks-node-compact-large-6:IN_PROGRESS",
-            "checks-node-compact-large-7:IN_PROGRESS",
-            "checks-node-compact-small-1:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-13:IN_PROGRESS",
-            "checks-node-compact-small-14:IN_PROGRESS",
-            "checks-node-compact-small-15:IN_PROGRESS",
-            "checks-node-compact-small-2:IN_PROGRESS",
-            "checks-node-compact-small-3:IN_PROGRESS",
-            "checks-node-compact-small-4:IN_PROGRESS",
-            "checks-node-compact-small-5:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-prod-types:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-18T14:11:36.848Z"
-    }
-  ],
+  "commands": [],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "version_not_terminal"
@@ -247,19 +37,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4111,
+    "total_ms": 1538,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 342
+        "ms": 1188
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1677
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -275,7 +65,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1954
+        "ms": 306
       },
       {
         "name": "append_ledger",
