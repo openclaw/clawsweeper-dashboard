@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T06:42:11.522Z",
+  "generated_at": "2026-07-18T06:45:00.606Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T03:42:11.012Z",
+  "since": "2026-07-18T03:44:56.828Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110230
+    109078
   ],
   "comment_ids": [
-    5010259921
+    5010269495
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,18 +34,18 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110230:5010259921:2026-07-18T06:36:40Z:re_review",
-      "comment_id": "5010259921",
-      "comment_version_key": "5010259921:2026-07-18T06:36:40Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110230#issuecomment-5010259921",
+      "idempotency_key": "comment-router:openclaw/openclaw:109078:5010269495:2026-07-18T06:40:09Z:re_review",
+      "comment_id": "5010269495",
+      "comment_version_key": "5010269495:2026-07-18T06:40:09Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109078#issuecomment-5010269495",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 110230,
-      "author": "ivan-digital",
-      "author_id": 42473865,
-      "author_association": "NONE",
-      "comment_created_at": "2026-07-18T06:36:40Z",
-      "comment_updated_at": "2026-07-18T06:36:40Z",
+      "issue_number": 109078,
+      "author": "chenyangjun-xy",
+      "author_id": 294178215,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-18T06:40:09Z",
+      "comment_updated_at": "2026-07-18T06:40:09Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
@@ -74,7 +74,68 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): preserve tool-result text when aggregate budget is exhausted without spill markers (#107704)",
+        "body": "## What Problem This Solves\r\n\r\nFixes an issue where the model receives empty strings for **all** tool results when the aggregate tool-result text budget is fully exhausted and no spill-file markers exist. This causes silent failures on the next model turn because the model sees no content from any tool result.\r\n\r\nFixes #107704\r\n\r\n## Root Cause\r\n\r\nWhen `remainingTextBudget <= 0` in `formatAggregateElisionText`, it returns `\"\"` for every tool result block. The original fix set a 1-char floor inside `clearToolResultText` (a per-message function), but this ballooned the effective aggregate budget from N to N × messageCount because each result independently claimed its own 1-char reserve.\r\n\r\n## Fix\r\n\r\nMove the 1-char floor from `clearToolResultText` (per-message) to `buildAggregateToolResultReplacements` as a **shared aggregate elision reserve** via a `hasClaimedElisionReserve` flag. Only the **first** eligible result claims 1 char from this shared pool; subsequent results correctly get 0. This keeps aggregate-cap accounting faithful — total output after truncation cannot exceed the configured aggregate budget.\r\n\r\n## Behavior: Before vs. After\r\n\r\n| Scenario | Before (broken) | After (fixed) |\r\n|---|---|---|\r\n| 50 results × 300 chars, budget = 1 | 50 × 1 char each → **50 chars** ❌ leaked | 1 result gets `\"[\"` → **1 char** ✅ |\r\n| 10 results × 100 chars, budget = 0 | All empty → 0 chars ✅ | All empty → 0 chars ✅ |\r\n| With spill markers present | Spill pointer preserved | Spill pointer preserved |\r\n\r\n**Model's view after fix**: `tool_0: \"[\"`, `tool_1: (empty)`, `tool_2: (empty)` — the model sees a meaningful `\"[\"` truncation signal in the first result, preventing silent gaps on the subsequent model turn.\r\n\r\n## Gateway Prompt-Projection Path (Production Code)\r\n\r\nThe fix is exercised through the identical production code path the gateway uses for every agent turn:\r\n\r\n```\r\nGateway Session\r\n  → prepareEmbeddedAttemptPromptContext (attempt-prompt-context.ts:120)\r\n    → truncateOversizedToolResultsInMessages (tool-result-truncation.ts:562)\r\n      → buildAggregateToolResultReplacements (tool-result-truncation.ts:930)\r\n        → hasClaimedElisionReserve flag ← THE FIX\r\n          → clearToolResultText → formatAggregateElisionText\r\n            → AGGREGATE_ELISION_MARKER.slice(0, 1) = \"[\"\r\n```\r\n\r\n## Code Change\r\n\r\n**`tool-result-truncation.ts:930-949`** — single block in `buildAggregateToolResultReplacements`:\r\n\r\n```diff\r\n if (remainingReduction > 0) {\r\n+  let hasClaimedElisionReserve = false;\r\n   for (const candidate of recoveryCandidates) {\r\n     if (remainingReduction <= 0) break;\r\n     ...\r\n+    if (targetTextChars <= 0 && !spillMarkers && !hasClaimedElisionReserve) {\r\n+      targetTextChars = 1;\r\n+      hasClaimedElisionReserve = true;\r\n+    }\r\n```\r\n\r\n## Evidence\r\n\r\n### 1. Production-code unit test\r\n\r\n```\r\n ✓ shares the aggregate elision reserve across all results\r\n   when budget is exhausted without spill markers\r\n\r\n Test Files  2 passed (2)      Tests  150 passed (152)\r\n```\r\n\r\n### 2. Problem reproduction — gateway path\r\n\r\n50 tool results × 300 chars (15,000 total), aggregate budget = 1:\r\n\r\n```\r\nGateway prompt-projection path:\r\n  prepareEmbeddedAttemptPromptContext\r\n    → truncateOversizedToolResultsInMessages(budget=1)\r\n\r\n  BEFORE (broken — per-message 1-char floor):\r\n    50 × 1 char = 50 chars leaked past budget\r\n    Model sees noise, budget violated\r\n\r\n  AFTER (fixed — shared hasClaimedElisionReserve):\r\n    Total output:    1  (budget: 1)  ✅\r\n    Non-empty:       1/50            ✅\r\n    truncatedCount:  50              ✅\r\n\r\n  Model's subsequent turn view:\r\n    tool_0: \"[\"  ← meaningful signal\r\n    tool_1: (empty — pool exhausted)\r\n    tool_2: (empty — pool exhausted)\r\n    Model knows truncation happened. No silent gap.\r\n```\r\n\r\n### 3. Gateway startup — PR code loaded and operational\r\n\r\n```\r\n[gateway] agent model: ollama/qwen2.5:14b-instruct\r\n[gateway] http server listening (13 plugins; 4.5s)\r\n[gateway] ready\r\n```\r\n\r\n### 4. Real LLM request — gateway processes correctly\r\n\r\n```\r\n$ agent --session-key main --message \"Say hello in one word\"\r\n→ Hello\r\n```\r\n\r\n## User Impact\r\n\r\nWhen aggregate tool-result budget is exhausted (extreme saturation), the model sees at least a `\"[\"` truncation signal in the first tool result instead of completely empty results. This prevents silent gaps in tool results during saturation scenarios while strictly respecting the configured aggregate budget.\r\n\r\n## Files Changed\r\n\r\n| File | Additions | Deletions |\r\n|---|---|---|\r\n| `src/agents/embedded-agent-runner/tool-result-truncation.ts` | +10 | −1 |\r\n| `src/agents/embedded-agent-runner/tool-result-truncation.test.ts` | +27 | 0 |\r\n\r\nTotal: +37 / −1 across 2 files.\r\n\r\n---\r\n\r\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\r\n",
+        "branch": "fix/issue-107704-tool-result-empty",
+        "head_sha": "db17a6cb5758a4fd272f6eaa85dce042e25fad7d",
+        "author": "chenyangjun-xy",
+        "labels": [
+          "agents",
+          "size: XS",
+          "triage: blank-template",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/embedded-agent-runner/tool-result-truncation.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-runner/tool-result-truncation.ts",
+            "additions": 10,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 37,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-109078",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109078.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 118,
+          "gatingTotal": 113,
+          "counts": {
+            "SUCCESS": 77,
+            "SKIPPED": 40,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -85,19 +146,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2332,
+    "total_ms": 4116,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 421
+        "ms": 811
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2492
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 18
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +174,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1822
+        "ms": 339
       },
       {
         "name": "append_ledger",
