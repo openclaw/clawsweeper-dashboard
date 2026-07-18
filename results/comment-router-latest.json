@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T00:31:09.004Z",
+  "generated_at": "2026-07-18T00:32:33.103Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-17T21:31:06.878Z",
+  "since": "2026-07-17T21:32:30.025Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110120
+    108974
   ],
   "comment_ids": [
-    5008802451
+    5008782810
   ],
   "status_comment_id": 5008802736,
   "max_autoclose_targets": 8,
@@ -34,23 +34,23 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110120:5008802451:2026-07-18T00:29:08Z:re_review",
-      "comment_id": "5008802451",
-      "comment_version_key": "5008802451:2026-07-18T00:29:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110120#issuecomment-5008802451",
+      "idempotency_key": "comment-router:openclaw/openclaw:108974:5008782810:2026-07-18T00:25:32Z:automerge",
+      "comment_id": "5008782810",
+      "comment_version_key": "5008782810:2026-07-18T00:25:32Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108974#issuecomment-5008782810",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 110120,
-      "author": "chengzhichao-xydt",
-      "author_id": 264300353,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T00:29:08Z",
-      "comment_updated_at": "2026-07-18T00:29:08Z",
-      "comment_body_sha256": "19103f01c6d710e7bbc75cd7cbb5452a41283d017af1347c31e19401f6d54189",
-      "status_comment_id": 5008802736,
+      "target_branch": null,
+      "issue_number": 108974,
+      "author": "hxy91819",
+      "author_id": 8814856,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-18T00:25:32Z",
+      "comment_updated_at": "2026-07-18T00:25:32Z",
+      "comment_body_sha256": "b20841dd047d73b0d7cf464b323b7162a153e6790811fed6e52ea044ec073391",
+      "status_comment_id": null,
       "trigger": "mention",
-      "command": "re-review — both rank-up asks addressed at head 533489c05cca5630ce7aa2b35ec244ee8532b7fc",
-      "intent": "re_review",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -95,84 +95,76 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(active-memory): honor abortSignal during recall cleanup retry delays",
-        "body": "## What Problem This Solves\n\n`cleanupActiveMemoryRecallSession` in `extensions/active-memory/recall-run.ts` retries session-artifact cleanup on a `[0, 50, 250]ms` schedule using bare `node:timers/promises` sleeps. The outer `runRecallSubagent` already accepts `params.abortSignal` (wired to the real controller in `recall.ts`) and honors it everywhere else, but the cleanup retry loop never received it — a cancelled recall still waited out the remaining backoff schedule inside the `finally` chain, and a late `AbortError` risked masking the main outcome.\n\nHonest scope note: the absolute latency at stake is ~300ms. The value here is contract consistency — every other stage of the recall already honors the same signal, and cancellation during cleanup now returns promptly without being misreported as a cleanup failure.\n\n## Why This Change Was Made\n\n`node:timers/promises` `setTimeout` natively supports `{ signal }`, so the cleanup params simply thread `abortSignal` through and pass it to the sleep. An abort rejection returns early instead of throwing: the call site's `.catch` logs \"failed to clean up recall session\" and rethrows, and a cancelled cleanup is not a failure — letting the AbortError propagate there would both misreport it and risk masking the main-flow outcome in the `finally` chain. Non-abort errors (including the initial attempt at `delayMs: 0`, which always runs) keep the exact previous behavior.\n\n## Changes\n\n- Add optional `abortSignal` to the cleanup params; pass it to the backoff sleep via the native `{ signal }` option (zero new dependencies).\n- Return early on abort; rethrow anything else unchanged. Pass `params.abortSignal` at the recall call site.\n- Regression test: cleanup mock always rejects, the recall's own 20ms watchdog aborts during the first 50ms backoff; asserts exactly one cleanup attempt, sub-300ms wall clock, and no spurious cleanup-failure warning.\n- Subsequent-recall regression test: after an aborted cleanup leaves the recall session entry behind, the next recall against the same store proceeds normally — resolves with the recall result, no lock error, its own cleanup succeeds, no cleanup-failure warning.\n\n## User Impact\n\nCancelling or timing out a recall now tears down promptly instead of lingering through the remaining cleanup backoff, and cancellation is no longer logged as a cleanup failure.\n\n## Evidence\n\nExact head: `533489c05cca5630ce7aa2b35ec244ee8532b7fc`.\n\n**Outside-runner behavior proof** — the production `runRecallSubagent` is driven directly (no test runner) via `node --import tsx` against a real on-disk SQLite agent session store under a temp `OPENCLAW_STATE_DIR`. A real transient fault is injected for the aborted recall's first cleanup attempt (the database path is swapped to a directory, so the production SQLite open fails); an ESM loader seam counts `cleanupSessionLifecycleArtifacts` attempts while delegating every call to the real production implementation. Disk readback opens the real database after each recall.\n\nAfter fix — the timed-out recall keeps its main outcome and returns at 251ms with the remaining retries cut; the leftover session entry is visible on disk; the subsequent recall on the same store resolves in 25ms, returns the recall result, cleans its own entry, and logs no warning:\n\n```text\n$ TSX_TSCONFIG_PATH=tsconfig.proof.json node --import tsx /tmp/recall-abort-proof.mts; echo \"EXIT=$?\"\n[proof] real session store: /tmp/openclaw-recall-abort-proof-rmOt4J/state/agents/main/sessions/sessions.json\n[proof] real sqlite database: /tmp/openclaw-recall-abort-proof-rmOt4J/state/agents/main/agent/openclaw-agent.sqlite\n[proof] embedded recall run sessionId=active-memory-mrpmngc7-7232d1f8 at +176ms\n[proof] cleanup attempt #1 at +179ms\n[proof] injected real fault: .../openclaw-agent.sqlite is now a directory (SQLite open must fail)\n[proof] abort fired at +249ms (simulates timed-out recall)\n[proof] recall#1 settled=resolved elapsed=251ms attempts=1 reply=\"- lemon pepper wings\\n- blue cheese\" error=\"\"\n[proof] disk readback after recall#1: session_entries keys=[\"agent:main:main:active-memory:bbef4024fbe3\"]\n[proof] check ok: aborted recall left its session entry behind (cleanup was cut short)\n[proof] embedded recall run sessionId=active-memory-mrpmngj8-a2af8f44 at +271ms\n[proof] cleanup attempt #2 at +272ms\n[proof] recall#2 settled=resolved elapsed=25ms attempts_total=2 reply=\"- lemon pepper wings\\n- blue cheese\" error=\"\"\n[proof] disk readback after recall#2: session_entries keys=[\"agent:main:main:active-memory:bbef4024fbe3\"]\n[proof] check ok: subsequent recall resolved (no lock/store error)\n[proof] check ok: subsequent recall returned the expected recall result\n[proof] check ok: subsequent recall completed promptly (25ms < 1000ms)\n[proof] check ok: subsequent recall logged no new cleanup warning\n[proof] check ok: subsequent recall cleaned its own entry; only the aborted recall's leftover remains\n[proof] check ok: after-fix: timed-out recall keeps its main outcome\n[proof] check ok: after-fix: abort cut the remaining cleanup retries (attempts=1)\n[proof] check ok: after-fix: timed-out recall returned promptly (251ms < 400ms)\n[proof] check ok: after-fix: no late cleanup failure warning\n[proof] OK\nEXIT=0\n```\n\nBefore fix (same script with `extensions/active-memory/recall-run.ts` from `upstream/main`, restored immediately after): the abort at +222ms is ignored — cleanup attempts #2 and #3 still run on the full backoff schedule, the recall waits 536ms, and the late cleanup failure overrides the recall outcome entirely (rejection + \"failed to clean up recall session\" warning). The subsequent recall still proceeds normally, confirming the comparison isolates the abort handling.\n\n```text\n[proof] cleanup attempt #1 at +169ms\n[proof] injected real fault: .../openclaw-agent.sqlite is now a directory (SQLite open must fail)\n[proof] abort fired at +222ms (simulates timed-out recall)\n[proof] cleanup attempt #2 at +272ms\n[proof] cleanup attempt #3 at +530ms\n[proof] logger.warn: active-memory: failed to clean up recall session agent:main:main:active-memory:03a0e36a59af: unable to open database file\n[proof] recall#1 settled=rejected elapsed=536ms attempts=3 reply=\"\" error=\"unable to open database file\"\n[proof] check ok: before-fix: exhausted cleanup retries override the recall outcome\n[proof] check ok: before-fix: abort did not interrupt the backoff schedule (attempts=3)\n[proof] check ok: before-fix: recall waited out the full backoff (536ms >= 290ms)\n[proof] check ok: before-fix: late cleanup failure warning emitted\n[proof] OK (expect=before)\n```\n\nRegression tests (Node 24):\n\n```text\nnode scripts/run-vitest.mjs run extensions/active-memory/index.test.ts\nTest Files  1 passed (1)\nTests  176 passed (176)\n```\n\nThis includes the new subsequent-recall regression: the aborted recall's leftover session entry does not block or corrupt the next recall on the same store. Against the pre-change implementation the abort regression fails deterministically: cleanup runs the full 3-attempt schedule (≥300ms) and the cleanup-failure warning fires despite the abort. Must-not-fire paths are covered by the existing \"retries transient cleanup failures\" (2 attempts, success, no warning) and \"retries exhausted\" (3 attempts + warning) tests, which still pass unchanged.\n\n`oxlint` clean on both changed files; `tsgo` extensions project reports no errors in active-memory files.\n\n## Intentionally out of scope\n\n- If the abort lands during a post-failure backoff, the session artifact may remain on disk without a warning — the accepted cost of cancellation; the common path is covered by the unconditional first attempt. The new regression and the outside-runner proof both demonstrate the next recall against that store proceeds normally (no lock error, no hang, own cleanup succeeds).\n- No change to the retry schedule, attempt counts, or cleanup failure reporting for real errors.\n",
-        "branch": "fix/recall-cleanup-abort",
-        "head_sha": "533489c05cca5630ce7aa2b35ec244ee8532b7fc",
-        "author": "chengzhichao-xydt",
+        "title": "fix(gmail): prevent duplicate watch renewals during stalls",
+        "body": "<details>\n<summary>Additional instructions</summary>\n\n**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers\ncan help update the branch when needed.\n\n</details>\n\n## What Problem This Solves\n\nFixes an issue where Gmail watch renewal could launch duplicate `gog gmail watch start` commands when a previous periodic renewal was still stalled. This affects both the gateway-managed watcher and `openclaw webhooks gmail run` when the configured renewal interval is shorter than the command's two-minute timeout.\n\n## Why This Change Was Made\n\nEach Gmail watcher lifecycle now admits only one periodic renewal at a time. Later timer ticks are coalesced until the active command settles, while existing retry timing, failure logging, configuration, and process lifecycle behavior remain unchanged.\n\n## User Impact\n\nOperators no longer get overlapping Gmail watch registration commands during slow or stalled renewals. Normal renewals continue on the next interval after the active command settles.\n\n## Evidence\n\n- Focused tests: `src/hooks/gmail-watcher.test.ts` and `src/hooks/gmail-ops.test.ts` — 2 files, 12 tests passed.\n- Targeted formatting and lint checks passed for the four changed files.\n- Production-lifecycle proof used the real `startGmailWatcher` scheduler and actual child processes. With `renewEveryMinutes: 1`, the first periodic renewal was held for 70 seconds; after 135 seconds exactly two watch-start calls were observed: the initial registration and one renewal. The minute-two tick did not launch a third command.\n- An accelerated repeat of the same child-process scenario was captured by the bounded proof runner and produced the same two-call result.\n- Fresh open-PR recall found Gmail watcher PRs for delivery mode, OAuth failure handling, secret argv handling, and bind diagnostics, but no PR implementing this single-flight renewal invariant.\n",
+        "branch": "fix/problem-gmail-renewal-overlap",
+        "head_sha": "34a3001388bb99fb4a041a73aad98631c4557634",
+        "author": "zhangguiping-xydt",
         "labels": [
           "size: S",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
+          "clawsweeper:automerge",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/active-memory/index.test.ts",
-            "additions": 104,
-            "deletions": 0,
+            "path": "src/hooks/gmail-ops.test.ts",
+            "additions": 41,
+            "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/active-memory/recall-run.ts",
-            "additions": 13,
+            "path": "src/hooks/gmail-ops.ts",
+            "additions": 14,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 61,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 40,
+            "deletions": 11,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 117,
-        "deletions": 1,
+        "changedFiles": 4,
+        "additions": 156,
+        "deletions": 16,
         "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
+        "cluster_id": "automerge-openclaw-openclaw-108974",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108974.md",
         "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110120",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110120.md",
+        "has_automerge_job": true,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108974",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108974.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 77,
-          "gatingTotal": 72,
+          "total": 120,
+          "gatingTotal": 115,
           "counts": {
-            "SKIPPED": 30,
-            "SUCCESS": 39,
-            "IN_PROGRESS": 6,
-            "FAILURE": 2
+            "SUCCESS": 78,
+            "SKIPPED": 41,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Scan shared kit from iOS:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan shared kit from iOS:IN_PROGRESS",
-            "build-artifacts:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [
-            "check-dependencies:FAILURE",
-            "check-test-types:FAILURE"
-          ],
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-18T00:31:09.193Z"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -183,19 +175,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 4336,
+    "total_ms": 3881,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 628
+        "ms": 451
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1369
+        "ms": 1915
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 160
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -211,7 +203,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2200
+        "ms": 803
       },
       {
         "name": "append_ledger",
