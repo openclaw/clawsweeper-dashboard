@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T08:11:10.359Z",
+  "generated_at": "2026-07-18T08:11:37.983Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T05:11:07.943Z",
+  "since": "2026-07-18T05:11:36.519Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110535
+    110003
   ],
   "comment_ids": [
-    5010531716
+    5010464469
   ],
   "status_comment_id": 5010531840,
   "max_autoclose_targets": 8,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110535:5010531716:2026-07-18T08:09:05Z:re_review",
-      "comment_id": "5010531716",
-      "comment_version_key": "5010531716:2026-07-18T08:09:05Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110535#issuecomment-5010531716",
+      "idempotency_key": "comment-router:openclaw/openclaw:110003:5010464469:2026-07-18T07:44:30Z:re_review",
+      "comment_id": "5010464469",
+      "comment_version_key": "5010464469:2026-07-18T07:44:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110003#issuecomment-5010464469",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 110535,
-      "author": "Pick-cat",
-      "author_id": 266665499,
+      "target_branch": null,
+      "issue_number": 110003,
+      "author": "LZY3538",
+      "author_id": 293718838,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T08:09:05Z",
-      "comment_updated_at": "2026-07-18T08:09:05Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 5010531840,
+      "comment_created_at": "2026-07-18T07:44:30Z",
+      "comment_updated_at": "2026-07-18T07:44:30Z",
+      "comment_body_sha256": "3cbfa78d9a087a6323a40b48ea4d6ae00c37aaf5ef7bba3687b2499337d901c3",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -95,67 +95,72 @@
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(codex): stop stale MCP child processes with revalidated SIGKILL escalation",
-        "body": "## What Problem This Solves\n\n`killStaleComputerUseMcpChildren` in `extensions/codex/src/app-server/computer-use.ts:1146` sends `process.kill(pid, \"SIGTERM\")` and immediately records the pid as killed — without verifying the process actually terminated. If a child process traps or ignores SIGTERM (e.g. `process.on('SIGTERM', ...)` without `process.exit()`), it survives and becomes a zombie that the periodic health monitor can never clear.\n\n## Why This Change Was Made\n\nThe fix schedules a SIGKILL after a 2-second grace period. Before sending SIGKILL, it **revalidates process identity**: re-lists processes via `/bin/ps`, finds the PID, and confirms the command still matches a scoped `SkyComputerUseClient` MCP child descendant of the original ancestor PID. This prevents accidental termination of an unrelated process in the rare case of PID reuse during the grace period.\n\nThe timer is `unref()`'d so it does not keep the event loop alive.\n\n## Real OS behavioral proof: SIGTERM → grace → ps revalidation → SIGKILL lifecycle\n\nA standalone proof script exercises the same process lifecycle on a real OS:\n\n```\nAncestor PID (this script): 1555975\nChild PID: 1556026\nps revalidation: pid=1556026 ppid=1555975\n    command: /usr/local/node/bin/node -e process.on('SIGTERM', ...)\n    descendant of 1555975: YES (PASS)\nSent SIGTERM to child 1556026\nAfter SIGTERM: child alive = true (expect true)         ← child traps SIGTERM\nWaiting 2s grace period...\nRevalidation: pid=1556026 exists, command marker: true  ← identity confirmed\nSent SIGKILL to child 1556026\nAfter SIGKILL: child alive = false (expect false)       ← SIGKILL succeeds\nps after SIGKILL: pid 1556026 in list = false (expect false)\n\nPASS: SIGTERM → 2s grace → ps revalidation → SIGKILL lifecycle verified\n```\n\nWhat this proves:\n1. **SIGTERM trap**: A child that ignores SIGTERM survives the initial kill\n2. **Grace period**: The 2-second delay allows the process to exit gracefully if it can\n3. **ps revalidation**: `/bin/ps` process listing correctly identifies the PID, command, and parent-child relationship\n4. **SIGKILL escalation**: After revalidation passes, SIGKILL reliably terminates the child\n5. **Cleanup confirmation**: Post-SIGKILL ps listing confirms the PID is gone\n\nThe only macOS-specific difference is the ps flag format (`-axo` vs `-eo`), which is a simple argument change — the revalidation and kill logic is identical across platforms. The macOS ps format is exercised by the existing `parsePsOutput` unit tests.\n\n## Test results\n\n### Vitest (36/36 passed)\n\n```\n$ node scripts/run-vitest.mjs extensions/codex/src/app-server/computer-use.test.ts\n Test Files  1 passed (1)\n      Tests  36 passed (36)\n```\n\nNew tests cover:\n- SIGTERM is sent to identified stale MCP children\n- After 2s grace period, revalidation ps confirms identity → SIGKILL is sent\n- After 2s, quick existence check (`kill 0`) throws ESRCH → SIGKILL skipped\n- After 2s, revalidation ps shows different command → SIGKILL skipped (PID reuse guard)\n\n### Mutation check\n\nRevert the SIGKILL escalation → `revalidates process identity and sends SIGKILL` fails:\n\n```\nFAIL  killStaleComputerUseMcpChildren > revalidates process identity and sends SIGKILL\nAssertionError: expected \"kill\" to be called with arguments: [ 1234, 'SIGKILL' ]\nReceived: 1st call: [ 1234, 'SIGTERM' ]  // no SIGKILL after timer\n```\n\nRestore fix → 36/36 passed.\n\n### Format check\n\n```\n$ oxfmt --check extensions/codex/src/app-server/computer-use.ts extensions/codex/src/app-server/computer-use.test.ts\nAll matched files use the correct format.\n```\n\n## User Impact\n\nCodex app-server health monitor now reliably terminates stale Computer Use MCP child processes, even those that ignore SIGTERM. PID reuse is guarded by identity revalidation before escalation.\n\n🤖 Generated with [co-mind](https://claude.com/claude-code)",
-        "branch": "fix/codex-sigterm-no-sigkill-escalation",
-        "head_sha": "25260529a0e2ac2d491b7ae4f0b8eb08ad114390",
-        "author": "pick-cat",
+        "title": "fix(telegram): time out incomplete Mini App auth bodies",
+        "body": "## What Problem This Solves\n\nThe Telegram Mini App auth endpoint (`/__openclaw_tg_miniapp/auth`) had no bounded body-read lifecycle. An unauthenticated client could send an incomplete body and hold request-processing resources open.\n\nThe first version of this PR bounded the read, but real socket proof exposed a protocol bug: `readRequestBodyWithLimit` destroyed the request before the route could flush its intended HTTP 408. The client saw a silent close with zero response bytes.\n\n## Why This Change Was Made\n\nThe route now uses the shared request-body guard, which owns the required response-before-destroy ordering for size and timeout failures. During the guarded read it also predeclares `Connection: close`, so the wire response agrees with the socket lifecycle; complete requests restore their original keep-alive state.\n\nThe regression test now uses a real `node:http` server plus a raw TCP client. It deliberately leaves a declared request body incomplete and asserts all three externally observable guarantees:\n\n- `HTTP/1.1 408 Request Timeout`\n- `Connection: close` with `Request body timeout`\n- the client socket actually closes\n\n## User Impact\n\nUnauthenticated slow-body requests against the Mini App auth route are bounded by the shared 5-second pre-auth timeout. Clients receive a usable 408 response, the connection is closed, and normal complete requests retain keep-alive behavior.\n\n## Evidence\n\n### Focused regression test — exact head `70ed5884bb7d9b39af0e447e719732e73c8a916c`\n\n```text\n$ node scripts/run-vitest.mjs extensions/telegram/src/miniapp/routes.test.ts\n\nTest Files  1 passed (1)\n     Tests  7 passed (7)\n[test] passed 1 Vitest shard in 13.97s\n```\n\nThe timeout case is a real HTTP/TCP test, not a mocked `ServerResponse` or synthetic `Readable` assertion.\n\n### Live Gateway A/B socket proof\n\nProof setup was isolated and credential-free: loopback-only Gateway, temporary state, Control UI disabled, gateway auth disabled only inside the isolated proof instance, and no Telegram token. The production Gateway plugin loader reported the proof plugin as loaded; that plugin only registers `registerTelegramMiniAppRoutes` built from the stated PR head. The request declared `Content-Length: 64`, sent only a partial JSON prefix, and deliberately kept its write side open.\n\nBefore the response-ordering fix (`b684f7ffff60ac26add071d7e3c5edf46a2cdff4`):\n\n```text\nconnected=true request=partial-post writeSideOpen=true\nelapsedMs=5043 end=true close=true error=none\nrawResponseBegin\n<no response bytes>\nrawResponseEnd\n```\n\nAfter the fix (`70ed5884bb7d9b39af0e447e719732e73c8a916c`):\n\n```http\nconnected=true request=partial-post writeSideOpen=true\nelapsedMs=5041 end=true close=true error=none\nrawResponseBegin\nHTTP/1.1 408 Request Timeout\nContent-Type: text/plain; charset=utf-8\nConnection: close\nContent-Length: 20\n\nRequest body timeout\nrawResponseEnd\n```\n\nImmediate post-timeout liveness probe against the same Gateway process:\n\n```text\npostTimeoutProbeStatus=200 contentType=text/html; charset=utf-8 bytes=2373\nlistener=127.0.0.1\n```\n\nThis proves the incomplete client no longer remains open, receives the bounded 408 response, and does not destabilize the Gateway.\n\n### Static hygiene\n\n```text\noxfmt --check: passed (2 files)\ngit diff --check: passed\n```\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code) and updated with live Gateway proof.\n",
+        "branch": "codex/telegram-miniapp-body-timeout",
+        "head_sha": "5da5ff719f9c62e2cf51691899fae18147768477",
+        "author": "lzy3538",
         "labels": [
+          "channel: telegram",
           "size: S",
-          "extensions: codex",
+          "proof: sufficient",
           "P2",
-          "rating: 🧂 unranked krab",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof",
-          "triage: needs-pr-context"
+          "rating: 🐚 platinum hermit",
+          "status: 👀 ready for maintainer look"
         ],
         "files": [
           {
-            "path": "extensions/codex/src/app-server/computer-use.test.ts",
-            "additions": 144,
-            "deletions": 1,
+            "path": "extensions/telegram/src/miniapp/routes.test.ts",
+            "additions": 80,
+            "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/codex/src/app-server/computer-use.ts",
-            "additions": 34,
-            "deletions": 0,
+            "path": "extensions/telegram/src/miniapp/routes.ts",
+            "additions": 51,
+            "deletions": 18,
             "changeType": "MODIFIED"
           }
         ],
         "changedFiles": 2,
-        "additions": 178,
-        "deletions": 1,
+        "additions": 131,
+        "deletions": 20,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110535",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110535.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110003",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110003.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 88,
-          "gatingTotal": 83,
+          "total": 84,
+          "gatingTotal": 79,
           "counts": {
-            "FAILURE": 4,
-            "SUCCESS": 41,
-            "SKIPPED": 43
+            "SUCCESS": 44,
+            "SKIPPED": 33,
+            "FAILURE": 6,
+            "NEUTRAL": 1
           },
           "blockers": [
-            "Real behavior proof:FAILURE",
             "build-artifacts:FAILURE",
-            "checks-node-changed-2:FAILURE",
+            "QA Smoke CI (profile 1/4):FAILURE",
+            "QA Smoke CI (profile 2/4):FAILURE",
+            "QA Smoke CI (profile 3/4):FAILURE",
+            "QA Smoke CI (profile 4/4):FAILURE",
             "openclaw/ci-gate:FAILURE"
           ],
           "pending": [],
           "terminalBlockers": [
             "Real behavior proof:FAILURE",
             "build-artifacts:FAILURE",
-            "checks-node-changed-2:FAILURE",
+            "QA Smoke CI (profile 1/4):FAILURE",
+            "QA Smoke CI (profile 2/4):FAILURE",
+            "QA Smoke CI (profile 3/4):FAILURE",
+            "QA Smoke CI (profile 4/4):FAILURE",
             "openclaw/ci-gate:FAILURE"
           ],
           "terminalBlockers": [],
@@ -175,19 +180,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 6507,
+    "total_ms": 1703,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 548
+        "ms": 407
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1749
+        "ms": 967
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 12
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -203,7 +208,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 4073
+        "ms": 239
       },
       {
         "name": "append_ledger",
