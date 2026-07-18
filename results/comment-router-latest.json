@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T19:27:42.096Z",
+  "generated_at": "2026-07-18T19:30:23.142Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T16:27:40.074Z",
+  "since": "2026-07-18T16:30:22.483Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -15,11 +15,11 @@
   "comment_ids": [
     5012603161
   ],
-  "status_comment_id": 5012603316,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -39,7 +39,7 @@
       "comment_version_key": "5012603161:2026-07-18T19:25:33Z",
       "comment_url": "https://github.com/openclaw/openclaw/pull/110918#issuecomment-5012603161",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
+      "target_branch": null,
       "issue_number": 110918,
       "author": "Yigtwxx",
       "author_id": 156921875,
@@ -47,7 +47,7 @@
       "comment_created_at": "2026-07-18T19:25:33Z",
       "comment_updated_at": "2026-07-18T19:25:33Z",
       "comment_body_sha256": "e337a82ac82a434f258137d99ce51946b7b1f367099cf21d9885959cffc48260",
-      "status_comment_id": 5012603316,
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,124 +72,32 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 110918,
-          "dispatch_key": "router-1bf4ea961f3fb1ba",
-          "dispatched_at": "2026-07-18T19:27:42.801Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-18T19:27:43.743Z",
-          "response_comment_id": "5012603316",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(reef): contain startup friend reconcile failures",
-        "body": "Related: #110870\n\n## What Problem This Solves\n\nFixes an issue where operators running the Reef channel against a relay that is rate limiting would see Reef stop permanently and stay down until the process was restarted by hand, instead of riding out the throttling and recovering on its own.\n\nWhile the relay returns 429, starting the Reef account fails outright. The gateway supervisor restarts it, each restart hits the same throttled relay again, and after ten attempts Reef gives up for the lifetime of the process — logging `giving up after 10 restart attempts`. Because every attempt issues another relay request, the restart cycle also feeds the throttling that caused it.\n\n#110870 fixed exactly this amplifier for the periodic reconcile that runs every 30s, but the reconcile that runs once at account startup was not covered by that change and still fails the whole account.\n\n## Why This Change Was Made\n\nThe startup and periodic reconcile are the same relay call with two different failure policies: the periodic one reports the error and keeps the channel alive, the startup one rejects `startAccount`. This change gives them one shared policy, in the module that already owns the account lifecycle.\n\nThe startup reconcile moves into `runReefChannelLifecycle`, and activation moves behind a new `onReady` hook so the original ordering is preserved exactly — refresh peer keys, activate, then start the inbox — since an agent turn must not use Reef outbound before peer keys are refreshed. Both call sites now route through one internal `runReconcileStep` helper.\n\nDeliberate boundary: on a startup failure the account continues with the peer keys already persisted, which is the same staleness the periodic path already tolerates between intervals, and the next interval retries. Two adjacent fixes fall out of the restructure — the abort listener on `parentSignal` is no longer leaked if a startup step throws, and an already-aborted account no longer issues a relay request on its way out.\n\n## User Impact\n\nReef survives relay rate limiting instead of dying to it. When the relay throttles at startup, the account now comes up, logs `reef friend reconcile failed: ...`, serves inbound and outbound messages with the peer keys it already has, and refreshes them on the next 30s reconcile once the relay recovers. Operators no longer need to restart the process to get Reef back, and Reef stops adding restart traffic to a relay that is already throttling.\n\nNo configuration change. The only behavior difference on the success path is that peer keys may briefly be one interval stale after a failed startup refresh.\n\n## Evidence\n\nLive run against a local relay returning `429 {\"error\":\"rate_limited\"}` on `GET /v1/friends`, driving the real `ReefTransportClient` — real request signing, real `ReefRelayError` — through both startup sequences:\n\n```\nlocal relay on http://127.0.0.1:59686 (429 on every request)\n\nmain (bare `await reconcile()` at channel.ts:405):\n  [relay] GET /v1/friends -> 429\n  startAccount: THREW -> ReefRelayError: rate_limited\n  activated=false inboxStarted=false\n\npatched (startup reconcile inside runReefChannelLifecycle):\n  [relay] GET /v1/friends -> 429\n  startAccount: still running (no throw)\n  activated=true inboxStarted=true\n  reported: ReefRelayError: rate_limited\n  clean shutdown after abort\n```\n\nHarness scope: it drives the real transport, signing and lifecycle, and substitutes the trust-store bookkeeping that wraps `listFriends` inside `friends.reconcile()`. That bookkeeping is not what throws, and this machine cannot open the plugin state DB (see the note below).\n\n**Tests** — two added to `extensions/reef/src/channel.test.ts`:\n\n- `activates and starts the inbox when the startup reconcile fails` captures the reconcile and error counts *inside* `onReady`, so it pins the startup reconcile specifically rather than \"some reconcile eventually failed\" after the periodic loop has had a chance to run.\n- `refreshes peer keys before activating and before the inbox starts` pins the `reconcile → ready → inbox` ordering.\n\nBoth are load-bearing — restoring a bare `await params.reconcile()` at startup fails them:\n\n```\n× activates and starts the inbox when the startup reconcile fails\n× keeps running when a periodic reconcile fails\n  Tests  3 failed | 5 passed (8)\n```\n\n`tears down the inbox loop before settling when a loop branch throws` needed one adjustment. It drives its failure through `onReconcileError` throwing, which now also fires on the startup step, so the inbox would never start and there would be nothing to tear down. Its startup reconcile now succeeds and the failure lands on the periodic loop with the inbox running, which is the case that test was written to cover.\n\n**Local checks:** `oxlint` and `oxfmt --check` clean on the three files, `tsgo --noEmit` clean, `extensions/reef/src/channel.test.ts` 7 passed / 1 failed.\n\nThat one failure is `exposes locally trusted peers as routable directory entries`, which fails identically on unmodified `origin/main` here (1 failed / 5 passed): this machine runs Node 22.20.0, whose embedded SQLite 3.50.4 is below the WAL-safety floor the plugin state store requires. Unrelated to this change. The `max-lines` ratchet likewise reports `ui/src/components/lobster-pet.ts` on this base with and without this change; not touched here.\n\nAI-assisted.",
-        "branch": "fix/reef-startup-reconcile-contained",
-        "head_sha": "e5f83f88befec233c3aa847b7f257285a6899fa4",
-        "author": "yigtwxx",
-        "labels": [
-          "size: S",
-          "channel: reef"
-        ],
-        "files": [
-          {
-            "path": "extensions/reef/src/channel-lifecycle.ts",
-            "additions": 27,
-            "deletions": 9,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/reef/src/channel.test.ts",
-            "additions": 72,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/reef/src/channel.ts",
-            "additions": 7,
-            "deletions": 4,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 3,
-        "additions": 106,
-        "deletions": 14,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110918",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110918.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 84,
-          "gatingTotal": 79,
-          "counts": {
-            "SUCCESS": 37,
-            "SKIPPED": 42,
-            "IN_PROGRESS": 5
-          },
-          "blockers": [
-            "build-artifacts:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "build-artifacts:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-18T19:27:42.304Z"
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 4367,
+    "total_ms": 2336,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 386
+        "ms": 450
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1521
+        "ms": 0
       },
       {
         "name": "classify_comment_commands",
-        "ms": 15
+        "ms": 17
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -201,11 +109,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 2307
+        "ms": 1677
       },
       {
         "name": "append_ledger",
