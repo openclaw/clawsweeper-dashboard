@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-18T06:30:14.444Z",
+  "generated_at": "2026-07-18T06:36:23.183Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-18T03:30:13.934Z",
+  "since": "2026-07-18T03:36:20.815Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -13,13 +13,13 @@
     110471
   ],
   "comment_ids": [
-    5010228564
+    5010253070
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5010253212,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:110434:5010083683:2026-07-18T06:24:34Z:clawsweeper_needs_human",
-      "comment_id": "5010083683",
-      "comment_version_key": "5010083683:2026-07-18T06:24:34Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110434#issuecomment-5010083683",
+      "idempotency_key": "comment-router:openclaw/openclaw:110471:5010253070:2026-07-18T06:34:14Z:re_review",
+      "comment_id": "5010253070",
+      "comment_version_key": "5010253070:2026-07-18T06:34:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110471#issuecomment-5010253070",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
+      "target_branch": "main",
       "issue_number": 110471,
       "author": "Pick-cat",
       "author_id": 266665499,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-18T06:15:02Z",
-      "comment_updated_at": "2026-07-18T06:15:02Z",
+      "comment_created_at": "2026-07-18T06:34:14Z",
+      "comment_updated_at": "2026-07-18T06:34:14Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": null,
+      "status_comment_id": 5010253212,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,40 +72,145 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110471,
+          "dispatch_key": "router-f1d24ef4598d5e70",
+          "dispatched_at": "2026-07-18T06:36:23.803Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-18T06:36:25.610Z",
+          "response_comment_id": "5010228688",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(ai): keep OpenAI tool call id truncation UTF-16 safe",
+        "body": "## What Problem This Solves\n\nFixes an issue where multi-model conversations using the `openai` provider could produce invalid Unicode tool call IDs. When a tool call ID longer than 40 characters contains a surrogate pair (emoji, CJK character) straddling position 39-40, the truncation at `normalizeToolCallId` splits the pair and leaves an unpaired high surrogate in the normalized ID sent to the API.\n\n## Why This Change Was Made\n\n`String.prototype.slice(0, 40)` operates on UTF-16 code units, not Unicode characters. A surrogate pair like 🐱 (`\\uD83D\\uDC31`) consumes 2 code units. When the cut falls between the high and low surrogates, the result is invalid Unicode that downstream consumers (OpenAI API, JSON encoders, database storage) may reject.\n\nThe fix switches from `id.slice(0, 40)` to `truncateUtf16Safe(id, 40)` from `@openclaw/normalization-core/utf16-slice`, an existing repo helper already used in 13+ call sites across the codebase for safe UTF-16 boundary truncation.\n\nNon-goals: the `id.includes(\"|\")` branch (call_id extraction) and non-OpenAI provider paths are unchanged — they already use `replace` + `slice` which have different semantics.\n\nCollision check: no open PR touches `openai-completions.ts:1052` or the `normalizeToolCallId` path. Related Unicode-repair PRs (#104054, #107664, #109561, #109498, #109839) operate on different surfaces.\n\n## User Impact\n\nMulti-model `openai` provider conversations with tool calls now produce valid Unicode in all tool call IDs, regardless of surrogate pair placement near the 40-character boundary.\n\n## Evidence\n\nExact head: `7e76b4f5a22` (based on `origin/main` `ec3eb573bf4`)\n\n### Format / diff check\n\n```\n$ oxfmt --check packages/ai/src/providers/openai-completions.ts packages/ai/src/providers/openai-completions.test.ts\nAll matched files use the correct format.\n\n$ git diff --check\n# exit 0\n```\n\n### Test output (47/47 passed)\n\n```\n$ node scripts/run-vitest.mjs packages/ai/src/providers/openai-completions.test.ts\n\n Test Files  1 passed (1)\n      Tests  47 passed (47)\n```\n\nNew test validates:\n- 41-code-unit ID with 🐱 surrogate pair at positions 39-40\n- Truncated result ≤ 40 code units, no trailing unpaired high surrogate\n- ASCII prefix preserved\n\n### Mutation check\n\nRevert `truncateUtf16Safe` to `slice` → 1 test fails:\n```\nAssertionError: expected false to be true\n ❯ openai-completions.test.ts:1692:45\n     normalizedId!.length <= 40\n```\n\nRestore `truncateUtf16Safe` → 47 passed.\n\n### Not tested\n\n- Live OpenAI API roundtrip with surrogate-containing tool call IDs (requires API key)\n- Other provider branches (`id.includes(\"|\")`, non-`openai` providers) — unchanged\n",
+        "branch": "fix/openai-tool-call-id-utf16-truncation",
+        "head_sha": "7e76b4f5a2294319ae625fbe55e333bb5dc96a95",
+        "author": "pick-cat",
+        "labels": [
+          "size: S",
+          "triage: needs-pr-context"
+        ],
+        "files": [
+          {
+            "path": "packages/ai/src/providers/openai-completions.test.ts",
+            "additions": 66,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "packages/ai/src/providers/openai-completions.ts",
+            "additions": 2,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 68,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110471",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110471.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 99,
+          "gatingTotal": 94,
+          "counts": {
+            "FAILURE": 9,
+            "SUCCESS": 59,
+            "SKIPPED": 25,
+            "IN_PROGRESS": 5,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Real behavior proof:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "actionlint:FAILURE",
+            "build-artifacts:FAILURE",
+            "checks-fast-max-lines-ratchet:FAILURE",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-lint:FAILURE",
+            "check-test-types:IN_PROGRESS",
+            "check-sqlite-session-schema-baseline:FAILURE"
+          ],
+          "pending": [
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS"
+          ],
+          "terminalBlockers": [
+            "Real behavior proof:FAILURE",
+            "Detect iOS scan scope:FAILURE",
+            "Detect macOS scan scope:FAILURE",
+            "actionlint:FAILURE",
+            "build-artifacts:FAILURE",
+            "checks-fast-max-lines-ratchet:FAILURE",
+            "check-lint:FAILURE",
+            "check-sqlite-session-schema-baseline:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-18T06:36:23.330Z"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1879,
+    "total_ms": 5239,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 421
+        "ms": 412
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1838
       },
       {
         "name": "classify_comment_commands",
-        "ms": 11
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 5428
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
-        "ms": 156
+        "ms": 0
       },
       {
         "name": "claim_dispatch_commands",
@@ -113,7 +218,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1370
+        "ms": 2860
       },
       {
         "name": "append_ledger",
