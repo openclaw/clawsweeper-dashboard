@@ -2,15 +2,15 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-110441"
 mode: "autonomous"
-run_id: "29645823596"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29645823596"
-head_sha: "32d4e4ad7f5bdc2fa1d4d0b99baea5e4692184ce"
-workflow_conclusion: "success"
+run_id: "29646114184"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29646114184"
+head_sha: "27c6c15d8c82bf70120a7dd53f56de268bbd5224"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-18T13:19:39.451Z"
+published_at: "2026-07-18T13:32:00.203Z"
 canonical: "#110441"
 canonical_issue: null
-canonical_pr: "https://github.com/openclaw/openclaw/pull/110441"
+canonical_pr: "#110441"
 actions_total: 1
 fix_executed: 0
 fix_failed: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29645823596](https://github.com/openclaw/clawsweeper/actions/runs/29645823596)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29646114184](https://github.com/openclaw/clawsweeper/actions/runs/29646114184)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -35,7 +35,7 @@ Canonical: #110441
 
 ## Summary
 
-#110441 is the sole open canonical PR. Its hydrated review state is clean, CI and real-behavior proof pass, and its focused two-file patch addresses a confirmed current-main cleanup gap. Per the job contract, emit a contributor-branch repair artifact for exact-head rebase, review-gate refresh, and focused validation; do not merge or close.
+Make PR #110441 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
@@ -66,7 +66,7 @@ Canonical: #110441
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #110441 | build_fix_artifact | planned | canonical | The job explicitly requires a repair_contributor_branch artifact. The candidate is narrow and useful, contributor credit is retained on the writable source PR, and no security-sensitive signal or actionable review finding is present. |
+| #110441 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
