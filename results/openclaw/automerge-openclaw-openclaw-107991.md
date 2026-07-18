@@ -2,19 +2,19 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-107991"
 mode: "autonomous"
-run_id: "29646125775"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29646125775"
-head_sha: "27c6c15d8c82bf70120a7dd53f56de268bbd5224"
-workflow_conclusion: "failure"
+run_id: "29662964251"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/29662964251"
+head_sha: "3f2bcaaa5e0dc4f29f064b3b891f4e1a0d87c948"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-18T13:33:57.212Z"
+published_at: "2026-07-18T22:36:59.064Z"
 canonical: "#107991"
 canonical_issue: null
 canonical_pr: "#107991"
 actions_total: 1
 fix_executed: 0
-fix_failed: 0
-fix_blocked: 0
+fix_failed: 1
+fix_blocked: 1
 apply_executed: 0
 apply_blocked: 0
 apply_skipped: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/29646125775](https://github.com/openclaw/clawsweeper/actions/runs/29646125775)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/29662964251](https://github.com/openclaw/clawsweeper/actions/runs/29662964251)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -43,8 +43,8 @@ Make PR #107991 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 | --- | ---: |
 | Worker actions | 1 |
 | Fix executed | 0 |
-| Fix failed | 0 |
-| Fix blocked | 0 |
+| Fix failed | 1 |
+| Fix blocked | 1 |
 | Applied executions | 0 |
 | Apply blocked | 0 |
 | Apply skipped | 0 |
@@ -54,7 +54,9 @@ Make PR #107991 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Action | Status | Target | Branch | Reason |
 | --- | --- | --- | --- | --- |
-| _None_ |  |  |  |  |
+| repair_contributor_branch | failed |  |  | validation command failed (pnpm check:changed): validation command left 1 background process(es) after exit |
+| execute_fix | blocked |  |  | validation command failed (pnpm check:changed): validation command left 1 background process(es) after exit |
+| automerge_repair_outcome_comment | updated | #107991 |  |  |
 
 ## Apply Actions
 
