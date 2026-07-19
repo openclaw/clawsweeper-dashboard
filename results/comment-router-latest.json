@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T06:15:00.914Z",
+  "generated_at": "2026-07-19T06:15:31.337Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T03:14:59.478Z",
+  "since": "2026-07-19T03:15:28.645Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    111185
+    108974
   ],
   "comment_ids": [
-    5014664356
+    5014665704
   ],
-  "status_comment_id": 5014664476,
+  "status_comment_id": 5014665828,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,23 +34,23 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:111185:5014664356:2026-07-19T06:12:51Z:re_review",
-      "comment_id": "5014664356",
-      "comment_version_key": "5014664356:2026-07-19T06:12:51Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/111185#issuecomment-5014664356",
+      "idempotency_key": "comment-router:openclaw/openclaw:108974:5014665704:2026-07-19T06:13:21Z:automerge",
+      "comment_id": "5014665704",
+      "comment_version_key": "5014665704:2026-07-19T06:13:21Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/108974#issuecomment-5014665704",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 111185,
-      "author": "YangManBOBO",
-      "author_id": 156181593,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T06:12:51Z",
-      "comment_updated_at": "2026-07-19T06:12:51Z",
-      "comment_body_sha256": "e663bc7a88f894772b500fa3b81ac202f3af2dcc9d47774f08e0e3c88e4aa49f",
-      "status_comment_id": 5014664476,
+      "issue_number": 108974,
+      "author": "hxy91819",
+      "author_id": 8814856,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-19T06:13:21Z",
+      "comment_updated_at": "2026-07-19T06:13:21Z",
+      "comment_body_sha256": "1940c20bd92e91b7d356e0e39efb5ebb513db79c6eb333f659768017d382c41e",
+      "status_comment_id": 5014665828,
       "trigger": "mention",
-      "command": "re-review",
-      "intent": "re_review",
+      "command": "automerge",
+      "intent": "automerge",
       "autoclose_message": null,
       "implementation_prompt": null,
       "operator_override": null,
@@ -73,81 +73,70 @@
       "expected_source_revision": null,
       "finding_id": null,
       "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 111185,
-          "dispatch_key": "router-0b1744b169c806b0",
-          "dispatched_at": "2026-07-19T06:15:01.754Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-19T06:15:02.799Z",
-          "response_comment_id": "5014664476",
-          "response_comment_mode": "updated"
-        }
-      ],
-      "author_repository_permission": "read",
+      "actions": [],
+      "author_repository_permission": "write",
       "target": {
         "kind": "pull_request",
-        "title": "fix(irc): replies produced during a disconnect window are silently dropped and falsely recorded as delivered",
-        "body": "## What Problem This Solves\n\nFixes an issue where IRC agent replies produced during a transient disconnect window are silently lost. When the IRC socket drops (netsplit, server restart, or transient network blip) while an agent turn is still running, the reply handler silently no-ops on the send, and the turn is recorded as successfully delivered with a healthy outbound timestamp.\n\nThe `sendReply` closure at `extensions/irc/src/monitor.ts:171` used `client?.sendPrivmsg(target, text)` — an optional chain that silently produced nothing when `client` was set to `null` by the disconnect handler. It then unconditionally recorded `lastOutboundAt` and outbound activity, giving the operator false confidence that the reply was sent.\n\nThe existing `onError` callback at `extensions/irc/src/inbound.ts:448` already surfaces delivery errors to the runtime — it was just never reached because the send never threw. IRC has no durable retry or offline queue for this channel, so surfacing the error is the correct behavior.\n\n## Why This Change Was Made\n\nThe closure now checks `if (!client) throw new Error(\"IRC not connected\")` before the send, and `client.sendPrivmsg` is called without the optional chain (the check above guarantees client is non-null). The `statusSink` and `activity.record` calls remain after the send — they only execute on success.\n\nWhen a disconnect occurs mid-turn, the reply dispatch calls `sendReply` → throws → `onError` fires → the runtime records the delivery failure and the turn is not marked delivered.\n\n## User Impact\n\nIRC users with unstable connections no longer see agent turns silently lost with false success indicators. The error is logged so operators can diagnose the disconnect.\n\n## Evidence\n\n### Source inspection (before/after)\n\nBefore (current main) — optional-chain no-op + unconditional success recording:\n```ts\nsendReply: async (target, text) => {\n  client?.sendPrivmsg(target, text);                    // no-op when client is null\n  opts.statusSink?.({ lastOutboundAt: Date.now() });    // false success\n  core.channel.activity.record({ ... direction: \"outbound\" }); // false success\n},\n```\n\nAfter (this patch) — explicit check + throw to surface failure:\n```ts\nsendReply: async (target, text) => {\n  if (!client) {\n    throw new Error(\"IRC not connected\");\n  }\n  client.sendPrivmsg(target, text);\n  opts.statusSink?.({ lastOutboundAt: Date.now() });\n  core.channel.activity.record({ ... direction: \"outbound\" });\n},\n```\n\n### Regression coverage\n\n- Existing tests pass unchanged: `node scripts/run-vitest.mjs extensions/irc/src/monitor.test.ts extensions/irc/src/send.test.ts extensions/irc/src/inbound.behavior.test.ts` → 14 passed.\n- The existing reconnect test (`monitor.test.ts:168`) verifies the IRC monitor creates a new TCP connection after the first socket closes; the reconnected client's `sendPrivmsg` is a real TCP write, so send-after-reconnect is already tested.\n\n### Sibling-surface context\n\nThe other bundled channels with real-time TCP connections (XMPP-era and equivalent) were checked: none use the same optional-chain-noop pattern with unconditional success recording. The IRC `onError` handler was the only delivery-error surface already wired but unreachable.",
-        "branch": "fix/irc-disconnect-reply-loss",
-        "head_sha": "4bdd3981bfac0fca97c562c3951a4054cd0c6a86",
-        "author": "yangmanbobo",
+        "title": "fix(gmail): prevent duplicate watch renewals during stalls",
+        "body": "<details>\n<summary>Additional instructions</summary>\n\n**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers\ncan help update the branch when needed.\n\n</details>\n\n## What Problem This Solves\n\nFixes an issue where Gmail watch renewal could launch duplicate `gog gmail watch start` commands when a previous periodic renewal was still stalled. This affects both the gateway-managed watcher and `openclaw webhooks gmail run` when the configured renewal interval is shorter than the command's two-minute timeout.\n\n## Why This Change Was Made\n\nEach Gmail watcher lifecycle now admits only one periodic renewal at a time. Later timer ticks are coalesced until the active command settles, while existing retry timing, failure logging, configuration, and process lifecycle behavior remain unchanged.\n\n## User Impact\n\nOperators no longer get overlapping Gmail watch registration commands during slow or stalled renewals. Normal renewals continue on the next interval after the active command settles.\n\n## Evidence\n\n- Focused tests: `src/hooks/gmail-watcher.test.ts` and `src/hooks/gmail-ops.test.ts` — 2 files, 12 tests passed.\n- Targeted formatting and lint checks passed for the four changed files.\n- Production-lifecycle proof used the real `startGmailWatcher` scheduler and actual child processes. With `renewEveryMinutes: 1`, the first periodic renewal was held for 70 seconds; after 135 seconds exactly two watch-start calls were observed: the initial registration and one renewal. The minute-two tick did not launch a third command.\n- An accelerated repeat of the same child-process scenario was captured by the bounded proof runner and produced the same two-call result.\n- Fresh open-PR recall found Gmail watcher PRs for delivery mode, OAuth failure handling, secret argv handling, and bind diagnostics, but no PR implementing this single-flight renewal invariant.\n",
+        "branch": "fix/problem-gmail-renewal-overlap",
+        "head_sha": "34a3001388bb99fb4a041a73aad98631c4557634",
+        "author": "zhangguiping-xydt",
         "labels": [
-          "channel: irc",
           "size: S",
-          "P1",
-          "rating: 🦪 silver shellfish",
-          "merge-risk: 🚨 message-delivery",
-          "status: 📣 needs proof"
+          "clawsweeper:automerge",
+          "proof: sufficient",
+          "P2",
+          "rating: 🐚 platinum hermit",
+          "status: 🚀 automerge armed"
         ],
         "files": [
           {
-            "path": "extensions/irc/src/client.test.ts",
-            "additions": 56,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/client.ts",
-            "additions": 3,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/irc/src/monitor.ts",
-            "additions": 4,
+            "path": "src/hooks/gmail-ops.test.ts",
+            "additions": 41,
             "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-ops.ts",
+            "additions": 14,
+            "deletions": 3,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.test.ts",
+            "additions": 61,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/hooks/gmail-watcher.ts",
+            "additions": 40,
+            "deletions": 11,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 3,
-        "additions": 63,
-        "deletions": 1,
+        "changedFiles": 4,
+        "additions": 156,
+        "deletions": 16,
         "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
+        "cluster_id": "automerge-openclaw-openclaw-108974",
+        "job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108974.md",
         "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-111185",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-111185.md",
+        "has_automerge_job": true,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-108974",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-108974.md",
         "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
         "review_decision": "",
         "checks": {
-          "total": 11,
-          "gatingTotal": 6,
+          "total": 120,
+          "gatingTotal": 115,
           "counts": {
-            "SUCCESS": 8,
-            "SKIPPED": 3
+            "SUCCESS": 78,
+            "SKIPPED": 41,
+            "NEUTRAL": 1
           },
           "blockers": [],
           "pending": [],
@@ -155,9 +144,9 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "processed_at": "2026-07-19T06:15:01.164Z"
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
+      "reason": "automerge already enabled for this PR; maintainer resume intent recorded"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -165,22 +154,22 @@
     "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
+  "ledger_claimed": false,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 3861,
+    "total_ms": 3965,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 562
+        "ms": 501
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 759
+        "ms": 2076
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 19
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -196,7 +185,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 2414
+        "ms": 1261
       },
       {
         "name": "append_ledger",
