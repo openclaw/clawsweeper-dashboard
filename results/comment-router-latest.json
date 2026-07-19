@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T07:46:01.138Z",
+  "generated_at": "2026-07-19T07:46:00.139Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T04:46:00.653Z",
+  "since": "2026-07-19T04:45:58.253Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    111161
+    110772
   ],
   "comment_ids": [
-    5014899749
+    5014907899
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5014908035,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:111161:5014899749:2026-07-19T07:41:24Z:re_review",
-      "comment_id": "5014899749",
-      "comment_version_key": "5014899749:2026-07-19T07:41:24Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/111161#issuecomment-5014899749",
+      "idempotency_key": "comment-router:openclaw/openclaw:110772:5014907899:2026-07-19T07:44:06Z:re_review",
+      "comment_id": "5014907899",
+      "comment_version_key": "5014907899:2026-07-19T07:44:06Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110772#issuecomment-5014907899",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 111161,
+      "target_branch": "main",
+      "issue_number": 110772,
       "author": "cxbAsDev",
       "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T07:41:24Z",
-      "comment_updated_at": "2026-07-19T07:41:24Z",
+      "comment_created_at": "2026-07-19T07:44:06Z",
+      "comment_updated_at": "2026-07-19T07:44:06Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": null,
+      "status_comment_id": 5014908035,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,9 +72,191 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110772,
+          "dispatch_key": "router-f92d9c1a7d638bdf",
+          "dispatched_at": "2026-07-19T07:46:00.937Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-19T07:46:01.987Z",
+          "response_comment_id": "5014908035",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(doctor): bound legacy session store read with size cap and stat-failure fix",
+        "body": "## What Problem This Solves\n\nThe `readLegacySessionRecords` function in `src/commands/doctor-session-sqlite.ts` reads legacy JSON session store files during `openclaw doctor` with a TOCTOU-prone pattern: `fs.statSync(path)` checks file size (50 MiB cap), then a separate `fs.readFileSync(path)` reads the content. Between the stat and the read, a file at that path could be replaced with a much larger file, causing OOM.\n\n## Why This Change Was Made\n\nDoctor migration runs during `openclaw doctor`, regularly invoked by users. While the existing 50 MiB cap is reasonable, the stat-then-read pattern has a Time-of-Check-Time-of-Use (TOCTOU) race: the stat validates one file's size, but the read may consume a different (potentially unbounded) file. The fix eliminates this window by operating on the same file descriptor for both the size check and the read.\n\n## What Changed\n\nReplaced the path-based `statSync`/`readFileSync` pattern with a descriptor-bound read in `readLegacySessionRecords`:\n\n1. `fs.openSync(path, 'r')` — Opens the file first, obtaining a file descriptor\n2. `fs.fstatSync(fd)` — Stats the descriptor (not the path) for size/isFile checks\n3. `fs.readFileSync(fd, 'utf-8')` — Reads through the same file descriptor\n4. `fs.closeSync(fd)` — Closes the descriptor via `try/finally`, guaranteeing cleanup\n\nAll error paths (ENOENT, EACCES, oversized, non-regular file) produce equivalent `store_unreadable` issues as before. The parent-directory validation for missing stores is also preserved.\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| `openclaw doctor` with swapped file between stat+read → could read unbounded data | → always reads same file that was validated |\n| Only `statSync` on path → TOCTOU race window | → fd pins the inode; race impossible |\n| Normal migration with valid files → works | → works (unchanged) |\n\n## Evidence\n\n**All 68 doctor-session-sqlite tests pass (2 skipped, platform-specific):**\n\n```\n ✓ |doctor-session-sqlite| src/commands/doctor-session-sqlite.test.ts (68 tests) 2671ms\n Test Files  1 passed (1)\n      Tests  68 passed (68)\n```\n\nThe descriptor-bound pattern is a standard fix for TOCTOU file races:\n- The file descriptor pins the specific inode, preventing substitution between operations\n- Even if the directory entry is deleted or renamed, the fd still refers to the original file\n- All size validation and reading happens on the same bounded file instance\n\n## Real Behavior Proof\n\nRan the production `openclaw doctor --session-sqlite inspect` command against real legacy session store files using the branch build. Paths redacted to `<tmp>`.\n\n### Valid legacy store (<50 MiB)\n\n```\n$ openclaw doctor --session-sqlite inspect --session-sqlite-store <tmp>/valid-sessions.json --non-interactive --json\n```\n\nRelevant JSON excerpt:\n\n```json\n{\n  \"targets\": [{\n    \"storePath\": \"<tmp>/valid-sessions.json\",\n    \"issues\": [],\n    \"legacyEntries\": 1,\n    \"sqliteEntries\": 0\n  }],\n  \"totals\": {\n    \"issues\": 0,\n    \"legacyEntries\": 1,\n    \"targets\": 1\n  }\n}\n```\n\nThe valid 93-byte store is read successfully and reports one legacy entry.\n\n### Oversized legacy store (>50 MiB)\n\n```\n$ openclaw doctor --session-sqlite inspect --session-sqlite-store <tmp>/oversized-sessions.json --non-interactive --json\n```\n\nRelevant JSON excerpt:\n\n```json\n{\n  \"targets\": [{\n    \"storePath\": \"<tmp>/oversized-sessions.json\",\n    \"issues\": [{\n      \"code\": \"store_unreadable\",\n      \"message\": \"<tmp>/oversized-sessions.json: file too large (71794539 bytes, max 52428800)\"\n    }],\n    \"legacyEntries\": 0,\n    \"sqliteEntries\": 0\n  }],\n  \"totals\": {\n    \"issues\": 1,\n    \"legacyEntries\": 0,\n    \"targets\": 1\n  }\n}\n```\n\nThe 71.8 MiB store is rejected by the descriptor-bound size check, producing the expected `store_unreadable` issue. Because the size check and read both use the same opened file descriptor, the validated size corresponds to the exact file that would be read, closing the stat-then-read TOCTOU window.",
+        "branch": "fix/bound-doctor-sqlite-read",
+        "head_sha": "2aeac850bf245fa3ae8872a276275429bd293480",
+        "author": "cxbasdev",
+        "labels": [
+          "commands",
+          "size: S",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/commands/doctor-session-sqlite.test.ts",
+            "additions": 53,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/commands/doctor-session-sqlite.ts",
+            "additions": 85,
+            "deletions": 27,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 138,
+        "deletions": 27,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110772",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110772.md",
+        "mode": "autonomous",
+        "mergeable": "UNKNOWN",
+        "merge_state_status": "UNKNOWN",
+        "review_decision": "",
+        "checks": {
+          "total": 111,
+          "gatingTotal": 106,
+          "counts": {
+            "SUCCESS": 32,
+            "IN_PROGRESS": 47,
+            "QUEUED": 3,
+            "SKIPPED": 28,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-max-lines-ratchet:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI (profile 1/4):IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 3/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-large-7:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-14:IN_PROGRESS",
+            "checks-node-compact-small-15:IN_PROGRESS",
+            "checks-node-compact-small-16:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-prompt-snapshots:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "pending": [
+            "Security High (process-exec-boundary):IN_PROGRESS",
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
+            "build-artifacts:IN_PROGRESS",
+            "checks-fast-max-lines-ratchet:IN_PROGRESS",
+            "checks-fast-bundled-protocol:IN_PROGRESS",
+            "QA Smoke CI (profile 1/4):IN_PROGRESS",
+            "QA Smoke CI (profile 2/4):IN_PROGRESS",
+            "QA Smoke CI (profile 3/4):IN_PROGRESS",
+            "QA Smoke CI (profile 4/4):IN_PROGRESS",
+            "checks-fast-contracts-plugins-a:IN_PROGRESS",
+            "checks-fast-contracts-plugins-b:IN_PROGRESS",
+            "checks-fast-contracts-channels-a:IN_PROGRESS",
+            "checks-fast-contracts-channels-b:IN_PROGRESS",
+            "checks-node-compact-large-1:IN_PROGRESS",
+            "checks-node-compact-large-2:IN_PROGRESS",
+            "checks-node-compact-large-3:IN_PROGRESS",
+            "checks-node-compact-large-4:IN_PROGRESS",
+            "checks-node-compact-large-5:IN_PROGRESS",
+            "checks-node-compact-large-6:IN_PROGRESS",
+            "checks-node-compact-large-7:IN_PROGRESS",
+            "checks-node-compact-small-1:IN_PROGRESS",
+            "checks-node-compact-small-10:IN_PROGRESS",
+            "checks-node-compact-small-11:IN_PROGRESS",
+            "checks-node-compact-small-12:IN_PROGRESS",
+            "checks-node-compact-small-13:IN_PROGRESS",
+            "checks-node-compact-small-14:IN_PROGRESS",
+            "checks-node-compact-small-15:IN_PROGRESS",
+            "checks-node-compact-small-16:IN_PROGRESS",
+            "checks-node-compact-small-2:IN_PROGRESS",
+            "checks-node-compact-small-3:IN_PROGRESS",
+            "checks-node-compact-small-4:IN_PROGRESS",
+            "checks-node-compact-small-5:IN_PROGRESS",
+            "checks-node-compact-small-6:IN_PROGRESS",
+            "checks-node-compact-small-7:IN_PROGRESS",
+            "checks-node-compact-small-8:IN_PROGRESS",
+            "checks-node-compact-small-9:IN_PROGRESS",
+            "check-guards:IN_PROGRESS",
+            "check-shrinkwrap:IN_PROGRESS",
+            "check-prod-types:IN_PROGRESS",
+            "check-lint:IN_PROGRESS",
+            "check-dependencies:IN_PROGRESS",
+            "check-test-types:IN_PROGRESS",
+            "check-additional-boundaries-a:IN_PROGRESS",
+            "check-prompt-snapshots:IN_PROGRESS",
+            "check-session-accessor-boundary:IN_PROGRESS",
+            "check-sqlite-session-flip-proof:IN_PROGRESS",
+            "check-additional-extension-package-boundary:IN_PROGRESS",
+            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+          ],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-19T07:46:00.354Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -82,22 +264,22 @@
     "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 1713,
+    "total_ms": 4305,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 402
+        "ms": 398
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1384
       },
       {
         "name": "classify_comment_commands",
-        "ms": 12
+        "ms": 15
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +295,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1229
+        "ms": 2409
       },
       {
         "name": "append_ledger",
