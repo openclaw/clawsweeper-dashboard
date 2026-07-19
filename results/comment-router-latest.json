@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T09:26:04.753Z",
+  "generated_at": "2026-07-19T09:26:15.752Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T06:26:02.338Z",
+  "since": "2026-07-19T06:26:13.605Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110772
+    110766
   ],
   "comment_ids": [
-    5015190760
+    5015191268
   ],
-  "status_comment_id": 5015190878,
+  "status_comment_id": 5015191344,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110772:5015190760:2026-07-19T09:23:57Z:re_review",
-      "comment_id": "5015190760",
-      "comment_version_key": "5015190760:2026-07-19T09:23:57Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110772#issuecomment-5015190760",
+      "idempotency_key": "comment-router:openclaw/openclaw:110766:5015191268:2026-07-19T09:24:08Z:re_review",
+      "comment_id": "5015191268",
+      "comment_version_key": "5015191268:2026-07-19T09:24:08Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110766#issuecomment-5015191268",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 110772,
+      "issue_number": 110766,
       "author": "cxbAsDev",
       "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T09:23:57Z",
-      "comment_updated_at": "2026-07-19T09:23:57Z",
-      "comment_body_sha256": "46dd62a8eb32843ca0309019ba31ff316dd03f00c4199dbef86bc4e45fb17087",
-      "status_comment_id": 5015190878,
+      "comment_created_at": "2026-07-19T09:24:08Z",
+      "comment_updated_at": "2026-07-19T09:24:08Z",
+      "comment_body_sha256": "09af2e1cf56713525f6a7eeba58838443fc7031b2351c05bc258eb3d8f5aac34",
+      "status_comment_id": 5015191344,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -80,58 +80,51 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 110772,
-          "dispatch_key": "router-45c5fa820c4a5b54",
-          "dispatched_at": "2026-07-19T09:26:05.433Z"
+          "item_number": 110766,
+          "dispatch_key": "router-5d8a4d4370c7237f",
+          "dispatched_at": "2026-07-19T09:26:16.528Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-19T09:26:07.431Z",
-          "response_comment_id": "5015136301",
+          "commented_at": "2026-07-19T09:26:18.430Z",
+          "response_comment_id": "5015031232",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(doctor): bound legacy session store read with size cap and stat-failure fix",
-        "body": "## What Problem This Solves\n\nThe `readLegacySessionRecords` function in `src/commands/doctor-session-sqlite.ts` reads legacy JSON session store files during `openclaw doctor` with a TOCTOU-prone pattern: `fs.statSync(path)` checks file size (50 MiB cap), then a separate `fs.readFileSync(path)` reads the content. Between the stat and the read, a file at that path could be replaced with a much larger file, causing OOM.\n\n## Why This Change Was Made\n\nDoctor migration runs during `openclaw doctor`, regularly invoked by users. While the existing 50 MiB cap is reasonable, the stat-then-read pattern has a Time-of-Check-Time-of-Use (TOCTOU) race: the stat validates one file's size, but the read may consume a different (potentially unbounded) file. The fix eliminates this window by operating on the same file descriptor for both the size check and the read, and by reading no more than the validated byte count.\n\n## What Changed\n\nReplaced the path-based `statSync`/`readFileSync` pattern with a descriptor-bound, byte-capped read in `readLegacySessionRecords`:\n\n1. `fs.openSync(path, 'r')` — Opens the file first, obtaining a file descriptor.\n2. `fs.fstatSync(fd)` — Stats the descriptor (not the path) for size/isFile checks.\n3. Bounded descriptor read loop — Reads at most `storeStat.size` bytes from the same fd, so same-inode growth after fstat cannot bypass the cap.\n4. `fs.closeSync(fd)` — Closes the descriptor via `try/finally`, guaranteeing cleanup.\n\nAll error paths (ENOENT, EACCES, oversized, non-regular file) produce equivalent `store_unreadable` issues as before. The parent-directory validation for missing stores is also preserved.\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| `openclaw doctor` with swapped file between stat+read → could read unbounded data | → always reads the same, validated file, capped to the fstat size |\n| Only `statSync` on path → TOCTOU race window | → fd pins the inode; bounded read closes same-inode growth path |\n| Normal migration with valid files → works | → works (unchanged) |\n\n## Evidence\n\n**All 68 doctor-session-sqlite tests pass (2 skipped, platform-specific):**\n\n```\n ✓ |doctor-session-sqlite| src/commands/doctor-session-sqlite.test.ts (68 tests) 2671ms\n Test Files  1 passed (1)\n      Tests  68 passed (68)\n```\n\nThe descriptor-bound pattern is a standard fix for TOCTOU file races:\n- The file descriptor pins the specific inode, preventing substitution between operations.\n- Even if the directory entry is deleted or renamed, the fd still refers to the original file.\n- All size validation and reading happens on the same bounded file instance.\n\n## Real Behavior Proof\n\n### Valid legacy store (<50 MiB) and oversized legacy store (>50 MiB)\n\nRan the production `openclaw doctor --session-sqlite inspect` command against real legacy session store files using the branch build. Paths redacted to `<tmp>`.\n\n**Valid store:**\n\n```\n$ openclaw doctor --session-sqlite inspect --session-sqlite-store <tmp>/valid-sessions.json --non-interactive --json\n```\n\n```json\n{\n  \"targets\": [{\n    \"storePath\": \"<tmp>/valid-sessions.json\",\n    \"issues\": [],\n    \"legacyEntries\": 1,\n    \"sqliteEntries\": 0\n  }],\n  \"totals\": {\n    \"issues\": 0,\n    \"legacyEntries\": 1,\n    \"targets\": 1\n  }\n}\n```\n\nThe valid 93-byte store is read successfully and reports one legacy entry.\n\n**Oversized store:**\n\n```\n$ openclaw doctor --session-sqlite inspect --session-sqlite-store <tmp>/oversized-sessions.json --non-interactive --json\n```\n\n```json\n{\n  \"targets\": [{\n    \"storePath\": \"<tmp>/oversized-sessions.json\",\n    \"issues\": [{\n      \"code\": \"store_unreadable\",\n      \"message\": \"<tmp>/oversized-sessions.json: file too large (71794539 bytes, max 52428800)\"\n    }],\n    \"legacyEntries\": 0,\n    \"sqliteEntries\": 0\n  }],\n  \"totals\": {\n    \"issues\": 1,\n    \"legacyEntries\": 0,\n    \"targets\": 1\n  }\n}\n```\n\nThe 71.8 MiB store is rejected by the descriptor-bound size check, producing the expected `store_unreadable` issue.\n\n### Descriptor-growth boundary proof\n\nThe final implementation reads at most the byte count validated by `fstatSync`. A focused runtime script exercises this boundary by opening a valid store, growing it after `fstatSync`, and confirming only the original validated bytes are consumed:\n\n```js\nconst fd = fs.openSync(tmp, \"r\");\nconst storeStat = fs.fstatSync(fd);\n// Grow the same inode after descriptor validation.\nconst appendFd = fs.openSync(tmp, \"a\");\nfs.writeSync(appendFd, Buffer.alloc(10 * 1024 * 1024, \"x\"));\nfs.closeSync(appendFd);\n// Read at most storeStat.size bytes from the pinned fd.\nconst buf = Buffer.alloc(storeStat.size);\nlet totalBytes = 0;\nwhile (totalBytes < storeStat.size) {\n  const bytesRead = fs.readSync(fd, buf, totalBytes, storeStat.size - totalBytes, totalBytes);\n  if (bytesRead === 0) {\n    break;\n  }\n  totalBytes += bytesRead;\n}\nconst parsed = JSON.parse(buf.subarray(0, totalBytes).toString(\"utf-8\"));\n```\n\nOutput:\n\n```\nvalidated size: 31\nsize after growth: 10485791\nbytes read: 31\nparsed keys: [ 'session1' ]\n```\n\nEven though the file grew by 10 MiB on the same inode, the reader stops at the fstat-validated size and the JSON object still parses correctly.\n",
-        "branch": "fix/bound-doctor-sqlite-read",
-        "head_sha": "4e070022a52ae5b058ed3d6624f633c7fd337639",
+        "title": "fix(cli): bind capability CLI media input reads to descriptor size",
+        "body": "## What Problem This Solves\n\nThe `readCliInputFileSafely` function in `src/cli/capability-cli/media-output.ts` reads input files for media capability commands with a TOCTOU-prone pattern: a path-based `stat` validates the size, then a separate `await fs.readFile(path)` reads the content. Between the stat and the read, a file could be swapped with a much larger one, potentially causing OOM.\n\n## Why This Change Was Made\n\nMedia input files are user-supplied paths that could be symlink-swapped or grown between validation and consumption. Opening the file first and binding the read to the size observed on that descriptor eliminates the race while preserving the existing unlimited-input contract.\n\n## What Changed\n\nReplaced the path-based `stat` + `readFile` pattern with a descriptor-bound exact read:\n\n```typescript\nconst handle = await fs.open(resolvedPath, \"r\");\ntry {\n  const stat = await handle.stat();\n  if (!stat.isFile()) throw new Error(\"not a regular file\");\n  const size = stat.size;\n  const buffer = Buffer.alloc(size);\n  let offset = 0;\n  while (offset < size) {\n    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);\n    if (bytesRead === 0) return buffer.subarray(0, offset);\n    offset += bytesRead;\n  }\n  return buffer;\n} finally {\n  await handle.close();\n}\n```\n\nKey points:\n- `fs.promises.open()` returns a `FileHandle`; `stat()` and the read both operate on the same descriptor.\n- The read is bounded to the validated `stat.size`, so a concurrent writer cannot grow the file after validation.\n- The existing unlimited-input contract is preserved; no new per-file or aggregate caps are introduced.\n- `try/finally` guarantees `handle.close()` even when exceptions are thrown.\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| Path-based `stat` followed by `fs.readFile` is vulnerable to swap/grow races. | Descriptor-bound read uses the size observed at open time, closing the TOCTOU window. |\n| Concurrent multi-file scheduling was implicit. | Explicit `Promise.all` around the new helper keeps concurrent reads while making them safer. |\n\n## Evidence\n\n### Integration tests\n\nAll 109 capability CLI integration tests pass on the exact PR head `0d9b01639c64fd5fa101a612859ac89b731a4f95`:\n\n```\n✓ |cli| src/cli/capability-cli.test.ts (109 tests) 3157ms\nTest Files  1 passed (1)\nTests  109 passed (109)\n```\n\n### Real CLI invocation\n\nA real `openclaw capability image edit` invocation was run against the PR head. The input file was read through the descriptor-bound path and successfully forwarded to the image generation provider.\n\nCommand (run in a clean worktree at head `0d9b01639c64`):\n\n```bash\nexport OPENCLAW_STATE_DIR=/tmp/openclaw-proof-state\nexport OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER=1\nopenclaw capability image edit \\\n  --file /tmp/openclaw-proof-input.png \\\n  --prompt \"make background transparent\" \\\n  --model openai/gpt-image-1.5 \\\n  --output-format png \\\n  --json\n```\n\nResult:\n\n```json\n{\n  \"ok\": true,\n  \"capability\": \"image.edit\",\n  \"transport\": \"local\",\n  \"provider\": \"openai\",\n  \"model\": \"gpt-image-1.5\",\n  \"attempts\": [],\n  \"outputs\": [\n    {\n      \"path\": \"/tmp/openclaw-proof-state/media/generated/image-1---70de0f12-216b-4eaf-9569-2cea0a98154a.png\",\n      \"mimeType\": \"image/png\",\n      \"size\": 70,\n      \"width\": 1,\n      \"height\": 1,\n      \"revisedPrompt\": \"mocked edit result\"\n    }\n  ],\n  \"ignoredOverrides\": []\n}\n```\n\nThe provider endpoint in this run was a local mock returning a 1x1 PNG; the redacted invocation proves the CLI correctly reads the user-supplied media input file through the new descriptor-bound helper and completes the end-to-end `image.edit` pipeline.\n",
+        "branch": "fix/bound-media-input-files",
+        "head_sha": "0d9b01639c64fd5fa101a612859ac89b731a4f95",
         "author": "cxbasdev",
         "labels": [
-          "commands",
-          "size: S",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
+          "cli",
+          "size: XS",
+          "P2",
+          "rating: 🦪 silver shellfish",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/commands/doctor-session-sqlite.test.ts",
-            "additions": 53,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/commands/doctor-session-sqlite.ts",
-            "additions": 87,
-            "deletions": 27,
+            "path": "src/cli/capability-cli/media-output.ts",
+            "additions": 38,
+            "deletions": 4,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 2,
-        "additions": 140,
-        "deletions": 27,
+        "changedFiles": 1,
+        "additions": 38,
+        "deletions": 4,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110772",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110772.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110766",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110766.md",
         "mode": "autonomous",
         "mergeable": "UNKNOWN",
         "merge_state_status": "UNKNOWN",
@@ -140,8 +133,8 @@
           "total": 101,
           "gatingTotal": 96,
           "counts": {
-            "SUCCESS": 79,
-            "SKIPPED": 40,
+            "SUCCESS": 81,
+            "SKIPPED": 38,
             "NEUTRAL": 1
           },
           "blockers": [],
@@ -152,7 +145,7 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-19T09:26:04.938Z"
+      "processed_at": "2026-07-19T09:26:15.932Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -163,19 +156,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 5553,
+    "total_ms": 5297,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 372
+        "ms": 330
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1768
+        "ms": 1702
       },
       {
         "name": "classify_comment_commands",
-        "ms": 20
+        "ms": 16
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -191,7 +184,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3128
+        "ms": 3139
       },
       {
         "name": "append_ledger",
