@@ -1,10 +1,10 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T14:50:44.427Z",
+  "generated_at": "2026-07-19T14:50:50.098Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T11:50:41.539Z",
+  "since": "2026-07-19T11:50:49.451Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
@@ -14,6 +14,9 @@
   ],
   "comment_ids": [
     5016072523
+  ],
+  "comment_ids": [
+    5016146165
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -40,13 +43,13 @@
       "comment_url": "https://github.com/openclaw/openclaw/pull/110767#issuecomment-5016072523",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 110767,
-      "author": "cxbAsDev",
-      "author_id": 294098203,
+      "issue_number": 108906,
+      "author": "wanyongstar",
+      "author_id": 296346421,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T14:23:41Z",
-      "comment_updated_at": "2026-07-19T14:23:41Z",
-      "comment_body_sha256": "846d931c6e12cf2f8c1b9634907198d106732bfd3205e3bcf90b35f9ba67cccf",
+      "comment_created_at": "2026-07-19T14:45:59Z",
+      "comment_updated_at": "2026-07-19T14:45:59Z",
+      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
       "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
@@ -74,158 +77,7 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(cli): bound model run image reads with per-file and aggregate budget",
-        "body": "## What Problem This Solves\n\nThe `readModelRunImageFiles` function in `src/cli/capability-cli/model.ts` reads image files for model run capability. It used a TOCTOU-prone pattern: `statSync(path)` to check file size (100 MiB per-file cap + 500 MiB aggregate budget), then a separate `fs.readFile(path)` to read the content. Between the stat and the read, the file could be swapped with a much larger one, defeating the size cap. Opening the path without care could also block on a substituted FIFO.\n\n## Why This Change Was Made\n\nModel run files are user-supplied inputs that could be symlink-swapped or replaced between the stat validation and the read. While the per-file and aggregate budgets provide defense-in-depth, the TOCTOU window means an attacker who can control the file at the path can bypass the per-file cap. Opening the file first with `O_NONBLOCK`, validating the descriptor, and reading no more than the validated byte count eliminates the race and avoids blocking on FIFOs.\n\n## What Changed\n\nReplaced the path-based `statSync` + `await fs.readFile` pattern with a descriptor-bound, nonblocking read in `readModelRunImageFileSafely`:\n\n```typescript\nconst resolvedPath = path.resolve(filePath);\n// Open with O_NONBLOCK on POSIX so a path substituted with a FIFO cannot\n// block the CLI waiting for a writer. Descriptor-bound fstat rejects\n// non-regular files and the bounded read pins the validated inode/size.\n// Windows has no portable nonblocking open for regular files, so this\n// availability guarantee is POSIX-only; Windows keeps ordinary open semantics.\nconst openFlags =\n  process.platform === \"win32\"\n    ? \"r\"\n    : nodeFs.constants.O_RDONLY | nodeFs.constants.O_NONBLOCK;\nconst handle = await fs.open(resolvedPath, openFlags);\ntry {\n  const stat = await handle.stat();\n  if (!stat.isFile()) {\n    throw new Error(`not a regular file: ${resolvedPath}`);\n  }\n  if (stat.size > MAX_MODEL_RUN_IMAGE_BYTES) {\n    throw new Error(`--file too large: ${resolvedPath} is ${stat.size} bytes (max ${MAX_MODEL_RUN_IMAGE_BYTES})`);\n  }\n  if (stat.size > budget.remaining) {\n    throw new Error(`--file too large: ${resolvedPath} is ${stat.size} bytes (max remaining total budget ${budget.remaining})`);\n  }\n  budget.remaining -= stat.size;\n  // Read at most the validated size from the pinned descriptor.\n  const buf = Buffer.alloc(stat.size);\n  let offset = 0;\n  while (offset < stat.size) {\n    const { bytesRead } = await handle.read(buf, offset, stat.size - offset, offset);\n    if (bytesRead === 0) {\n      break;\n    }\n    offset += bytesRead;\n  }\n  return buf.subarray(0, offset);\n} finally {\n  await handle.close();\n}\n```\n\nKey points:\n- On POSIX, `fs.promises.open()` with `O_RDONLY | O_NONBLOCK` returns a `FileHandle` without blocking on FIFOs.\n- `handle.stat()` and `handle.read()` both operate on the same descriptor, so the validated inode is the one consumed.\n- Per-file 100 MiB cap and 500 MiB aggregate budget are preserved.\n- `import { statSync }` was removed as no longer needed.\n- Sequential processing (already in original) is retained.\n- Windows uses ordinary `fs.open(\"r\")` semantics; the nonblocking anti-hang guarantee is intentionally POSIX-only until a reviewed Windows primitive is available.\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| `statSync(path)` → TOCTOU race: file could be swapped before read | → fd pins the inode; bounded read pins the validated size |\n| Opening a substituted FIFO → CLI hang waiting for a writer (POSIX) | → `O_NONBLOCK` open returns immediately; non-regular files are rejected |\n| Normal model run with valid files → works | → works (unchanged) |\n| Windows model run with valid files → works | → works (unchanged); Windows keeps ordinary open semantics |\n\n## Evidence\n\n**All 109 capability-cli tests pass:**\n\n```\n ✓ |cli| src/cli/capability-cli.test.ts (109 tests) 3133ms\n Test Files  1 passed (1)\n      Tests  109 passed (109)\n```\n\n## Real Behavior Proof\n\n### Regular file acceptance and budget rejection\n\nRan the production `openclaw --dev capability model run --local` command against real image files using the branch build. Paths redacted to `<tmp>`.\n\n**Accepted image (within 100 MiB per-file cap):**\n\n```\n$ openclaw --dev capability model run --prompt \"hello\" --file <tmp>/tiny.png --local --json\n```\n\n```json\n{\n  \"ok\": true,\n  \"capability\": \"model.run\",\n  \"transport\": \"local\",\n  \"inputs\": [\n    {\n      \"path\": \"<tmp>/tiny.png\",\n      \"mimeType\": \"image/png\"\n    }\n  ],\n  \"outputs\": [\n    {\n      \"text\": \"Hello! I see that you've mentioned an image...\",\n      \"mediaUrl\": null\n    }\n  ]\n}\n```\n\nThe 70-byte PNG is accepted, loaded via the descriptor-bound path, and passed to the model as an `image/png` input.\n\n**Per-file rejection (>100 MiB):**\n\n```\n$ openclaw --dev capability model run --prompt \"hello\" --file <tmp>/huge.png --local --json\n```\n\n```\nError: --file too large: <tmp>/huge.png is 110100480 bytes (max 104857600)\n```\n\nThe 105 MiB file is rejected before any read, because the size check is performed on the same opened file descriptor that would be used for reading.\n\n**Aggregate-budget rejection (>500 MiB total):**\n\n```\n$ openclaw --dev capability model run --prompt \"hello\" \\\n  --file <tmp>/medium1.png --file <tmp>/medium2.png --file <tmp>/medium3.png \\\n  --file <tmp>/medium4.png --file <tmp>/medium5.png --file <tmp>/medium6.png \\\n  --local --json\n```\n\n```\nError: --file too large: <tmp>/medium6.png is 94371840 bytes (max remaining total budget 52428800)\n```\n\nSix 90 MiB images total 540 MiB. The first five consume 450 MiB of the 500 MiB aggregate budget; the sixth is rejected because it exceeds the remaining 50 MiB, proving the aggregate cap is enforced across the invocation.\n\n### FIFO / replacement race proof (POSIX)\n\nA substituted FIFO should be rejected promptly instead of blocking the CLI. A focused runtime script using the same acquisition strategy confirms this on Linux/macOS:\n\n```js\nconst openFlags = nodeFs.constants.O_RDONLY | nodeFs.constants.O_NONBLOCK;\nconst handle = await fs.open(resolvedPath, openFlags);\nconst stat = await handle.stat();\nif (!stat.isFile()) {\n  throw new Error(`not a regular file: ${resolvedPath}`);\n}\n```\n\nOutput:\n\n```\nFIFO rejected in 2ms: not a regular file: /tmp/openclaw-proof-110767-OnztZf/fifo\nRegular file read bytes: 15\n```\n\nThe FIFO path is rejected in milliseconds because `O_NONBLOCK` prevents `fs.open()` from blocking for a writer; the subsequent descriptor-bound `stat()` sees a FIFO and throws. A regular file continues to read normally.\n\n### Supported platform boundary\n\n- POSIX (Linux/macOS): `O_NONBLOCK` + descriptor-bound `fstat`/`read` eliminates the FIFO-blocking and TOCTOU race covered above.\n- Windows: Node.js does not expose a portable nonblocking open for regular files, so Windows keeps the ordinary `fs.open(\"r\")` semantics. The descriptor-bound size validation still applies once the file is open, but the no-blocking guarantee for adversarially replaced non-regular paths is intentionally POSIX-only. A future, separately reviewed change can add a Windows-specific primitive if maintainers require it.\n\n",
-        "branch": "fix/bound-model-run-files",
-        "head_sha": "00a21b83f221c539446c3d0140ebb40672ce0cbb",
-        "author": "cxbasdev",
-        "labels": [
-          "cli",
-          "size: S",
-          "P2",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 availability",
-          "status: 📣 needs proof"
-        ],
-        "files": [
-          {
-            "path": "src/cli/capability-cli/model.ts",
-            "additions": 88,
-            "deletions": 29,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/infra/diagnostic-ai-safety-events.test.ts",
-            "additions": 322,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/diagnostic-ai-safety-events.ts",
-            "additions": 155,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/safety-event-store.test.ts",
-            "additions": 109,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/infra/safety-event-store.ts",
-            "additions": 281,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/plugin-sdk/diagnostic-runtime.ts",
-            "additions": 15,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/loader-records.ts",
-            "additions": 2,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugins/loader-shared.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/types.agent-defaults.ts",
-            "additions": 6,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.test.ts",
-            "additions": 17,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/zod-schema.agent-defaults.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 1,
-        "additions": 88,
-        "deletions": 29,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110767",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110767.md",
-        "mode": "autonomous",
-        "mergeable": "CONFLICTING",
-        "merge_state_status": "DIRTY",
-        "review_decision": "",
-        "checks": {
-          "total": 113,
-          "gatingTotal": 108,
-          "counts": {
-            "SUCCESS": 62,
-            "SKIPPED": 33,
-            "IN_PROGRESS": 17,
-            "NEUTRAL": 1
-          },
-          "blockers": [
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-large-5:IN_PROGRESS",
-            "checks-node-compact-large-6:IN_PROGRESS",
-            "checks-node-compact-large-7:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-13:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "check-lint:IN_PROGRESS"
-          ],
-          "pending": [
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-node-compact-large-2:IN_PROGRESS",
-            "checks-node-compact-large-3:IN_PROGRESS",
-            "checks-node-compact-large-4:IN_PROGRESS",
-            "checks-node-compact-large-5:IN_PROGRESS",
-            "checks-node-compact-large-6:IN_PROGRESS",
-            "checks-node-compact-large-7:IN_PROGRESS",
-            "checks-node-compact-small-10:IN_PROGRESS",
-            "checks-node-compact-small-11:IN_PROGRESS",
-            "checks-node-compact-small-12:IN_PROGRESS",
-            "checks-node-compact-small-13:IN_PROGRESS",
-            "checks-node-compact-small-6:IN_PROGRESS",
-            "checks-node-compact-small-7:IN_PROGRESS",
-            "checks-node-compact-small-8:IN_PROGRESS",
-            "checks-node-compact-small-9:IN_PROGRESS",
-            "check-lint:IN_PROGRESS"
-          ],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "reason": "comment version already processed in ledger"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -236,23 +88,23 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3189,
+    "total_ms": 2332,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 480
+        "ms": 443
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2312
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 16
+        "ms": 46
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -264,7 +116,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 301
+        "ms": 1685
       },
       {
         "name": "append_ledger",
