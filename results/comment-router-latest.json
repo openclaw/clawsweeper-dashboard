@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T03:07:58.443Z",
+  "generated_at": "2026-07-19T03:08:11.585Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T00:07:57.824Z",
+  "since": "2026-07-19T00:08:08.989Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    111005
+    110766
   ],
   "comment_ids": [
-    5013882260
+    5013923295
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5013923426,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:111005:5013882260:2026-07-19T02:49:18Z:re_review",
-      "comment_id": "5013882260",
-      "comment_version_key": "5013882260:2026-07-19T02:49:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/111005#issuecomment-5013882260",
+      "idempotency_key": "comment-router:openclaw/openclaw:110766:5013923295:2026-07-19T03:06:02Z:re_review",
+      "comment_id": "5013923295",
+      "comment_version_key": "5013923295:2026-07-19T03:06:02Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110766#issuecomment-5013923295",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 111005,
+      "target_branch": "main",
+      "issue_number": 110766,
       "author": "cxbAsDev",
       "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T02:49:18Z",
-      "comment_updated_at": "2026-07-19T02:49:18Z",
-      "comment_body_sha256": "387a827b20540c85d9a52c54e46dc5be6857516647dd65f16db81c71b702c6f6",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-19T03:06:02Z",
+      "comment_updated_at": "2026-07-19T03:06:02Z",
+      "comment_body_sha256": "cfee79487c4e47a11eb856bc4a30d6110b3d2af25b76d7a91410336df4fb4705",
+      "status_comment_id": 5013923426,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,32 +72,247 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110766,
+          "dispatch_key": "router-c9e49d2e34e83d53",
+          "dispatched_at": "2026-07-19T03:08:12.465Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-19T03:08:13.481Z",
+          "response_comment_id": "5013923426",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): bound media input file reads with per-file and aggregate budget",
+        "body": "## What Problem This Solves\n\nThe `readCliInputFileSafely` function in `src/cli/capability-cli/media-output.ts` reads input files for media output capability with a TOCTOU-prone pattern: `statSync(path)` checks file size (100 MiB per-file cap + 500 MiB aggregate budget), then a separate `await fs.readFile(path)` reads the content. Between the stat and the read, a file could be swapped with a much larger one, bypassing the size cap and potentially causing OOM.\n\n## Why This Change Was Made\n\nMedia output files are user-supplied inputs that could be symlink-swapped between stat validation and the read. While the per-file and aggregate budgets provide defense-in-depth, the TOCTOU window means an attacker who can control the file at the path can bypass the per-file cap. Opening the file first and operating on the same descriptor eliminates this race.\n\n## What Changed\n\nReplaced the path-based `statSync` + `await fs.readFile` pattern with descriptor-bound reads using `fs.promises.open`:\n\n```typescript\nconst handle = await fs.open(resolvedPath, \"r\");\ntry {\n  const stat = await handle.stat();\n  if (!stat.isFile()) throw new Error(\"not a regular file\");\n  if (stat.size > MAX_PER_FILE_BYTES) throw new Error(\"file too large\");\n  return await handle.readFile();\n} finally {\n  await handle.close();\n}\n```\n\nKey points:\n- `fs.promises.open()` returns a `FileHandle` — `stat()` and `readFile()` both operate on the same descriptor\n- `try/finally` guarantees `handle.close()` even when exceptions are thrown\n- The removed `import { statSync }` was unused elsewhere in the file\n- Aggregate budget logic (500 MiB total) is unchanged since it operates on validated file sizes\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| `statSync(path)` → TOCTOU race: file could be swapped before read | → fd pins the inode; race impossible |\n| Normal media output with valid files → works | → works (unchanged) |\n| Corrupted oversized file → caught by size cap | → caught (unchanged, but without TOCTOU) |\n\n## Evidence\n\n**All 109 capability-cli tests pass:**\n\n```\n ✓ |cli| src/cli/capability-cli.test.ts (109 tests) 1411ms\n Test Files  1 passed (1)\n      Tests  109 passed (109)\n```\n\nThe descriptor-bound pattern is the standard fix for TOCTOU file races — the fd pins the specific inode, preventing substitution between validation and consumption.",
+        "branch": "fix/bound-media-input-files",
+        "head_sha": "4c0f0bceee50c8780d070451e1ffb13e32151f65",
+        "author": "cxbasdev",
+        "labels": [
+          "cli",
+          "scripts",
+          "size: M",
+          "P2",
+          "rating: 🧂 unranked krab",
+          "merge-risk: 🚨 compatibility",
+          "merge-risk: 🚨 availability",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": ".codegraph/.gitignore",
+            "additions": 5,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "analyze-branches.sh",
+            "additions": 28,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "branches.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "check_branches.sh",
+            "additions": 25,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "check_commits.sh",
+            "additions": 24,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "evaluate_branches.sh",
+            "additions": 31,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "exec.sh",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "fetch.sh",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "list-branches.sh",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "mcp_tools_check.txt",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "mcp_try.txt",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "run-stats.sh",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "run.sh",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "run_check.sh",
+            "additions": 29,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "run_eval.sh",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "scripts/proof-110593.mjs",
+            "additions": 91,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/cli/capability-cli/media-output.ts",
+            "additions": 48,
+            "deletions": 6,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "stats.sh",
+            "additions": 30,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "test_mcp.mjs",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "tools_check.md",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "try_mcp.sh",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "ADDED"
+          }
+        ],
+        "changedFiles": 21,
+        "additions": 339,
+        "deletions": 6,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110766",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110766.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 119,
+          "gatingTotal": 114,
+          "counts": {
+            "SUCCESS": 75,
+            "SKIPPED": 35,
+            "QUEUED": 4,
+            "FAILURE": 4,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
+            "checks-node-compact-small-7:FAILURE",
+            "check-guards:FAILURE",
+            "check-dependencies:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "pending": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-7:FAILURE",
+            "check-guards:FAILURE",
+            "check-dependencies:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-19T03:08:11.843Z"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2107,
+    "total_ms": 5032,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 543
+        "ms": 452
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1
+        "ms": 2034
       },
       {
         "name": "classify_comment_commands",
-        "ms": 8
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,7 +328,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1488
+        "ms": 2426
       },
       {
         "name": "append_ledger",
