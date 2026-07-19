@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T13:55:27.195Z",
+  "generated_at": "2026-07-19T13:57:54.043Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T10:55:26.754Z",
+  "since": "2026-07-19T10:57:51.262Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    83933
+    110766
   ],
   "comment_ids": [
-    5015968708
+    5015983398
   ],
-  "status_comment_id": null,
+  "status_comment_id": 5015983525,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:83933:5015968708:2026-07-19T13:51:18Z:re_review",
-      "comment_id": "5015968708",
-      "comment_version_key": "5015968708:2026-07-19T13:51:18Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/83933#issuecomment-5015968708",
+      "idempotency_key": "comment-router:openclaw/openclaw:110766:5015983398:2026-07-19T13:55:56Z:re_review",
+      "comment_id": "5015983398",
+      "comment_version_key": "5015983398:2026-07-19T13:55:56Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110766#issuecomment-5015983398",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 83933,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "target_branch": "main",
+      "issue_number": 110766,
+      "author": "cxbAsDev",
+      "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T13:51:18Z",
-      "comment_updated_at": "2026-07-19T13:51:18Z",
-      "comment_body_sha256": "1d97f0585c429b35b57051af7e1cba34d66deb62a2f97abf1dad9ea87bf7e046",
-      "status_comment_id": null,
+      "comment_created_at": "2026-07-19T13:55:56Z",
+      "comment_updated_at": "2026-07-19T13:55:56Z",
+      "comment_body_sha256": "77ee4294264e6c2d25eba0922d09bf683df5f3ac0e6136296c56153372ba8db5",
+      "status_comment_id": 5015983525,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,32 +72,104 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "reason": "comment version already processed in ledger"
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110766,
+          "dispatch_key": "router-ccd71b09320d95d6",
+          "dispatched_at": "2026-07-19T13:57:55.134Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-19T13:57:56.351Z",
+          "response_comment_id": "5015983525",
+          "response_comment_mode": "updated"
+        }
+      ],
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(cli): bind capability CLI media input reads to descriptor size",
+        "body": "## What Problem This Solves\n\nThe `readCliInputFileSafely` function in `src/cli/capability-cli/media-output.ts` reads input files for media capability commands with a TOCTOU-prone pattern: a path-based `stat` validates the size, then a separate `await fs.readFile(path)` reads the content. Between the stat and the read, a file could be swapped with a much larger one, potentially causing OOM.\n\n## Why This Change Was Made\n\nMedia input files are user-supplied paths that could be symlink-swapped or grown between validation and consumption. Opening the file first and binding the read to the size observed on that descriptor eliminates the race while preserving the existing unlimited-input contract.\n\n## What Changed\n\nReplaced the path-based `stat` + `readFile` pattern with a descriptor-bound exact read:\n\n```typescript\nconst handle = await fs.open(resolvedPath, \"r\");\ntry {\n  const stat = await handle.stat();\n  if (!stat.isFile()) throw new Error(\"not a regular file\");\n  const size = stat.size;\n  const buffer = Buffer.alloc(size);\n  let offset = 0;\n  while (offset < size) {\n    const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);\n    if (bytesRead === 0) return buffer.subarray(0, offset);\n    offset += bytesRead;\n  }\n  return buffer;\n} finally {\n  await handle.close();\n}\n```\n\nKey points:\n- `fs.promises.open()` returns a `FileHandle`; `stat()` and the read both operate on the same descriptor.\n- The read is bounded to the validated `stat.size`, so a concurrent writer cannot grow the file after validation.\n- The existing unlimited-input contract is preserved; no new per-file or aggregate caps are introduced.\n- `try/finally` guarantees `handle.close()` even when exceptions are thrown.\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| Path-based `stat` followed by `fs.readFile` is vulnerable to swap/grow races. | Descriptor-bound read uses the size observed at open time, closing the TOCTOU window. |\n| Concurrent multi-file scheduling was implicit. | Explicit `Promise.all` around the new helper keeps concurrent reads while making them safer. |\n\n## Evidence\n\n### Integration tests\n\nAll 109 capability CLI integration tests pass on the exact PR head `81d53e0e98efd637acb2f87b1e2a4e12d1f30136`:\n\n```\n✓ |cli| src/cli/capability-cli.test.ts (109 tests) 3157ms\nTest Files  1 passed (1)\nTests  109 passed (109)\n```\n\n### Real CLI invocation\n\nA real `openclaw capability image edit` invocation was run against the PR head. The input file was read through the descriptor-bound path and successfully forwarded to the image generation provider.\n\nCommand (run in a clean worktree at head `0d9b01639c64`):\n\n```bash\nexport OPENCLAW_STATE_DIR=/tmp/openclaw-proof-state\nexport OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER=1\nopenclaw capability image edit \\\n  --file /tmp/openclaw-proof-input.png \\\n  --prompt \"make background transparent\" \\\n  --model openai/gpt-image-1.5 \\\n  --output-format png \\\n  --json\n```\n\nResult:\n\n```json\n{\n  \"ok\": true,\n  \"capability\": \"image.edit\",\n  \"transport\": \"local\",\n  \"provider\": \"openai\",\n  \"model\": \"gpt-image-1.5\",\n  \"attempts\": [],\n  \"outputs\": [\n    {\n      \"path\": \"/tmp/openclaw-proof-state/media/generated/image-1---744ac416-3952-4434-90c0-65954db853fc.png\",\n      \"mimeType\": \"image/png\",\n      \"size\": 70,\n      \"width\": 1,\n      \"height\": 1,\n      \"revisedPrompt\": \"mocked edit result\"\n    }\n  ],\n  \"ignoredOverrides\": []\n}\n```\n\nThe provider endpoint in this run was a local mock returning a 1x1 PNG; the redacted invocation proves the CLI correctly reads the user-supplied media input file through the new descriptor-bound helper and completes the end-to-end `image.edit` pipeline.\n\n",
+        "branch": "fix/bound-media-input-files",
+        "head_sha": "81d53e0e98efd637acb2f87b1e2a4e12d1f30136",
+        "author": "cxbasdev",
+        "labels": [
+          "cli",
+          "size: XS",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 compatibility",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/cli/capability-cli/media-output.ts",
+            "additions": 38,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 1,
+        "additions": 38,
+        "deletions": 4,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110766",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110766.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 115,
+          "gatingTotal": 110,
+          "counts": {
+            "SKIPPED": 35,
+            "SUCCESS": 79,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "processed_at": "2026-07-19T13:57:54.371Z"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
-  "ledger_claimed": false,
-  "ledger_changed": false,
+  "ledger_claimed": true,
+  "ledger_changed": true,
   "timings": {
-    "total_ms": 2041,
+    "total_ms": 5874,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 355
+        "ms": 524
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 2150
       },
       {
         "name": "classify_comment_commands",
-        "ms": 12
+        "ms": 15
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -113,11 +185,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1600
+        "ms": 3084
       },
       {
         "name": "append_ledger",
-        "ms": 0
+        "ms": 1
       }
     ]
   }
