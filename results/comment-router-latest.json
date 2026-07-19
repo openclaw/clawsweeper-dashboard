@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T06:29:23.373Z",
+  "generated_at": "2026-07-19T06:29:29.549Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T03:29:21.379Z",
+  "since": "2026-07-19T03:29:27.643Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110767
+    110772
   ],
   "comment_ids": [
-    5014700913
+    5014700775
   ],
-  "status_comment_id": 5014700992,
+  "status_comment_id": 5014700885,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 0,
+  "actionable": 1,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110767:5014700913:2026-07-19T06:27:17Z:re_review",
-      "comment_id": "5014700913",
-      "comment_version_key": "5014700913:2026-07-19T06:27:17Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110767#issuecomment-5014700913",
+      "idempotency_key": "comment-router:openclaw/openclaw:110772:5014700775:2026-07-19T06:27:14Z:re_review",
+      "comment_id": "5014700775",
+      "comment_version_key": "5014700775:2026-07-19T06:27:14Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110772#issuecomment-5014700775",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 110767,
+      "issue_number": 110772,
       "author": "cxbAsDev",
       "author_id": 294098203,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T06:27:17Z",
-      "comment_updated_at": "2026-07-19T06:27:17Z",
-      "comment_body_sha256": "6ce7539d5f1279cea457e59033732ce725ba2515f4141a2a98dbde32b802042b",
-      "status_comment_id": 5014700992,
+      "comment_created_at": "2026-07-19T06:27:14Z",
+      "comment_updated_at": "2026-07-19T06:27:14Z",
+      "comment_body_sha256": "766494a02882f5fed5d6ffd2c07c710453704e15a190de5f6ceade796e8707ed",
+      "status_comment_id": 5014700885,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,59 +72,76 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "skipped",
-      "actions": [],
+      "status": "executed",
+      "actions": [
+        {
+          "action": "dispatch_clawsweeper",
+          "workflow": "sweep.yml",
+          "status": "executed",
+          "event": "repository_dispatch",
+          "repo": "openclaw/clawsweeper",
+          "item_number": 110772,
+          "dispatch_key": "router-af2b5eebd85d40c6",
+          "dispatched_at": "2026-07-19T06:29:30.569Z"
+        },
+        {
+          "action": "comment",
+          "status": "executed",
+          "commented_at": "2026-07-19T06:29:31.684Z",
+          "response_comment_id": "5014700885",
+          "response_comment_mode": "updated"
+        }
+      ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(cli): bound model run image reads with per-file and aggregate budget",
-        "body": "## What Problem This Solves\n\nThe `readModelRunImageFiles` function in `src/cli/capability-cli/model.ts` reads image files for model run capability. It used a TOCTOU-prone pattern: `statSync(path)` to check file size (100 MiB per-file cap + 500 MiB aggregate budget), then a separate `fs.readFile(path)` to read the content. Between the stat and the read, the file could be swapped with a much larger one, defeating the size cap.\n\n## Why This Change Was Made\n\nModel run files are user-supplied inputs that could be symlink-swapped or replaced between the stat validation and the read. While the per-file and aggregate budgets provide defense-in-depth, the TOCTOU window means an attacker who can control the file at the path can bypass the per-file cap. Opening the file first and operating on the same descriptor eliminates this race.\n\n## What Changed\n\nReplaced the path-based `statSync` + `await fs.readFile` pattern with descriptor-bound reads using `fs.promises.open`:\n\n```typescript\nconst handle = await fs.open(resolvedPath, \"r\");\ntry {\n  const stat = await handle.stat();\n  if (!stat.isFile()) throw new Error(\"not a regular file\");\n  if (stat.size > MAX_MODEL_RUN_IMAGE_BYTES) throw new Error(\"file too large\");\n  budget.remaining -= stat.size;\n  return await handle.readFile();\n} finally {\n  await handle.close();\n}\n```\n\nKey points:\n- `fs.promises.open()` returns a `FileHandle` — `stat()` and `readFile()` both operate on the same descriptor\n- `try/finally` guarantees `handle.close()` even when exceptions are thrown\n- Per-file 100 MiB cap and 500 MiB aggregate budget are preserved from the original implementation\n- `import { statSync }` was removed as no longer needed\n- Sequential processing (already in original) is retained\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| `statSync(path)` → TOCTOU race: file could be swapped before read | → fd pins the inode; race impossible |\n| Normal model run with valid files → works | → works (unchanged) |\n| Per-file 100 MiB cap + 500 MiB aggregate budget | → preserved, now without TOCTOU |\n\n## Evidence\n\n**All 109 capability-cli tests pass:**\n\n```\n ✓ |cli| src/cli/capability-cli.test.ts (109 tests) 3133ms\n Test Files  1 passed (1)\n      Tests  109 passed (109)\n```\n\nThe descriptor-bound pattern is the standard fix for TOCTOU file races — the fd pins the specific inode, preventing substitution between validation and consumption.",
-        "branch": "fix/bound-model-run-files",
-        "head_sha": "7c8b4f202488c54cc986fcae805e9ba97400ac3f",
+        "title": "fix(doctor): bound legacy session store read with size cap and stat-failure fix",
+        "body": "## What Problem This Solves\n\nThe `readLegacySessionRecords` function in `src/commands/doctor-session-sqlite.ts` reads legacy JSON session store files during `openclaw doctor` with a TOCTOU-prone pattern: `fs.statSync(path)` checks file size (50 MiB cap), then a separate `fs.readFileSync(path)` reads the content. Between the stat and the read, a file at that path could be replaced with a much larger file, causing OOM.\n\n## Why This Change Was Made\n\nDoctor migration runs during `openclaw doctor`, regularly invoked by users. While the existing 50 MiB cap is reasonable, the stat-then-read pattern has a Time-of-Check-Time-of-Use (TOCTOU) race: the stat validates one file's size, but the read may consume a different (potentially unbounded) file. The fix eliminates this window by operating on the same file descriptor for both the size check and the read.\n\n## What Changed\n\nReplaced the path-based `statSync`/`readFileSync` pattern with a descriptor-bound read in `readLegacySessionRecords`:\n\n1. `fs.openSync(path, 'r')` — Opens the file first, obtaining a file descriptor\n2. `fs.fstatSync(fd)` — Stats the descriptor (not the path) for size/isFile checks\n3. `fs.readFileSync(fd, 'utf-8')` — Reads through the same file descriptor\n4. `fs.closeSync(fd)` — Closes the descriptor via `try/finally`, guaranteeing cleanup\n\nAll error paths (ENOENT, EACCES, oversized, non-regular file) produce equivalent `store_unreadable` issues as before. The parent-directory validation for missing stores is also preserved.\n\n## User Impact\n\n| Before | After |\n|--------|-------|\n| `openclaw doctor` with swapped file between stat+read → could read unbounded data | → always reads same file that was validated |\n| Only `statSync` on path → TOCTOU race window | → fd pins the inode; race impossible |\n| Normal migration with valid files → works | → works (unchanged) |\n\n## Evidence\n\n**All 68 doctor-session-sqlite tests pass (2 skipped, platform-specific):**\n\n```\n ✓ |doctor-session-sqlite| src/commands/doctor-session-sqlite.test.ts (68 tests) 2671ms\n Test Files  1 passed (1)\n      Tests  68 passed (68)\n```\n\nThe descriptor-bound pattern is a standard fix for TOCTOU file races:\n- The file descriptor pins the specific inode, preventing substitution between operations\n- Even if the directory entry is deleted or renamed, the fd still refers to the original file\n- All size validation and reading happens on the same bounded file instance",
+        "branch": "fix/bound-doctor-sqlite-read",
+        "head_sha": "ec67364f9440b6702b0dcb2e0830823f5faf9bd9",
         "author": "cxbasdev",
         "labels": [
-          "cli",
+          "commands",
           "size: S",
-          "P2",
+          "P1",
           "rating: 🧂 unranked krab",
           "merge-risk: 🚨 availability",
           "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "src/cli/capability-cli/model.ts",
-            "additions": 68,
-            "deletions": 29,
+            "path": "src/commands/doctor-session-sqlite.test.ts",
+            "additions": 53,
+            "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/plugins/installed-plugin-index.test.ts",
-            "additions": 22,
-            "deletions": 0,
+            "path": "src/commands/doctor-session-sqlite.ts",
+            "additions": 76,
+            "deletions": 27,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 1,
-        "additions": 68,
-        "deletions": 29,
+        "changedFiles": 2,
+        "additions": 129,
+        "deletions": 27,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110767",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110767.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110772",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110772.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 120,
-          "gatingTotal": 115,
+          "total": 11,
+          "gatingTotal": 6,
           "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 41,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 3
           },
           "blockers": [],
           "pending": [],
@@ -134,7 +151,7 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
+      "processed_at": "2026-07-19T06:29:29.849Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -145,15 +162,15 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 2180,
+    "total_ms": 4750,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 319
+        "ms": 471
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1573
+        "ms": 1320
       },
       {
         "name": "classify_comment_commands",
@@ -173,7 +190,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 187
+        "ms": 2833
       },
       {
         "name": "append_ledger",
