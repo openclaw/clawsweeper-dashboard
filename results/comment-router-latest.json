@@ -1,22 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T03:29:36.748Z",
+  "generated_at": "2026-07-19T03:28:41.827Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T00:29:36.275Z",
+  "since": "2026-07-19T00:28:39.264Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
-  "max_comments": 1000,
+  "max_comments": 1,
   "item_numbers": [
-    110716
+    110704
   ],
   "comment_ids": [
-    5013923843
+    5013988863
   ],
-  "comment_ids": [],
-  "status_comment_id": null,
+  "status_comment_id": 5013988986,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -35,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110716:5013923843:2026-07-19T03:06:15Z:re_review",
-      "comment_id": "5013923843",
-      "comment_version_key": "5013923843:2026-07-19T03:06:15Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110716#issuecomment-5013923843",
+      "idempotency_key": "comment-router:openclaw/openclaw:110704:5013988863:2026-07-19T03:26:31Z:re_review",
+      "comment_id": "5013988863",
+      "comment_version_key": "5013988863:2026-07-19T03:26:31Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/110704#issuecomment-5013988863",
       "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 110716,
-      "author": "cxbAsDev",
-      "author_id": 294098203,
+      "target_branch": "main",
+      "issue_number": 110704,
+      "author": "xydigit-zt",
+      "author_id": 294751694,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-19T03:06:15Z",
-      "comment_updated_at": "2026-07-19T03:06:15Z",
+      "comment_created_at": "2026-07-19T03:26:31Z",
+      "comment_updated_at": "2026-07-19T03:26:31Z",
       "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": null,
+      "status_comment_id": 5013988986,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -75,34 +74,110 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "reason": "comment version already processed in ledger"
+      "author_repository_permission": "read",
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(agents): race in-flight tool promises against run abort (#103905)",
+        "body": "## What Problem This Solves\n\nFixes #103905. When an embedded run aborts, a **non-cooperative** in-flight tool — one whose `execute` never observes the abort signal (e.g. stuck waiting on a subprocess) — keeps the wrapped call pending forever. The run then hangs instead of failing fast, leaving sessions stuck.\n\n## Why This Change Was Made\n\n`wrapToolWithAbortSignal` (in `src/agents/agent-tools.abort.ts`, the wrapper imported by `src/agents/agent-tools.ts` on current main) now races the tool's execute promise against the combined abort signal:\n\n- On abort, the wrapped call **rejects immediately** with an `AbortError` instead of awaiting the tool forever.\n- JavaScript cannot cancel a running promise: a non-cooperative tool keeps executing in the background and may settle later, but that late settlement is detached so the result never lands in an aborted run.\n- Tool settlements pass through untouched, preserving tool error semantics.\n\n**File note for reviewers:** an earlier review asked to port the race to `src/agents/pi-tools.abort.ts`. Current main has since renamed that file to `src/agents/agent-tools.abort.ts` (#85341 \"internalize OpenClaw agent runtime\"), so this PR's rebased diff now lands on the **active** wrapper — verified: `src/agents/agent-tools.ts:28` imports `wrapToolWithAbortSignal` from `./agent-tools.abort.js`.\n\n## User Impact\n\nAborted runs reject promptly instead of hanging on stuck tool calls; normal tool results are unaffected.\n\n## Evidence\n\nReal behavior proof — live abort race (final head `91a8454c2`, 2026-07-19).\n\nThe real `wrapToolWithAbortSignal` was executed via `tsx` (no mocks of the wrapper; tool stubs stand in only for the tools themselves):\n\n```bash\nnode --import tsx abort-race-proof.mts\n```\n\n```text\ndate: Sun Jul 19 2026 11:22:34 GMT+0800\nnode: v24.18.0\ncode path: src/agents/agent-tools.abort.ts wrapToolWithAbortSignal @ PR head\n[non-cooperative] rejected in 171ms after abort: name=AbortError message=\"Aborted\"\n[late-settling] aborted call rejected in 108ms: Aborted\n[late-settling] background tool later settled=true (detached from aborted run)\n[normal] resolved with tool result: {\"echoed\":{\"hello\":\"world\"}}\n[non-error-rejection] passthrough identity=true name=(none) value={\"code\":\"TOOL_RAW_FAILURE\",\"detail\":\"non-Error rejection\"}\n[result] PASS: abort races in-flight tool promises; settlements pass through untouched\n```\n\n- **Prompt abort**: a non-cooperative tool (execute never settles) rejects with `AbortError` ~100ms after the abort — without the race this call hangs forever.\n- **Late-settlement detachment**: the aborted call rejects promptly; the background tool still settles ~400ms later, detached from the aborted run.\n- **Normal fulfillment**: result passes through unchanged.\n- **Non-Error rejection preserved**: a tool rejecting with a raw non-Error object (`{code: \"TOOL_RAW_FAILURE\"}`) passes through with reference identity (`identity=true`) — the final head's rejection contract is unchanged, not converted to `AbortError` or wrapped.\n\nRegression tests (final head `91a8454c2`):\n\n```bash\npnpm test src/agents/agent-tools.abort.test.ts\n```\n\n```text\nTests  8 passed (8)\n```\n\n## What was not tested\n\nA full embedded-agent run with a live model provider; the proof exercises the exact wrapper whose await-vs-race behavior this PR changes.\n\n## Rebase status\n\nRebased onto latest `origin/main` at head `91a8454c2`; the rename of `pi-tools.abort.ts` → `agent-tools.abort.ts` means the rebased diff targets the active wrapper on current main.\n\n",
+        "branch": "feat/issue-103905",
+        "head_sha": "91a8454c293c11d4c904f411bafe26e40f40230f",
+        "author": "xydigit-zt",
+        "labels": [
+          "agents",
+          "size: M",
+          "P1",
+          "rating: 🦐 gold shrimp",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "src/agents/agent-tools.abort.test.ts",
+            "additions": 188,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/agents/agent-tools.abort.ts",
+            "additions": 38,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 226,
+        "deletions": 1,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-110704",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110704.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 113,
+          "gatingTotal": 108,
+          "counts": {
+            "SKIPPED": 30,
+            "SUCCESS": 76,
+            "QUEUED": 4,
+            "FAILURE": 2,
+            "NEUTRAL": 1
+          },
+          "blockers": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED",
+            "checks-node-compact-small-1:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "pending": [
+            "Scan shared kit from iOS:QUEUED",
+            "Scan iOS dead code:QUEUED",
+            "Scan macOS dead code:QUEUED",
+            "Scan shared kit from macOS:QUEUED"
+          ],
+          "terminalBlockers": [
+            "checks-node-compact-small-1:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": true,
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "auth_uncertain"
+    "reason": "version_not_terminal"
   },
   "short_circuited": false,
   "ledger_claimed": false,
-  "ledger_changed": true,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 1790,
+    "total_ms": 2915,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 389
+        "ms": 489
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1988
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 12
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -114,11 +189,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 1317
+        "ms": 353
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
