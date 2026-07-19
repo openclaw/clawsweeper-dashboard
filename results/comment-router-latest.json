@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-19T16:25:22.614Z",
+  "generated_at": "2026-07-19T16:25:30.229Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-19T13:25:22.274Z",
+  "since": "2026-07-19T13:25:27.477Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1000,
   "item_numbers": [
-    109079
+    111302
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
-  "scanned_comments": 2,
-  "commands_seen": 0,
+  "scanned_comments": 3,
+  "commands_seen": 2,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -29,7 +29,165 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [],
+  "commands": [
+    {
+      "idempotency_key": "clawsweeper-repair:openclaw/openclaw:111302:5015011969:2026-07-19T16:22:59Z:clawsweeper_auto_repair",
+      "comment_id": "5015011969",
+      "comment_version_key": "5015011969:2026-07-19T16:22:59Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/111302#issuecomment-5015011969",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 111302,
+      "author": "clawsweeper[bot]",
+      "author_id": 274271284,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-19T08:21:48Z",
+      "comment_updated_at": "2026-07-19T16:22:59Z",
+      "comment_body_sha256": "155ae5f12727ebfb89689149a1cfe5e078731a7e25ebcb2fd5a2b1412830f981",
+      "status_comment_id": null,
+      "trigger": "trusted_bot",
+      "command": "clawsweeper needs human",
+      "intent": "clawsweeper_needs_human",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": true,
+      "trusted_bot_author": "clawsweeper[bot]",
+      "automation_source": "clawsweeper",
+      "repair_reason": "structured ClawSweeper needs-human verdict with repairable P-severity findings (sha=e74e27eae56c677763f355f3112fb7acf2f7a99f)",
+      "review_summary": "The PR resets Feishu streaming-card closed-state flags at each reply start and adds a regression test for delivering a recovered final after an error card closes.\n\nPR surface: Source +6, Tests +27. Total +33 across 2 files.\n\nReproducibility: yes. in source: a closed streaming card followed by another `onReplyStart` and a distinct final reproduces the reset; the missing distinction is whether that callback is a true recovered run or an existing keepalive.",
+      "review_followup": "- [P1] A concrete defect is present, but the safe repair depends on the runtime owner choosing how a new reply run is distinguished from a keepalive.",
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": "e74e27eae56c677763f355f3112fb7acf2f7a99f",
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": "2026-07-19T14:15:02.840Z",
+      "review_lease_owner": "github-run-29690316295-1",
+      "review_lease_comment_id": "5016036558",
+      "expected_item_updated_at": null,
+      "expected_source_revision": "badf17d89c1cd93beae454b5d52371af1f5c91b76ac2623b49832953aa229dc1",
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "target": {
+        "kind": "pull_request",
+        "title": "fix(feishu): deliver recovered final answer after tool-failure card close (#110352)",
+        "body": "## What Problem This Solves\n\nWhen an exec/tool call fails mid-turn while a Feishu streaming reply card is open and that run produced no user-facing answer, the tool-failure warning is the run's only final payload, so `onIdle` closes the card showing just \"⚠️ Exec failed\". The agent then recovers in a follow-up run within the same inbound turn and produces the real final answer — but that answer never reaches the user (#110352). Transcript and visible chat permanently disagree; affected users must re-ask.\n\nRoot cause: `streamingClosedForReply` / `streamingCloseErroredForReply` are reset only once per dispatcher lifetime (the `replyLifecycleStateInitialized` guard introduced in #87896). A follow-up reply run in the same turn therefore inherits the terminal \"card closed\" state, and `deliver()`'s `skipTextForClosedStreamingFinal` drops the recovered final before any card/message code runs. Before #87896 the flag was reset on every reply start (#72294 era), so later runs still delivered. Feishu is the only channel with this sticky terminal flag; Telegram delivers an error final as a durable standalone message and still delivers a later non-error final, and Discord keeps the failed draft but falls through to a fresh send.\n\n## Why This Change Was Made\n\nReset only the two closed-streaming flags on every `onReplyStart`, so each new reply run in the same turn can deliver its final answer (a fresh streaming card). The state #87896 needed sticky across keepalives — `visibleReplySent` and `skippedFinalReason` — stays inside the once-guard (its \"keeps visible reply state across repeated reply-start keepalives\" test still passes), and exact-duplicate finals are still suppressed via `deliveredFinalTexts` (#72294). Single-run turns and late same-run finals (no intervening reply start) are unchanged, as codified by the existing \"skips distinct late final text after streaming card close\" tests.\n\n## User Impact\n\nFeishu users now receive the agent's recovered final answer after a mid-turn tool failure: the failure notice remains as its own closed card, and the recovered answer is delivered as a new card in the same turn. No behavior change for single-run turns, duplicate finals, or keepalive reply starts.\n\n## Evidence\n\nFixes #110352.\n\nNew regression test `delivers a recovered final answer after a tool-failure card close (#110352)` replays the exact incident sequence against the real dispatcher: run 1 emits only the error final → idle closes the card → follow-up `onReplyStart` → recovered final → idle.\n\nBefore (current main `reply-dispatcher.ts` + this test): the recovered answer is swallowed — no second card is ever created:\n\n```\n× delivers a recovered final answer after a tool-failure card close (#110352)\nAssertionError: expected [ FeishuStreamingSession{ … } ] to have a length of 2 but got 1\nTests  1 failed | 92 skipped (93)\n```\n\nAfter (with the fix): the failure card closes with the warning and a second card closes with the recovered answer:\n\n```\n✓ delivers a recovered final answer after a tool-failure card close (#110352)\nTests  93 passed (93)\n```\n\nFull `extensions/feishu` suite: 1265 passed / 1266 — the single failure is `setup-surface.test.ts` locale-dependent (`connected as` vs `已连接为`), which fails identically on unmodified main in a zh locale and is unrelated. `oxlint` + `oxfmt` clean on touched files.\n\nLive Feishu verification against a real bot (websocket, group chat, streaming cards, failing exec followed by a recovered answer) is being run with a test tenant and will be posted as a follow-up comment.\n\n\n## Evidence — live Feishu runs (PR head, 2026-07-19)\n\nA gateway built from the PR head ran against the **real Feishu service** (websocket mode, streaming cards enabled after granting `cardkit:card:read/write`, isolated state dir). Three consecutive DM runs, each forcing a real tool failure (`read` on a nonexistent path → ENOENT) followed by model recovery:\n\n```text\n21:17:20 [tools] read failed: ENOENT ... '/nonexistent-proof-110352.txt'\n21:17:26 [feishu] Started streaming: cardId=7664227599527284010, messageId=om_x100b6af8a…\n21:17:29 [feishu] dispatch complete (queuedFinal=true, replies=1)\n21:17:40 [feishu] Closed streaming: cardId=7664227599527284010\n\n21:21:16 [tools] read failed: ENOENT ... '/nonexistent-proof-110352.txt'\n21:21:25 [feishu] Started streaming: cardId=7664228624417770770, messageId=om_x100b6af8b…\n21:21:28 [feishu] dispatch complete (queuedFinal=true, replies=1)\n21:21:45 [feishu] Closed streaming: cardId=7664228624417770770\n\n21:24:07 [tools] read failed: ENOENT ... '/nonexistent-proof-110352.txt'\n21:24:08 [feishu] Started streaming: cardId=7664229327127547079, messageId=om_x100b6af8b…\n21:24:15 [feishu] dispatch complete (queuedFinal=true, replies=1)\n21:24:17 [feishu] Closed streaming: cardId=7664229327127547079\n```\n\nChat history read back via the Feishu API (`im:message:readonly`) confirms each run delivered a visible interactive card plus the TTS audio reply into the DM.\n\n**Limitation (honest):** the exact mid-stream tool-failure close could not be forced with this tenant's model (`glm-5` batches tool calls before emitting any text, so the streaming card only ever opens *after* the failure and recovery are complete). The close-state-reset path itself is covered by the dispatcher regression test (`error-final → idle-close → new reply start → recovered final creates a second card`); the live runs above prove the PR head end-to-end against real Feishu streaming cards, including failure/recovery cycles delivering visible recovered answers. Card IDs and message IDs are unredacted public-tenant artifacts; no credentials included.\n",
+        "branch": "feat/issue-110352",
+        "head_sha": "e74e27eae56c677763f355f3112fb7acf2f7a99f",
+        "author": "xydigit-zt",
+        "labels": [
+          "channel: feishu",
+          "size: XS",
+          "P1",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 message-delivery",
+          "status: 📣 needs proof"
+        ],
+        "files": [
+          {
+            "path": "extensions/feishu/src/reply-dispatcher.test.ts",
+            "additions": 27,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/feishu/src/reply-dispatcher.ts",
+            "additions": 8,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/ops.ts",
+            "additions": 19,
+            "deletions": 7,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/cron/service/timer.ts",
+            "additions": 39,
+            "deletions": 11,
+            "changeType": "MODIFIED"
+          }
+        ],
+        "changedFiles": 2,
+        "additions": 35,
+        "deletions": 2,
+        "is_clawsweeper_pr": false,
+        "cluster_id": null,
+        "job_path": null,
+        "source_job_path": null,
+        "has_automerge_job": false,
+        "automerge_cluster_id": "automerge-openclaw-openclaw-111302",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-111302.md",
+        "mode": "autonomous",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
+        "review_decision": "",
+        "checks": {
+          "total": 89,
+          "gatingTotal": 84,
+          "counts": {
+            "SUCCESS": 47,
+            "SKIPPED": 41,
+            "NEUTRAL": 1
+          },
+          "blockers": [],
+          "pending": [],
+          "terminalBlockers": [],
+          "externalBlockers": []
+        }
+      },
+      "maintainer_authorized": false,
+      "author_readonly_authorized": false,
+      "reason": "repair commands require a ClawSweeper PR or a PR opted into ClawSweeper autofix or automerge"
+    },
+    {
+      "idempotency_key": "comment-router:openclaw/openclaw:111302:5015891360:2026-07-19T13:26:43Z:re_review",
+      "comment_id": "5015891360",
+      "comment_version_key": "5015891360:2026-07-19T13:26:43Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/111302#issuecomment-5015891360",
+      "repo": "openclaw/openclaw",
+      "target_branch": "main",
+      "issue_number": 111302,
+      "author": "xydigit-zt",
+      "author_id": 294751694,
+      "author_association": "CONTRIBUTOR",
+      "comment_created_at": "2026-07-19T13:26:43Z",
+      "comment_updated_at": "2026-07-19T13:26:43Z",
+      "comment_body_sha256": "740a9a21d7924e0599bf53e788a0dec5aa625d5d7d80062f3152ac645536e301",
+      "status_comment_id": null,
+      "trigger": "mention",
+      "command": "re-review",
+      "intent": "re_review",
+      "autoclose_message": null,
+      "implementation_prompt": null,
+      "operator_override": null,
+      "trusted_bot": false,
+      "trusted_bot_author": null,
+      "automation_source": null,
+      "repair_reason": null,
+      "review_summary": null,
+      "review_followup": null,
+      "freeform_prompt": null,
+      "visual_lens": null,
+      "expected_head_sha": null,
+      "close_reason": null,
+      "close_confidence": null,
+      "close_action_taken": null,
+      "reviewed_at": null,
+      "review_lease_owner": null,
+      "review_lease_comment_id": null,
+      "expected_item_updated_at": null,
+      "expected_source_revision": null,
+      "finding_id": null,
+      "status": "skipped",
+      "actions": [],
+      "reason": "comment version already processed in ledger"
+    }
+  ],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -38,19 +196,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 558,
+    "total_ms": 3667,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 303
+        "ms": 333
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 0
+        "ms": 1509
       },
       {
         "name": "classify_comment_commands",
-        "ms": 0
+        "ms": 698
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -66,7 +224,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 219
+        "ms": 902
       },
       {
         "name": "append_ledger",
