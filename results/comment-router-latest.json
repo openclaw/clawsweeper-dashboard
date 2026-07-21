@@ -1,24 +1,24 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-21T13:19:41.965Z",
+  "generated_at": "2026-07-21T13:18:11.741Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-21T10:19:38.571Z",
+  "since": "2026-07-21T10:18:11.260Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    111912
+    97845
   ],
   "comment_ids": [
-    5034429335
+    5034511345
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
-  "commands_seen": 1,
+  "commands_seen": 0,
   "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
@@ -32,143 +32,7 @@
   "max_auto_repairs_per_head": 2,
   "max_auto_repairs_per_pr": 10,
   "lookup_concurrency": 8,
-  "commands": [
-    {
-      "idempotency_key": "comment-router:openclaw/openclaw:111912:5034429335:2026-07-21T13:07:21Z:re_review",
-      "comment_id": "5034429335",
-      "comment_version_key": "5034429335:2026-07-21T13:07:21Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/111912#issuecomment-5034429335",
-      "repo": "openclaw/openclaw",
-      "target_branch": null,
-      "issue_number": 111912,
-      "author": "yetval",
-      "author_id": 102706514,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-21T13:07:21Z",
-      "comment_updated_at": "2026-07-21T13:07:21Z",
-      "comment_body_sha256": "dcb65abf349fe87e0f2b89d58546a08149cddd3046d2372093802bac779cb876",
-      "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-run",
-      "intent": "re_review",
-      "autoclose_message": null,
-      "implementation_prompt": null,
-      "operator_override": null,
-      "trusted_bot": false,
-      "trusted_bot_author": null,
-      "automation_source": null,
-      "repair_reason": null,
-      "review_summary": null,
-      "review_followup": null,
-      "freeform_prompt": null,
-      "visual_lens": null,
-      "expected_head_sha": null,
-      "close_reason": null,
-      "close_confidence": null,
-      "close_action_taken": null,
-      "reviewed_at": null,
-      "review_lease_owner": null,
-      "review_lease_comment_id": null,
-      "expected_item_updated_at": null,
-      "expected_source_revision": null,
-      "finding_id": null,
-      "status": "skipped",
-      "actions": [],
-      "author_repository_permission": "read",
-      "target": {
-        "kind": "pull_request",
-        "title": "fix(media): apply SSRF guard to byteplus and runway generated video downloads",
-        "body": "Closes #103083\r\n\r\n## What Problem This Solves..\r\n\r\nFixes an issue where the `byteplus` and `runway` bundled video-generation providers fetch the generated-video bytes from a URL taken directly out of the provider's own JSON completion response, using an unguarded download call that never re-applies the SSRF guard (DNS pinning, private/loopback/link-local address blocking) that the same providers already apply to their submit and poll requests.\r\n\r\nIf the upstream provider API is compromised, MITM'd, or configured with a malicious custom base URL, it can set the result URL to an internal address (for example `http://169.254.169.254/latest/meta-data/...` or `http://127.0.0.1:<port>/admin`) and OpenClaw will connect to it and save the response bytes as the generated video attachment. This is the agent-tool video-generation path (`src/agents/tools/video-generate-tool.ts`), reachable with default configuration and no `dangerouslyAllowPrivateNetwork` opt-in. CWE-918 (Server-Side Request Forgery).\r\n\r\nThe guarded siblings `fal`, `google`, and `openrouter` already re-apply the SSRF guard to this exact \"download the URL the JSON body told us to fetch\" step, and `minimax` (#102072) and `xai` (#104836) were fixed the same way after #103083 was filed. `byteplus` and `runway` were simply never updated. `vydra` shares the gap but is already covered by open PR #105884, so it is intentionally out of scope here.\r\n\r\n## Why This Change Was Made\r\n\r\nRoot cause: `downloadBytePlusVideo` and `downloadRunwayVideos` bottom out in `fetchProviderDownloadResponse`, which calls a bare `fetchWithTimeout` with no DNS pinning and no private-network block, and the resolved `allowPrivateNetwork` / `dispatcherPolicy` were never threaded into the download step even though both providers resolve them for submit and poll.\r\n\r\nThe fix has two parts:\r\n\r\n1. Add one canonical guarded download helper, `fetchGuardedProviderDownloadResponse`, in `src/media-understanding/shared.ts` (exported from `openclaw/plugin-sdk/provider-http`). It mirrors `fetchProviderDownloadResponse` (same download-stage retry, deadline, and body-timeout semantics) but always routes through the SSRF guard, so private/loopback/link-local result URLs are blocked by default. Unlike the earlier closed attempts (#102096, #102134, #108267) it does not gate the guard behind `if (allowPrivateNetwork || dispatcherPolicy)`, which left the default-configuration gap open.\r\n\r\n2. Thread the operator's configured request policy (`models.providers.<id>.request`) into `resolveProviderHttpRequestConfig` for both providers, matching the merged `minimax` and `xai` fixes. Previously these calls hard-coded `allowPrivateNetwork: false` (byteplus) or omitted the request config (runway), so the resolved `allowPrivateNetwork` / `dispatcherPolicy` were always defaults. Without this, an operator who intentionally points a provider at a private endpoint would have their legitimate private artifact URL blocked by the new guard with no escape hatch. The resolved policy is now honored consistently for submit, poll, and download, and is passed into the guarded download.\r\n\r\nBoundary: the change stays at the provider download boundary plus one shared helper; submit/poll transport is unchanged in shape. `minimax` and `xai` are already guarded, and `vydra` is covered by #105884, so no sibling is left one-sided by this PR.\r\n\r\n## User Impact\r\n\r\nGenerated-video downloads for `byteplus` and `runway` now refuse to connect to private, loopback, or link-local addresses by default, closing the SSRF exposure when a provider response is attacker-influenced. Operators who intentionally point these providers at a private endpoint keep working by setting the existing `models.providers.<id>.request.allowPrivateNetwork` / request-policy options, exactly as they already do for other providers; that opt-in now flows through to the download step. No configuration changes are required for the common (public provider) case.\r\n\r\n## Evidence\r\n\r\nReal before/after, driving the actual production download helpers against a real loopback HTTP server, with the real SSRF guard code (`src/infra/net/fetch-guard.ts`, `src/infra/net/ssrf.ts`) unmodified. `fetchProviderDownloadResponse` is the download helper `byteplus` and `runway` call on `origin/main` (5ca5c5c); `fetchGuardedProviderDownloadResponse` is the helper this patch routes them through. Driven at head `06fd7cd227` on identical loopback input:\r\n\r\n```\r\nBEFORE main-path fetchProviderDownloadResponse (default config) -> url=http://127.0.0.1:41733/secret-metadata server_hits=[\"/secret-metadata\"] downloaded_bytes=LEAKED-INTERNAL-BYTES-9f3c2a\r\nAFTER patched-path fetchGuardedProviderDownloadResponse (default config) -> url=http://127.0.0.1:37263/secret-metadata server_hits=[] rejected_with=Blocked hostname or private/internal/special-use IP address\r\nAFTER patched-path fetchGuardedProviderDownloadResponse (allowPrivateNetwork opt-in) -> url=http://127.0.0.1:38295/secret-metadata server_hits=[\"/secret-metadata\"] downloaded_bytes=LEAKED-INTERNAL-BYTES-9f3c2a\r\n```\r\n\r\nWith default configuration the old helper connected to the attacker-supplied loopback address and returned its bytes as the video buffer; the patched helper never opened a socket to the loopback server (`server_hits=[]`) and rejected with the guard's blocked-hostname error before any connection. With the operator's `allowPrivateNetwork` opt-in the patched helper downloads the private URL exactly as before, confirming the escape hatch works.\r\n\r\nWhat was not driven live: no real cloud-metadata service or non-loopback private address was contacted (only a loopback stand-in), and the provider submit/poll requests were not exercised against a live provider API.\r\n\r\n### Verification\r\n\r\n- `node scripts/run-vitest.mjs src/media-understanding/guarded-provider-download.ssrf.test.ts` (real guard blocks a loopback result URL by default, downloads it only with `allowPrivateNetwork`): 2 passed.\r\n- `node scripts/run-vitest.mjs extensions/byteplus/video-generation-provider.test.ts` (adds: download routes through the guarded fetch; configured opt-in threads through): 16 passed.\r\n- `node scripts/run-vitest.mjs extensions/runway/video-generation-provider.test.ts` (adds: download routes through the guarded fetch; configured opt-in threads through): 16 passed.\r\n- `node scripts/run-vitest.mjs src/media-understanding/shared.test.ts`: 48 passed.\r\n- `oxlint`, `oxfmt --check`, and `tsgo` (core, core-test, extensions, extensions-test lanes) all clean on the changed files.\r\n- New test fails on pristine `main` (unguarded download connects to the loopback server) and passes with the patch.\r\n",
-        "branch": "fix/guard-video-download-ssrf",
-        "head_sha": "06fd7cd227561005032ccf643c54b509034077b5",
-        "author": "yetval",
-        "labels": [
-          "size: M",
-          "extensions: byteplus"
-        ],
-        "files": [
-          {
-            "path": "extensions/byteplus/video-generation-provider.test.ts",
-            "additions": 66,
-            "deletions": 12,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/byteplus/video-generation-provider.ts",
-            "additions": 31,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/runway/video-generation-provider.test.ts",
-            "additions": 87,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/runway/video-generation-provider.ts",
-            "additions": 32,
-            "deletions": 18,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/media-understanding/guarded-provider-download.ssrf.test.ts",
-            "additions": 68,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/media-understanding/shared.ts",
-            "additions": 48,
-            "deletions": 8,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/provider-http.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/plugin-sdk/test-helpers/provider-http-mocks.ts",
-            "additions": 21,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          }
-        ],
-        "changedFiles": 8,
-        "additions": 354,
-        "deletions": 57,
-        "is_clawsweeper_pr": false,
-        "cluster_id": null,
-        "job_path": null,
-        "source_job_path": null,
-        "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-111912",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-111912.md",
-        "mode": "autonomous",
-        "mergeable": "MERGEABLE",
-        "merge_state_status": "BEHIND",
-        "review_decision": "",
-        "checks": {
-          "total": 116,
-          "gatingTotal": 111,
-          "counts": {
-            "SKIPPED": 33,
-            "SUCCESS": 82,
-            "NEUTRAL": 1
-          },
-          "blockers": [],
-          "pending": [],
-          "terminalBlockers": [],
-          "externalBlockers": []
-        }
-      },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
-      "reason": "matching ClawSweeper response comment already exists"
-    }
-  ],
+  "commands": [],
   "exact_comment_version_fast_path": {
     "suppress": false,
     "reason": "auth_uncertain"
@@ -177,19 +41,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3775,
+    "total_ms": 667,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 595
+        "ms": 449
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2710
+        "ms": 1
       },
       {
         "name": "classify_comment_commands",
-        "ms": 12
+        "ms": 0
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -205,7 +69,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 381
+        "ms": 186
       },
       {
         "name": "append_ledger",
