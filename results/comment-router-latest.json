@@ -1,25 +1,25 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-21T16:22:59.314Z",
+  "generated_at": "2026-07-21T17:22:38.110Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-21T13:22:56.978Z",
+  "since": "2026-07-21T14:22:35.119Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    110568
+    109965
   ],
   "comment_ids": [
-    5036408789
+    5036852569
   ],
-  "status_comment_id": 5036409277,
+  "status_comment_id": null,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
-  "actionable": 1,
+  "actionable": 0,
   "trusted_bots": [
     "clawsweeper[bot]",
     "openclaw-clawsweeper[bot]"
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:110568:5036408789:2026-07-21T16:20:08Z:re_review",
-      "comment_id": "5036408789",
-      "comment_version_key": "5036408789:2026-07-21T16:20:08Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/110568#issuecomment-5036408789",
+      "idempotency_key": "comment-router:openclaw/openclaw:109965:5036852569:2026-07-21T17:07:12Z:re_review",
+      "comment_id": "5036852569",
+      "comment_version_key": "5036852569:2026-07-21T17:07:12Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/109965#issuecomment-5036852569",
       "repo": "openclaw/openclaw",
-      "target_branch": "main",
-      "issue_number": 110568,
-      "author": "wangmiao0668000666",
-      "author_id": 290215524,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-21T16:20:08Z",
-      "comment_updated_at": "2026-07-21T16:20:08Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 5036409277,
+      "target_branch": null,
+      "issue_number": 109965,
+      "author": "stantheman0128",
+      "author_id": 79733497,
+      "author_association": "NONE",
+      "comment_created_at": "2026-07-21T17:07:12Z",
+      "comment_updated_at": "2026-07-21T17:07:12Z",
+      "comment_body_sha256": "83f59ab43bdc768a99d1d99c884d27df33e5ab829a58d25e7cc5fc2d484fb97f",
+      "status_comment_id": null,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -72,190 +72,92 @@
       "expected_item_updated_at": null,
       "expected_source_revision": null,
       "finding_id": null,
-      "status": "executed",
-      "actions": [
-        {
-          "action": "dispatch_clawsweeper",
-          "workflow": "sweep.yml",
-          "status": "executed",
-          "event": "repository_dispatch",
-          "repo": "openclaw/clawsweeper",
-          "item_number": 110568,
-          "dispatch_key": "router-c701f37916d90af9",
-          "dispatched_at": "2026-07-21T16:23:00.469Z"
-        },
-        {
-          "action": "comment",
-          "status": "executed",
-          "commented_at": "2026-07-21T16:23:01.804Z",
-          "response_comment_id": "5036409277",
-          "response_comment_mode": "updated"
-        }
-      ],
+      "status": "skipped",
+      "actions": [],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(matrix): journal inbound events before advancing sync token",
-        "body": "## What Problem This Solves\n\nMatrix loses inbound user messages when the gateway crashes or restarts while an agent turn is running.\n\nThe loss window is structural: matrix-js-sdk's `doSync` sets the sync token **before** processing the batch's events (\"set the sync token NOW *before* processing the events … so if something barfs on an event we can skip it\" — `node_modules/matrix-js-sdk/lib/sync.js:725-728`). The plugin's `SqliteBackedMatrixSyncStore.setSyncData` then persists that token (`extensions/matrix/src/matrix/client/file-sync-store.ts:227-232`, 250 ms debounce). Meanwhile the SDK bridge re-emits the event synchronously (`extensions/matrix/src/matrix/sdk.ts:2073-2086`) and the monitor dispatched it **detached** into a memory-only `KeyedAsyncQueue` (`extensions/matrix/src/matrix/monitor/handler.ts:539`) for the full agent-turn duration.\n\nSo the sequence was: message arrives → token advanced in memory → next `/sync` tells the homeserver the batch is consumed → token persisted to SQLite — all while the message still sits in a memory-only queue. Any crash in that window (routinely minutes, the whole agent turn) permanently loses the message. The existing persistent inbound deduper only stores dedupe records, not the payload, so nothing can replay it.\n\n## Why This Change Was Made\n\nThis is the same crash window the durable-ingress fleet adoption (#109657) already closed on the sibling channels — telegram (#108924), discord (#110274), whatsapp (#110418), mattermost (#110386), msteams (#110357), slack (#109910), signal (#109907), imessage (#110409), sms (#109866) — and Matrix is the remaining sync-loop channel still on detached in-memory dispatch. This PR mirrors the merged Mattermost adapter (`extensions/mattermost/src/mattermost/monitor-ingress.ts`) one-for-one, mapped onto Matrix's ack equivalent (the sync-token persist instead of a websocket receive):\n\n- New `extensions/matrix/src/matrix/monitor/ingress.ts`: every dispatchable inbound event (room message, decrypted message, reaction) is journaled into the shared `channel_ingress_events` queue **synchronously inside the sync event listener**. The queue's SQLite write is a synchronous transaction (`src/state/openclaw-state-db.ts` `runOpenClawStateWriteTransaction`), so the journal row commits in the same macrotask cycle — before the 250 ms-debounced token persist can tell the homeserver the batch is consumed. Durable-before-ack.\n- Dispatch now runs through the core durable ingress drain (`createChannelIngressDrain`) with per-room lanes (`room:<id>`, matching the handler's existing per-room serialization), the canonical `turnAdoptionLifecycle` seam (`bindIngressLifecycleToReplyOptions` → `core.channel.inbound.run`, so the claim tombstones at adoption when the turn's recovery state is durable), bounded retry with backoff and dead-letter (8 attempts / 24 h, shared defaults), and startup replay of journaled rows.\n- Handler failures now propagate to the drain when journaled (the detached path swallowed them) so the retry/dead-letter policy owns them; terminal non-turn outcomes (policy gates, dedupe skips) tombstone on dispatch return. The pre-existing persistent deduper keeps homeserver redeliveries exactly-once on top of the drain's tombstones.\n- Events without an `event_id` cannot be journaled and keep the previous live-dispatch path (`onUnjournaledEvent`), matching the handler's existing fail-open dedupe behavior for unidentifiable events.\n- Journal-append failure retries (0/100/300 ms) then drops loudly (fail closed), mirroring the whatsapp landing decision; because the journal and the sync-token store share the same state DB, a broken DB fails the token persist too, so the homeserver redelivers after restart.\n- Shutdown stops ingress after `drainPendingDecryptions` (those emissions still need the journal) and awaits in-flight drain dispatches exactly where the old detached-task `waitForIdle` stood.\n\nNo SQLite schema change (reuses the existing `channel_ingress_events` table in the shared state DB), no new config or env surface, no core/SDK changes — the adapter only consumes the already-exported seams (`createChannelIngressDrain`, `bindIngressLifecycleToReplyOptions`, `state.openChannelIngressQueue`).\n\nKnown boundary (follow-up candidate, out of scope): E2EE events are journaled when the decrypt bridge emits the decrypted event; a crash between token persist and decryption still loses the still-encrypted event. Closing that needs re-injecting raw encrypted events into the crypto pipeline on replay, which is a separate design.\n\n## User Impact\n\n- A gateway crash/restart during (or before) an agent turn no longer permanently loses Matrix room messages, decrypted messages, or reactions: journaled events replay once on startup and are deduped against already-handled ones.\n- Handler failures retry with bounded backoff and dead-letter loudly instead of vanishing into a detached-task log line.\n- No operator action, config change, or migration required; behavior on the happy path is unchanged (same per-room serialization, same reply pipeline).\n\n## Evidence\n\n### Loss-window walkthrough (before)\n\n| Step | Where | Effect |\n|---|---|---|\n| `/sync` batch arrives | `node_modules/matrix-js-sdk/lib/sync.js:725-728` | token set **before** event processing |\n| token persisted | `extensions/matrix/src/matrix/client/file-sync-store.ts:227-232` | homeserver may consider batch consumed after 250 ms debounce |\n| event re-emitted | `extensions/matrix/src/matrix/sdk.ts:2073-2086` | sync, during batch processing |\n| dispatch | `extensions/matrix/src/matrix/monitor/events.ts` (old) | detached `void runMonitorTask(...)` into memory-only queue |\n| agent turn | `extensions/matrix/src/matrix/monitor/handler.ts:539` | message lives only in process memory for minutes |\n\nCrash anywhere after the persist → message gone. After this PR, the journal row exists in SQLite before the listener returns, the drain dispatches with heartbeats + lane serialization, and rows tombstone only at adoption/completion.\n\n### Regression tests (real SQLite queue, temp state dir, no mocks of the journal path)\n\nNew `extensions/matrix/src/matrix/monitor/ingress.test.ts` (6 tests) drives the real `channel_ingress_events` queue via `createChannelIngressQueueForTests` over a real temp state DB:\n\n- journal row commits in the same macrotask cycle as `accept()` (before any timer-based persist could fire), dispatch not started;\n- **restart replay**: accept → simulated crash (no stop) → fresh monitor over the same state dir dispatches the journaled event exactly once and tombstones it;\n- completed events are not redispatched across a restart;\n- a throwing dispatch is **not** tombstoned — a later process redelivers it (retry budget), then completes;\n- events without an `event_id` fall back to live dispatch and journal nothing;\n- end-to-end through the real `registerMatrixMonitorEvents` wiring: a synchronous `room.message` emission (as the SDK bridge does inside `doSync`) is durable immediately after the listener returns, then replays once after a restart.\n\nPlus `handler.test.ts`: the handler threads the ingress lifecycle into `core.channel.inbound.run` as `turnAdoptionLifecycle` (`admission: \"exclusive\"`, `onAdopted`/`onAbandoned` passthrough). `index.test.ts`: handler failures surface to the drain, and shutdown ordering is pause-sync → drain decryptions → ingress stop (awaits in-flight) → thread-binding stop → client release.\n\n### Test runs\n\n```\n$ node scripts/run-vitest.mjs extensions/matrix/src/matrix/monitor/ingress.test.ts \\\n    extensions/matrix/src/matrix/monitor/index.test.ts \\\n    extensions/matrix/src/matrix/monitor/events.test.ts \\\n    extensions/matrix/src/matrix/monitor/handler.test.ts\nTest Files  4 passed (4)\nTests  211 passed (211)\n\n$ node scripts/run-vitest.mjs extensions/matrix/src/matrix/monitor/\nTest Files  35 passed (35)\nTests  484 passed (484)\n```\n\n(The full monitor-directory run is intermittently 7-red in `reaction-events.test.ts` with `runtime.state.resolveStateDir is not a function`; reproduced on unmodified `origin/main` 1/4 runs with the identical signature — pre-existing cross-file flake, unrelated to this change.)\n\n### Reverse verification (control-red)\n\nStashed only the four production files (`events.ts`, `handler.ts`, `index.ts`, `ingress.ts`), kept the tests:\n\n```\nTest Files  4 failed (4)   ← ingress import gone, wiring assertions red\nTests  6 failed | 199 passed (205)\n```\n\nRestored the fix → same four files green (211/211).\n\n### tsgo / lint / format\n\n```\n$ tsgo -p tsconfig.extensions.json\n→ only the 3 pre-existing packages/net-policy/src/ip.ts errors (stale ipaddr.js types); zero in touched files\n$ oxlint extensions/matrix/src/matrix/monitor/   → clean\n$ oxfmt --check extensions/matrix/src/matrix/monitor/ → clean\n```\n",
-        "branch": "fix/matrix-ingress-durability",
-        "head_sha": "41ea682152e27b29790808fea773cb593e05ced8",
-        "author": "wangmiao0668000666",
+        "title": "fix(agents): continuation-skip reinjects full workspace bootstrap for SQLite-backed sessions",
+        "body": "Related to #109656\r\n\r\nAI-assisted: this change was implemented with Claude (Anthropic) doing the analysis and code under human direction and review. Workflow context: issue-driven fix; I traced the continuation gate (prepareEmbeddedAttemptBootstrap -> hasCompletedBootstrapTurn), wrote the failing SQLite tests first, then the fix. Follow-up framing check on 2026-07-19 was done with Cursor / Grok 4.5 against tagged releases and origin/main history. Live two-turn SQLite proof on 2026-07-21 used Cursor / Grok 4.5 with a local Mistral run (no Telegram/Vertex). Tip re-proof on `a37dc4208b` later the same day also used Cursor / Grok 4.5 + Mistral `--local`.\r\n\r\n## What Problem This Solves\r\n\r\nFixes a current-main regression where agents configured with `contextInjection: \"continuation-skip\"` still get the full workspace bootstrap context reinjected on every turn, which breaks stable prompt prefixes and defeats prompt cache reads (same symptom as #109656).\r\n\r\nRoot cause on current code: after sessions and transcripts flipped to SQLite storage (#98236, first present in the v2026.7.2 betas), `hasCompletedBootstrapTurn` returned false for every `sqlite:` session-file marker. Live session files are always those markers now (`resolveAndPersistSessionFile` formats them that way), so the continuation gate never engages and the mode behaves like `always`.\r\n\r\n## Scope honesty vs the original report\r\n\r\nThe issue author reproduced on v2026.5.27 and again on v2026.6.11. Both tags predate #98236 (`git merge-base --is-ancestor 0a8e3604ba v2026.6.11` / `v2026.5.27` / `v2026.7.1` are all false; the flip is contained in v2026.7.2-beta.1). On those releases, `hasCompletedBootstrapTurn` only scans JSONL transcript files. There is no `sqlite:` early-return and no SQLite-backed session-file marker in that code path.\r\n\r\nSo this PR's SQLite read fix is **not** an explanation of the pre-7.2 reproductions. It is the defect that makes the same symptom universal on current main / 7.2+. Closing #109656 solely on this change would over-claim. I am leaving the issue link as Related rather than Closes until someone confirms turn-2 skip (or identifies a separate pre-SQLite cause) on a pre-7.2 build or from the author's transcript evidence.\r\n\r\nWhat still looks true from source:\r\n\r\n1. Pre-#98236 JSONL scanner + marker write/read design are present on v2026.5.27 / v2026.6.11. I have not found a second definite bug in that JSONL scanner that would force reinjection when a valid `openclaw:bootstrap-context:full` marker is in the transcript tail.\r\n2. On HEAD, the live path is SQLite-only for new sessions. The JSONL branch in `hasCompletedBootstrapTurn` remains for non-marker filesystem transcripts (tests / legacy paths) and is unchanged in behavior by this PR beyond sharing the scan helper.\r\n3. The author's byte-identical `systemPrompt.chars` / `systemPrompt.hash` on turn 2 is real evidence that skip did not engage in those runs. Likely next checks for that era: whether the completion marker was actually appended to the JSONL transcript after turn 1, whether `contextInjection: \"continuation-skip\"` was the effective mode for that agent run, and whether `/context` / JSON `systemPrompt` is measuring the injected bootstrap set (not some other stable surface).\r\n\r\n## Why This Change Was Made\r\n\r\nThe write side already persists the `openclaw:bootstrap-context:full` custom record into the SQLite transcript via `sessionManager.appendCustomEntry`, so only the read side was missing after the flip. `hasCompletedBootstrapTurn` now resolves `sqlite:` markers through `loadTranscriptEvents` and scans the bounded transcript tail with the same compaction-invalidation semantics as the JSONL path (a marker only counts if no compaction record follows it). The scan loop is shared between both paths. Any read failure still returns false, which falls back to full bootstrap injection, the safe direction.\r\n\r\n## User Impact\r\n\r\n`contextInjection: \"continuation-skip\"` works again on SQLite-backed sessions (all live sessions on current main). Continuation turns skip workspace bootstrap reinjection, so prompt prefixes stay stable and cacheable. Full-bootstrap turns, heartbeat runs, and post-compaction turns keep their current behavior. This does not by itself prove the pre-7.2 reports are fixed; those need separate confirmation.\r\n\r\n## Evidence\r\n\r\n### Unit (red then green)\r\n\r\nRed first: with the new tests and the previous `hasCompletedBootstrapTurn` implementation checked out from main, the two positive SQLite tests fail.\r\n\r\n```\r\n$ git checkout origin/main -- src/agents/bootstrap-files.ts\r\n$ npx vitest run src/agents/bootstrap-files.test.ts --project agents-core -t \"SQLite\"\r\n- Expected\r\n+ Received\r\n- true\r\n+ false\r\n > src/agents/bootstrap-files.test.ts:611:58\r\n Test Files  1 failed (1)\r\n      Tests  2 failed | 3 passed | 39 skipped (44)\r\n```\r\n\r\nGreen with the fix (Node 24.18.0, Windows 11):\r\n\r\n```\r\n$ npx vitest run src/agents/bootstrap-files.test.ts\r\n Test Files  2 failed (2)\r\n      Tests  2 failed | 86 passed (88)\r\n```\r\n\r\nThe 2 remaining failures are the pre-existing \"returns false for symbolic links\" test, which fails at test setup (`fs.symlink` EPERM) on Windows without symlink privileges; that test is untouched by this diff and fails identically at origin/main on this machine.\r\n\r\n`pnpm check` (typecheck, oxlint, oxfmt, policy guards, import cycle check) exits 0, and `pnpm build` exits 0.\r\n\r\n### Live two-turn SQLite session on tip `a37dc4208b` (2026-07-21 later re-proof)\r\n\r\nIsolated `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH` with `agents.defaults.contextInjection: \"continuation-skip\"`. Empty workspace seeded by `ensureAgentWorkspace` (templates + pending `BOOTSTRAP.md`). Embedded runner via `openclaw agent --local --json` on tip `a37dc4208b`. Model: `mistral/mistral-small-latest`. Same session id `proof-109656-live5` across turns.\r\n\r\n| Turn | projectContextChars | injectedWorkspaceFiles | hasCompletedBootstrapTurn | bootstrapPending |\r\n| --- | ---: | ---: | --- | --- |\r\n| 1 | 15752 | 7 (incl. BOOTSTRAP.md) | true after turn | true |\r\n| 2 (after setup complete) | 0 | 0 | true | false |\r\n\r\nSession marker shape (paths redacted): `sqlite:main:proof-109656-live5:.../sessions.json`\r\n\r\nTurn 1:\r\n\r\n```\r\nreply: TURN1_OK\r\nsystemPrompt.chars: 34132\r\nsystemPrompt.hash: d9adc1b7fd98cad0070a2d09bff06c7cdc30b89639fc46b039df238ce392a3c2\r\nsystemPrompt.projectContextChars: 15752\r\ninjectedWorkspaceFiles: AGENTS/SOUL/TOOLS/IDENTITY/USER/HEARTBEAT/BOOTSTRAP\r\npromptTokens: 29127\r\n```\r\n\r\nBetween turns: deleted pending `BOOTSTRAP.md` and stamped `setupCompletedAt`. Pending bootstrap keeps `bootstrapMode: \"full\"` until setup is done; continuation-skip only engages once setup is complete and a marker already exists.\r\n\r\nTurn 2:\r\n\r\n```\r\nreply: TURN2_OK\r\nsystemPrompt.chars: 17560\r\nsystemPrompt.hash: 35cb7cce6c0126a04dbf8860d34d0543e55829e2ac819d38186dab4d7e16440a\r\nsystemPrompt.projectContextChars: 0\r\ninjectedWorkspaceFiles: []\r\npromptTokens: 25174\r\n```\r\n\r\nHarness note: an earlier tip re-run with custom stub workspace files did not keep BOOTSTRAP pending (`reconcileWorkspaceBootstrapCompletionState` treated the profile as configured and removed BOOTSTRAP before injection), so the marker was never written. The table above is the clean tip A/B after fixing the harness.\n\n### Earlier live two-turn on fix commit `4b3d61cebb` (2026-07-21, Windows 11, Node v24.15.0)\r\n\r\nIsolated `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH` with `agents.defaults.contextInjection: \"continuation-skip\"`. Embedded runner via `openclaw agent --local --json` on this PR head (`4b3d61cebb`). Model: `mistral/mistral-small-latest` (no Telegram / Vertex / gateway). Same `sessionKey` across turns.\r\n\r\nSession file marker shape (paths redacted):\r\n\r\n```\r\nsqlite:main:64cf1fc5-ce2a-4829-8cd5-559947a1facb:<state>/agents/main/sessions/sessions.json\r\n```\r\n\r\nTurn 1 (workspace bootstrap still pending, so `bootstrapMode: \"full\"` records the completion marker):\r\n\r\n```\r\nfinalAssistantVisibleText: TURN1_OK\r\nsystemPrompt.chars: 22997\r\nsystemPrompt.hash: 2cf33cb8d338a4f34aeff2cd414e91962bb23f09ed1cbb28f215c82c9af7ee84\r\nsystemPrompt.projectContextChars: 4879\r\ninjectedWorkspaceFiles: 7 (AGENTS/SOUL/TOOLS/IDENTITY/USER/HEARTBEAT/BOOTSTRAP)\r\npromptTokens: 26685\r\n```\r\n\r\nTranscript after turn 1 contains `customType: \"openclaw:bootstrap-context:full\"` (seq 6).\r\n\r\nBetween turns, workspace setup was completed (removed pending `BOOTSTRAP.md` and stamped `setup_completed_at`). Pending bootstrap forces `bootstrapMode: \"full\"`, which intentionally keeps reinjection until setup is done; continuation-skip only engages once setup is complete and a marker already exists.\r\n\r\nTurn 2 (same SQLite session, after setup complete):\r\n\r\n```\r\nfinalAssistantVisibleText: TURN2_OK\r\nsystemPrompt.chars: 17303   (delta -5694)\r\nsystemPrompt.hash: 9ffa4ab22997203ef97a689e470292b83c430b93cd7c4457e1740ecf15f50d68\r\nsystemPrompt.projectContextChars: 0   (delta -4879)\r\ninjectedWorkspaceFiles: []   (0 files)\r\npromptTokens: 25198\r\n```\r\n\r\nNo additional `openclaw:bootstrap-context:full` marker was written on turn 2. Post-run probe with the same `sqlite:` marker:\r\n\r\n```\r\nhasCompletedBootstrapTurn => true\r\nloadTranscriptEvents eventCount includes the turn-1 full-bootstrap custom record\r\n```\r\n\r\nVersion / history checks for this framing (no fabrication):\r\n\r\n- `#98236` = `0a8e3604ba` introduces `if (parseSqliteSessionFileMarker(sessionFile)) return false;` in `hasCompletedBootstrapTurn`\r\n- that commit is first contained in `v2026.7.2-beta.1`, not in `v2026.5.27`, `v2026.6.11`, or `v2026.7.1`\r\n- tagged `v2026.5.27` / `v2026.6.11` `bootstrap-files.ts` only has the JSONL `lstat` + tail scan path\r\n\r\n",
+        "branch": "fix/109656-continuation-skip",
+        "head_sha": "8721c7fd641aa23a2b4384376db81032295e2a58",
+        "author": "stantheman0128",
         "labels": [
-          "channel: matrix",
-          "size: L",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 message-delivery",
-          "status: 👀 ready for maintainer look"
+          "agents",
+          "size: S",
+          "P2",
+          "rating: 🦪 silver shellfish",
+          "merge-risk: 🚨 session-state",
+          "status: 📣 needs proof"
         ],
         "files": [
           {
-            "path": "extensions/matrix/src/matrix/monitor/events.test.ts",
-            "additions": 6,
-            "deletions": 2,
+            "path": "src/agents/bootstrap-files.test.ts",
+            "additions": 98,
+            "deletions": 4,
             "changeType": "MODIFIED"
           },
           {
-            "path": "extensions/matrix/src/matrix/monitor/events.ts",
-            "additions": 9,
-            "deletions": 20,
+            "path": "src/agents/bootstrap-files.ts",
+            "additions": 50,
+            "deletions": 39,
             "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/handler.test-helpers.ts",
-            "additions": 7,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/handler.test.ts",
-            "additions": 66,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/handler.ts",
-            "additions": 19,
-            "deletions": 2,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/index.test.ts",
-            "additions": 69,
-            "deletions": 32,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/index.ts",
-            "additions": 30,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/ingress.test.ts",
-            "additions": 263,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "extensions/matrix/src/matrix/monitor/ingress.ts",
-            "additions": 334,
-            "deletions": 0,
-            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 9,
-        "additions": 803,
-        "deletions": 57,
+        "changedFiles": 2,
+        "additions": 148,
+        "deletions": 43,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-110568",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-110568.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-109965",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-109965.md",
         "mode": "autonomous",
-        "mergeable": "UNKNOWN",
-        "merge_state_status": "UNKNOWN",
+        "mergeable": "MERGEABLE",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 82,
-          "gatingTotal": 77,
+          "total": 115,
+          "gatingTotal": 110,
           "counts": {
-            "QUEUED": 1,
-            "SUCCESS": 33,
-            "SKIPPED": 32,
-            "IN_PROGRESS": 16
+            "SUCCESS": 80,
+            "SKIPPED": 34,
+            "NEUTRAL": 1
           },
-          "blockers": [
-            "Scan changed paths (precise):QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "QA Smoke CI (profile 1/4):IN_PROGRESS",
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 3/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-changed-1:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
-          "pending": [
-            "Scan changed paths (precise):QUEUED",
-            "build-artifacts:IN_PROGRESS",
-            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
-            "QA Smoke CI (profile 1/4):IN_PROGRESS",
-            "QA Smoke CI (profile 2/4):IN_PROGRESS",
-            "QA Smoke CI (profile 3/4):IN_PROGRESS",
-            "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-fast-contracts-channels-a:IN_PROGRESS",
-            "checks-fast-contracts-channels-b:IN_PROGRESS",
-            "checks-node-changed-1:IN_PROGRESS",
-            "check-shrinkwrap:IN_PROGRESS",
-            "check-lint:IN_PROGRESS",
-            "check-dependencies:IN_PROGRESS",
-            "check-test-types:IN_PROGRESS",
-            "check-sqlite-session-flip-proof:IN_PROGRESS",
-            "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
-          ],
+          "blockers": [],
+          "pending": [],
           "terminalBlockers": [],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-21T16:22:59.700Z"
+      "reason": "matching ClawSweeper response comment already exists"
     }
   ],
   "exact_comment_version_fast_path": {
     "suppress": false,
-    "reason": "version_not_terminal"
+    "reason": "auth_uncertain"
   },
   "short_circuited": false,
-  "ledger_claimed": true,
-  "ledger_changed": true,
+  "ledger_claimed": false,
+  "ledger_changed": false,
   "timings": {
-    "total_ms": 5670,
+    "total_ms": 3385,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 776
+        "ms": 499
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1453
+        "ms": 2404
       },
       {
         "name": "classify_comment_commands",
-        "ms": 14
+        "ms": 16
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -271,11 +173,11 @@
       },
       {
         "name": "execute_commands",
-        "ms": 3323
+        "ms": 394
       },
       {
         "name": "append_ledger",
-        "ms": 1
+        "ms": 0
       }
     ]
   }
