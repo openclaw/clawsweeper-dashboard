@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-21T22:08:07.221Z",
+  "generated_at": "2026-07-22T00:49:19.768Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-21T19:08:03.830Z",
+  "since": "2026-07-21T21:49:17.334Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    89040
+    111404
   ],
   "comment_ids": [
-    5039512545
+    5040573674
   ],
-  "status_comment_id": 5039512862,
+  "status_comment_id": 5040573950,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:89040:5039512545:2026-07-21T22:06:37Z:re_review",
-      "comment_id": "5039512545",
-      "comment_version_key": "5039512545:2026-07-21T22:06:37Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/89040#issuecomment-5039512545",
+      "idempotency_key": "comment-router:openclaw/openclaw:111404:5040573674:2026-07-22T00:47:19Z:re_review",
+      "comment_id": "5040573674",
+      "comment_version_key": "5040573674:2026-07-22T00:47:19Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/111404#issuecomment-5040573674",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 89040,
-      "author": "Jerry-Xin",
-      "author_id": 3401616,
+      "issue_number": 111404,
+      "author": "snotty",
+      "author_id": 5853861,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-21T22:06:37Z",
-      "comment_updated_at": "2026-07-21T22:06:37Z",
-      "comment_body_sha256": "1f73b9fdcd39a5084718ee3ed5bb9ce8746b74a4c0cbb0916cda890988dc8ced",
-      "status_comment_id": 5039512862,
+      "comment_created_at": "2026-07-22T00:47:19Z",
+      "comment_updated_at": "2026-07-22T00:47:19Z",
+      "comment_body_sha256": "b18aed8702e2ace8b9145cf5d18ddb1d5251cc16a47c2786c3b9318c85de79f5",
+      "status_comment_id": 5040573950,
       "trigger": "mention",
       "command": "re-review",
       "intent": "re_review",
@@ -80,163 +80,206 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 89040,
-          "dispatch_key": "router-a357f0316353df97",
-          "dispatched_at": "2026-07-21T22:08:09.283Z"
+          "item_number": 111404,
+          "dispatch_key": "router-f50d3c8c61fbc497",
+          "dispatched_at": "2026-07-22T00:49:20.446Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-21T22:08:12.172Z",
-          "response_comment_id": "5039512862",
+          "commented_at": "2026-07-22T00:49:21.412Z",
+          "response_comment_id": "5040573950",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "perf: avoid event-loop stall during embedded_run bootstrap-context",
-        "body": "## Summary\n\nFix event-loop stalls during `embedded_run` bootstrap-context that block the event loop for 14-22 seconds, causing message loss.\n\n## What Problem This Solves\n\nEvent-loop stalls during `embedded_run` bootstrap-context loading, caused by synchronous I/O and a blocking `fs.glob` walk over large workspaces, block the loop for 14-22 seconds and drop messages (issue #87509 reports 14-22s bootstrap-context stalls that block channel I/O, WebSocket keepalive, and timers).\n\n### Root causes addressed\n\n1. **Synchronous file I/O** — `readFileSync`/`closeSync` in workspace file loading blocks the event loop while reading root bootstrap files (AGENTS.md, SOUL.md, etc.)\n2. **Unbounded blocking glob walks** — `fs.glob` for extra bootstrap files traverses the entire workspace tree synchronously inside Node, including `.git`/`node_modules` directories, without yielding to the event loop\n3. **Uninterrupted hook chains** — `triggerInternalHook` executes all handlers back-to-back without yielding\n\n## Why This Change Was Made\n\nBootstrap extra-file loading runs during embedded-run bootstrap-context, on the hot path that prepares every agent turn. On `main` the exported loader reaches Node `fs.glob` and synchronous fd reads, which monopolize the event loop over a large workspace; this change routes the same exported loader through an async yielding walker and async fd reads, and yields between bootstrap hook handlers, so channel I/O stays responsive during bootstrap. The public plugin SDK surface is deliberately unchanged.\n\n### Changes\n\n**`src/agents/workspace.ts`**\n- Replace sync `readFileSync`/`closeSync` with callback-based async `readFdToString`/`closeFdAsync`\n- Parallelize root bootstrap file reads via `Promise.all` (previously serial `for` loop)\n- Replace `fs.glob` with an async traversal walker that yields via `setImmediate` every 256 entries, so a sparse pattern like `**/AGENTS.md` over a large workspace never blocks the event loop. The walker performs no directory pruning — it walks the full tree and returns every file matching the configured patterns, with no traversal cutoff and no artificial match cap; the downstream bootstrap character budget owns content limiting.\n- Preserve `fs.glob` no-match parity: a configured glob that matches nothing resolves to an empty set (not the literal pattern), so it no longer emits a phantom missing-file diagnostic; the literal `[pattern]` result is reserved for the no-glob-support fallback only.\n- Preserve `fs.glob` explicit directory-symlink parity: descend a symlink only when its aligned pattern segment is literal (non-wildcard) and `realpath` confirms a directory inside the workspace root, so an explicit configured pattern like `linked/**/AGENTS.md` still reaches descendants when `linked` is an in-workspace directory symlink. Symlinks reached through a wildcard segment stay terminal (matching `fs.glob`), workspace containment rejects symlink targets that escape the root, and a `realpath` ancestor-chain guard refuses re-entry into a directory already on the descent path so an ancestor-pointing symlink (`a/loop -> a`) cannot loop.\n- Suppress `closeFdAsync` rejections to avoid masking read errors on NFS/FUSE\n\n**`src/hooks/internal-hooks.ts`** / **`src/hooks/internal-hook-dispatch.ts`**\n- Keep the public `triggerInternalHook(event)` signature (re-exported via `plugin-sdk/hook-runtime`) unchanged and matching `main` — no new public parameter or exported options type.\n- Move the bootstrap-only handler scheduling (`yieldBetweenHandlers` with `setImmediate` yield between handlers) and per-handler timing/slow-handler (>500ms) warning into an internal `internal-hook-dispatch` module that is not on the plugin SDK surface.\n\n**`src/agents/embedded-agent-runner/run/attempt.ts`**\n- Instrument bootstrap-context substages (`workspace-file-load`, `hook-overrides`) with `performance.now` timing\n- Log substage durations when total bootstrap-context exceeds 2 seconds\n- Enable yielding between handlers for `agent:bootstrap` hook triggers (via the internal dispatch entrypoint)\n\n**`src/agents/bootstrap-files.ts`** / **`src/agents/bootstrap-hooks.ts`**\n- Keep the public `resolveBootstrapFilesForRun` params (re-exported via `plugin-sdk/agent-harness-runtime`) callback-free and matching `main`; route embedded-runner substage timing through an internal `resolveBootstrapFilesForRunWithTiming` variant kept off the SDK surface.\n- Support the new async workspace file loading interface.\n\n### Tests\n\n- `workspace.test.ts` — 3 new tests for async fd read (happy path, cache hit, fd close on failure)\n- `workspace.load-extra-bootstrap-files.test.ts` — every matching file returned without an artificial cap (no directory pruning), and a regression test asserting a late-appearing match in a large tree is still loaded (no traversal cutoff)\n- `handler.test.ts` — no truncation warning is emitted for large glob scans\n- `internal-hooks.test.ts` — yield-between-handlers ordering, handler timing reporting, and slow handler warning exercised through the internal dispatch entrypoint\n- `workspace.load-extra-bootstrap-files.test.ts` — a no-match glob resolves to an empty set with no missing-file diagnostic (fs.glob parity)\n- `workspace.load-extra-bootstrap-files.test.ts` — explicit directory-symlink glob parity across three states (real `fs.symlink`): a literal-named directory symlink is descended and its descendants match; a `**`-reached symlink stays terminal; an ancestor-pointing (cyclic) literal symlink terminates without looping\n\nThe public plugin SDK surface is unchanged: `node scripts/plugin-sdk-surface-report.mjs` exits 0 with no new package-exported entrypoints. All existing tests pass without modification.\n\n## User Impact\n\nAgents whose workspaces contain large trees or broad `bootstrap-extra-files` globs no longer stall the event loop for seconds during bootstrap-context, so WebSocket keepalives, typing indicators, HTTP requests, and timers keep firing while an agent turn is being prepared — messages are no longer dropped. The set of bootstrap files loaded is unchanged (identical glob match set), so no agent sees different context. Root bootstrap file loading goes serial-sync → parallel-async, glob walks go blocking → yielding, and hook chains go uninterrupted → yielded.\n\n## Evidence\n\nThis is a **current-`main` vs current-PR-head** real-behavior benchmark against the real exported loader, covering elapsed time, event-loop responsiveness, glob-match parity, and RSS.\n\n- **Behavior or issue addressed**: Event-loop stalls during `embedded_run` bootstrap-context loading caused by a blocking `fs.glob` walk over large workspaces (issue #87509). This change replaces the native `fs.glob` walk with an async walker that yields via `setImmediate` every 256 entries so the event loop stays responsive, while returning the identical configured `bootstrap-extra-files` match set.\n- **Real environment tested**: OpenClaw checkout on macOS arm64, Node.js `v24.10.0`, run via `tsx` against the real exported `loadExtraBootstrapFilesWithDiagnostics` from `src/agents/workspace.ts`. `main` = `9b823c610816` (native `fs.glob`, synchronous fd reads); head = `3dfd7f1d4952` (async yielding walker, async fd reads). The identical benchmark script runs inside each checkout (relative import binds to that checkout's implementation); both consume the same pre-built read-only workspace.\n- **Real environment scenario**: A workspace of **395,807 filesystem entries** (391,124 files, 4,683 dirs — wide flat dirs + a deep 40-level tree + `node_modules` + `.git` + `.hidden` noise), with `AGENTS.md` planted at several depths (root, deep-past-old-cutoff, `.hidden/`, `node_modules/`). Configured pattern `**/AGENTS.md`. During the load a 5ms repeating timer counts liveness ticks, `perf_hooks.monitorEventLoopDelay({resolution:5})` records event-loop delay, and `process.memoryUsage().rss` is captured before/after with `global.gc()`. 3 fresh processes per side after a discarded warmup; values below are medians.\n- **Failing proof before fix** (current `main` `9b823c610816`, native `fs.glob`):\n  ```\n  elapsed: 834.5ms\n  maxEventLoopDelay: 55.5ms   meanEventLoopDelay: 8.50ms   p99: 54.9ms\n  liveness timer ticks during load: 95 / 166 expected (57.2% kept)\n  rssDelta: 358.3 MB\n  matched bootstrap files returned: 3\n  RESULT: fs.glob finishes the walk fast but monopolizes the loop —\n          multi-tens-of-ms stalls, ~43% of 5ms liveness ticks dropped, 358 MB RSS spike\n  ```\n- **Exact steps or command run after this patch** (identical script both sides; full reproduce recipe below):\n  ```\n  # build the shared 395,807-entry workspace once, then run each side from its own checkout\n  node --import tsx/esm --expose-gc ./bench-bootstrap.mts run \"$BENCH/ws\"\n  ```\n- **Evidence after fix** (current PR head `3dfd7f1d4952`, async yielding walker):\n  ```\n  elapsed: 1244.8ms\n  maxEventLoopDelay: 10.7ms   meanEventLoopDelay: 5.09ms   p99: 6.6ms\n  liveness timer ticks during load: 245 / 248 expected (98.8% kept)\n  rssDelta: 57.0 MB\n  matched bootstrap files returned: 3\n  RESULT: yielding walker keeps the loop responsive — max delay near the 5ms floor,\n          98.8% of liveness ticks fired, RSS footprint ~6x smaller\n  ```\n- **Glob result parity (main vs head)**: sha256 of the sorted relative match set is **identical** on both sides — `b90d55afa71f2aa871ea40de7d91715377c93b76d26e7f43d817019b6b72a97e`. Matched set both sides: `AGENTS.md`, the deep 40-level `deep/.../AGENTS.md`, and `node_modules/pkg000/AGENTS.md`; `.git` and `.hidden/AGENTS.md` correctly excluded by both. The custom walker changes event-loop behavior and memory, not the returned file set.\n\n  | metric (median of 3, 395,807 entries, Node v24.10.0) | main `9b823c610816` | head `3dfd7f1d4952` |\n  |---|---:|---:|\n  | elapsed (ms) | 834.5 | 1244.8 |\n  | max event-loop delay (ms) | 55.5 | 10.7 |\n  | mean event-loop delay (ms) | 8.50 | 5.09 |\n  | liveness ticks kept | 57.2% | 98.8% |\n  | RSS delta (MB) | 358.3 | 57.0 |\n  | `**/AGENTS.md` matches returned | 3 | 3 (identical set) |\n\n- **Observed result after fix**: the fix trades a modest wall-clock increase (834ms → 1245ms) for the property the issue actually needs — the event loop stops stalling. Max event-loop delay drops from 55.5ms to 10.7ms (near the 5ms probe floor), liveness-tick retention rises from 57.2% to 98.8%, and peak RSS is ~6x smaller (358MB → 57MB) because the walker no longer buffers the whole `fs.glob` result eagerly. The returned match set is byte-identical (same sha256), so existing `bootstrap-extra-files` configs load the same files. At the field-report scale (much larger real workspaces), `main`'s blocking walk is what produces the 14-22s embedded_run stalls; this benchmark demonstrates the direction and mechanism (blocking `fs.glob` vs cooperative yielding) at 395,807 entries on a single dev box.\n- **Reproduce**:\n  ```bash\n  BENCH=/tmp/bench-89040\n  PR=<pr-head-checkout>\n  git -C \"$PR\" worktree add --detach \"$BENCH/main-wt\" 9b823c610816   # current upstream/main\n  ln -s \"$PR/node_modules\" \"$BENCH/main-wt/node_modules\"             # read-only bench, first-party deps\n  cp \"$BENCH/bench-bootstrap.mts\" \"$PR/bench-bootstrap.mts\"\n  cp \"$BENCH/bench-bootstrap.mts\" \"$BENCH/main-wt/bench-bootstrap.mts\"\n  # build the shared workspace once (reused by both sides, walk mutates nothing)\n  (cd \"$PR\" && node --import tsx/esm \"$BENCH/bench-bootstrap.mts\" build \"$BENCH/ws\" 400000)\n  # 3 fresh processes per side, run from inside each checkout so the relative import binds\n  (cd \"$PR\"            && node --import tsx/esm --expose-gc ./bench-bootstrap.mts run \"$BENCH/ws\")\n  (cd \"$BENCH/main-wt\" && node --import tsx/esm --expose-gc ./bench-bootstrap.mts run \"$BENCH/ws\")\n  ```\n- **What was not tested**: No full live `embedded_run` with active channel connections was driven end-to-end; this proof exercises the real exported glob-resolution path (`loadExtraBootstrapFilesWithDiagnostics`) and event-loop instrumentation directly rather than through a connected channel. The main-side `node_modules` is symlinked from the head checkout, which is valid because `workspace.ts`'s transitive imports are first-party and the run is read-only. Focused regression coverage lives in `workspace.load-extra-bootstrap-files.test.ts` and `handler.test.ts`.\n\n### Directory-symlink glob parity proof\n\n- **Behavior addressed**: The cooperative walker only descended `Dirent.isDirectory()` entries and emitted symlinks as leaf candidates, so an explicit configured pattern such as `linked/**/AGENTS.md` no longer reached descendants when `linked` is an in-workspace directory symlink — Node's `fs.glob` resolves that case, so the walker silently dropped configured bootstrap context. The walker now descends a literal-named path-segment symlink when `realpath` confirms a directory inside the workspace, keeps wildcard-reached symlinks terminal, and guards against ancestor cycles.\n- **Real environment tested**: Local patched OpenClaw checkout on macOS arm64, Node.js `v24.10.0`. Three regression tests build real temp directories with real `fs.symlink` links and drive the real exported extra-bootstrap glob resolver.\n- **Steps run**: `npx vitest run src/agents/workspace.load-extra-bootstrap-files.test.ts src/agents/workspace.test.ts`\n- **Observed result**: `Test Files 4 passed (4)`, `Tests 156 passed (156)`. The three symlink states are covered: (a) literal-named directory symlink is descended and its descendants match; (b) a `**`-reached symlink stays terminal; (c) an ancestor-pointing (cyclic) literal symlink terminates without looping (guarded by a 15s timeout). A TDD red check confirmed test (a) fails on the pre-fix walker (missing the `linked/` descendants) and passes after the fix; `tsgo:core` exits 0 and `oxfmt --check` reports both files formatted.\n- **What was not tested**: Behavior on Windows/`EPERM`/`ENOSYS` filesystems where symlink creation is unavailable — those cases skip cleanly rather than assert.\n\nCloses #87509\n",
-        "branch": "fix/bootstrap-context-event-loop-stall",
-        "head_sha": "fc2deda0364192c6b3a7fda8d5f6dfd9bffe7710",
-        "author": "jerry-xin",
+        "title": "fix(message): ignore populated location on text sends",
+        "body": "## What Problem This Solves\n\nFixes a Telegram delivery failure where model-generated `message(action=\"send\")` calls could populate the optional `location` object during an ordinary text or media reply. The shared outbound runner correctly rejected the mixed payload with:\n\n```text\nLocation sends cannot be combined with message text or media.\n```\n\nThat dropped an otherwise complete user-visible reply.\n\n## Root Cause\n\nTelegram exposed `location` on the broad `send` action, so tool-call generators could fill it even when the intended send mode was text or media. The original patch repaired this in the shared runner by silently deleting location, but that weakened the public mixed-payload contract across every channel and could discard an intentional location request.\n\n## Why This Change Was Made\n\nThis redesign preserves the shared invariant and fixes the producer boundary instead:\n\n- adds an explicit Telegram `send-location` action for intentional native pins and venues;\n- keeps legacy location-only `send` calls compatible;\n- marks agent message-tool calls with an internal origin and removes incidental Telegram location only from model-authored text/media sends;\n- performs private host-owned Telegram normalization after the requested action is authorized, then translates `send-location` to canonical `send` for existing durable/gateway delivery;\n- preserves strict rejection for direct/API callers that intentionally mix location with text, media, presentation, or interactive content;\n- keeps `asVideoNote` on its existing cross-channel schema scope and limits the location schema to the current Telegram channel.\n\n## User Impact\n\nNormal Telegram text and media replies—including URL/path, attachment, image, and base64 `buffer` media forms—are delivered when a model fills an unrelated location field. Explicit location sends remain standalone and validated. Existing direct callers still receive an actionable error for invalid mixed payloads rather than losing location data silently.\n\n## Evidence\n\n### Exact-head real Telegram delivery proof\n\nA temporary, uncommitted runner loaded the real Telegram action adapter/runtime from exact head `ec137200b4075780c6438897323ed519217a679e`, resolved the configured bot credential privately, and delivered through the real Telegram Bot API to a live chat. The token, account, and chat target are redacted from the published transcript; the runner was removed and the worktree remained clean.\n\n- Redacted live transcript: https://gist.github.com/snotty/d3ca4e6b5d473b8513570bb7dab007ea\n- Raw transcript: https://gist.githubusercontent.com/snotty/d3ca4e6b5d473b8513570bb7dab007ea/raw/pr111404-live-telegram-proof.txt\n- SHA-256: `b3964ca63671c39d6c23d00b6c5120288fe5ee4d70c25ed2139c4298f56465ce`\n\nThe exact-head run produced three visible Telegram messages in sequence:\n\n```text\nsendMessage -> messageId 8707: incidental-location text delivered, location removed\nsendPhoto   -> messageId 8708: incidental-location image delivered, location removed\nsendLocation -> messageId 8709: explicit standalone location delivered, location preserved\ndirect mixed content+location -> rejected before delivery with the documented error\n```\n\nThis is a real final-head Bot API delivery, not a mocked or placeholder-token Vitest harness. The direct mixed-payload check used the same exact-head adapter/runtime but intentionally produced no Telegram message because rejection before delivery is the required behavior.\n\nMantis native Desktop automation was also requested with the exact maintainer-suggested command. The workflow accepted the syntax but its authorization gate declined the contributor account because native Mantis runs require repository write/maintain/admin permission. The live-bot proof above is therefore the contributor-accessible evidence path requested by ClawSweeper.\n\nEarlier Mantis native Telegram Desktop evidence remains useful for the original user-visible failure and earlier candidate behavior:\n\n- Run: https://github.com/openclaw/openclaw/actions/runs/29691948840\n- Artifact: https://github.com/openclaw/openclaw/actions/runs/29691948840/artifacts/8444147473\n\n### Telegram-only seam refinement\n\nThe latest head removes `normalizeMessageActionRequest` from the public `ChannelMessageActionAdapter` / Plugin SDK contract. The repair now lives in a private host-owned Telegram normalizer used by both local `runMessageAction` and Gateway `message.action` after requested-action authorization. Non-Telegram channels are explicit no-ops; direct callers remain strict.\n\n### Validation\n\nThe branch was refreshed with current `main` (`c715d89de8`) and the core-test boundary regression caught by CI was fixed by replacing the Gateway test's bundled Telegram runtime import with a core-local adapter fixture. Exact-head local validation:\n\n```text\nFocused Vitest: 11 files / 593 tests passed\nCore tsgo extension boundary: passed\nPlugin SDK API baseline: passed\nProduction TypeScript (tsgo:prod): passed\nTest TypeScript (check:test-types): passed\noxfmt check: passed\noxlint: 0 warnings, 0 errors\ngit diff --check: passed\n```\n\nRegression coverage verifies:\n\n- explicit `send-location` is authorized before translation;\n- a `send`-only allowlist cannot authorize `send-location`;\n- explicit location translates through the common runner to canonical durable `send`;\n- direct callers retain mixed-payload rejection;\n- incidental location repair is limited to model-authored Telegram sends;\n- text, image, attachment, URL/path, and base64 `buffer` media are recognized before hydration;\n- top-level `image` reaches durable Telegram media handling;\n- `asVideoNote` retains all-configured schema visibility while location remains current-channel scoped;\n- the private Telegram normalizer is shared by local and Gateway paths and no public Plugin SDK rewrite hook remains.\n\nThe repository `check:changed` wrapper could not launch locally because the installed Crabbox binary failed its own `--version`/`--help` sanity check; focused tests, boundary checks, production/test type checks, formatter, linter, Plugin SDK baseline, and diff validation completed locally. Hosted CI is the authoritative full-suite run.\n\n\n",
+        "branch": "fix/message-ignore-default-location",
+        "head_sha": "18b7281954207f83c0d2f3240df13c26114dd5ab",
+        "author": "snotty",
         "labels": [
+          "docs",
+          "channel: telegram",
+          "gateway",
           "agents",
-          "size: XL",
-          "proof: supplied",
+          "size: L",
           "proof: sufficient",
+          "mantis: telegram-visible-proof",
           "P1",
-          "rating: 🐚 platinum hermit",
+          "rating: 🦐 gold shrimp",
           "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "merge-risk: 🚨 availability",
-          "status: 👀 ready for maintainer look"
+          "merge-risk: 🚨 message-delivery",
+          "status: ⏳ waiting on author",
+          "proof: 🎥 video"
         ],
         "files": [
           {
-            "path": "src/agents/bootstrap-files.ts",
-            "additions": 28,
-            "deletions": 0,
+            "path": "docs/.generated/plugin-sdk-api-baseline.sha256",
+            "additions": 3,
+            "deletions": 3,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/bootstrap-hooks.ts",
-            "additions": 3,
+            "path": "docs/channels/location.md",
+            "additions": 1,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "docs/channels/telegram.md",
+            "additions": 2,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.ts",
-            "additions": 58,
-            "deletions": 23,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stage-timing.test.ts",
-            "additions": 42,
+            "path": "extensions/telegram/src/action-runtime.test.ts",
+            "additions": 11,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/embedded-agent-runner/run/attempt-stage-timing.ts",
-            "additions": 19,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts",
+            "path": "extensions/telegram/src/action-runtime.ts",
             "additions": 1,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/workspace-extra-bootstrap-walker.ts",
-            "additions": 276,
-            "deletions": 0,
-            "changeType": "ADDED"
+            "path": "extensions/telegram/src/channel-actions.contract.test.ts",
+            "additions": 21,
+            "deletions": 3,
+            "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/workspace.bootstrap-files.test.ts",
-            "additions": 398,
-            "deletions": 0,
-            "changeType": "ADDED"
-          },
-          {
-            "path": "src/agents/workspace.load-extra-bootstrap-files.test.ts",
-            "additions": 317,
+            "path": "extensions/telegram/src/channel-actions.ts",
+            "additions": 10,
             "deletions": 0,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/agents/workspace.test.ts",
-            "additions": 4,
-            "deletions": 264,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/agents/workspace.ts",
-            "additions": 48,
-            "deletions": 118,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/bundled/bootstrap-extra-files/handler.test.ts",
-            "additions": 42,
+            "path": "extensions/telegram/src/message-tool-schema.ts",
+            "additions": 7,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "src/hooks/internal-hook-dispatch.ts",
-            "additions": 107,
+            "path": "src/agents/embedded-agent-message-tool-source-reply.test.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/embedded-agent-messaging.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/message-tool.test.ts",
+            "additions": 60,
+            "deletions": 2,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/agents/tools/message-tool.ts",
+            "additions": 3,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/plugins/message-action-dispatch.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/channels/plugins/message-action-names.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/send.test.ts",
+            "additions": 191,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/server-methods/send.ts",
+            "additions": 23,
+            "deletions": 8,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-runner.send-validation.test.ts",
+            "additions": 138,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-runner.ts",
+            "additions": 36,
+            "deletions": 9,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/message-action-spec.ts",
+            "additions": 1,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/source-reply-mirror.ts",
+            "additions": 5,
+            "deletions": 1,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/infra/outbound/telegram-message-action-normalization.test.ts",
+            "additions": 83,
             "deletions": 0,
             "changeType": "ADDED"
           },
           {
-            "path": "src/hooks/internal-hooks.test.ts",
-            "additions": 102,
+            "path": "src/infra/outbound/telegram-message-action-normalization.ts",
+            "additions": 94,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/hooks/internal-hooks.ts",
-            "additions": 6,
-            "deletions": 44,
-            "changeType": "MODIFIED"
+            "changeType": "ADDED"
           }
         ],
-        "changedFiles": 15,
-        "additions": 1451,
-        "deletions": 452,
+        "changedFiles": 22,
+        "additions": 694,
+        "deletions": 33,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-89040",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-89040.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-111404",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-111404.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
-        "merge_state_status": "BLOCKED",
+        "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 115,
-          "gatingTotal": 110,
+          "total": 113,
+          "gatingTotal": 108,
           "counts": {
-            "SUCCESS": 37,
-            "IN_PROGRESS": 45,
-            "SKIPPED": 32,
+            "SUCCESS": 45,
+            "IN_PROGRESS": 39,
+            "SKIPPED": 28,
             "NEUTRAL": 1
           },
           "blockers": [
             "Security High (process-exec-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI (profile 1/4):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI (profile 2/4):IN_PROGRESS",
             "QA Smoke CI (profile 3/4):IN_PROGRESS",
             "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
@@ -252,8 +295,6 @@
             "checks-node-compact-small-12:IN_PROGRESS",
             "checks-node-compact-small-13:IN_PROGRESS",
             "checks-node-compact-small-14:IN_PROGRESS",
-            "checks-node-compact-small-15:IN_PROGRESS",
-            "checks-node-compact-small-16:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -262,28 +303,24 @@
             "checks-node-compact-small-7:IN_PROGRESS",
             "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-9:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
             "check-sqlite-session-flip-proof:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
           ],
           "pending": [
             "Security High (process-exec-boundary):IN_PROGRESS",
             "build-artifacts:IN_PROGRESS",
+            "Critical Quality (channel-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI (profile 1/4):IN_PROGRESS",
-            "Critical Quality (agent-runtime-boundary):IN_PROGRESS",
             "QA Smoke CI (profile 2/4):IN_PROGRESS",
             "QA Smoke CI (profile 3/4):IN_PROGRESS",
             "QA Smoke CI (profile 4/4):IN_PROGRESS",
-            "checks-fast-contracts-plugins-a:IN_PROGRESS",
-            "checks-fast-contracts-plugins-b:IN_PROGRESS",
             "checks-fast-contracts-channels-a:IN_PROGRESS",
             "checks-fast-contracts-channels-b:IN_PROGRESS",
             "checks-node-compact-large-1:IN_PROGRESS",
@@ -299,8 +336,6 @@
             "checks-node-compact-small-12:IN_PROGRESS",
             "checks-node-compact-small-13:IN_PROGRESS",
             "checks-node-compact-small-14:IN_PROGRESS",
-            "checks-node-compact-small-15:IN_PROGRESS",
-            "checks-node-compact-small-16:IN_PROGRESS",
             "checks-node-compact-small-2:IN_PROGRESS",
             "checks-node-compact-small-3:IN_PROGRESS",
             "checks-node-compact-small-4:IN_PROGRESS",
@@ -309,17 +344,15 @@
             "checks-node-compact-small-7:IN_PROGRESS",
             "checks-node-compact-small-8:IN_PROGRESS",
             "checks-node-compact-small-9:IN_PROGRESS",
-            "check-guards:IN_PROGRESS",
             "check-shrinkwrap:IN_PROGRESS",
             "check-prod-types:IN_PROGRESS",
             "check-lint:IN_PROGRESS",
             "check-dependencies:IN_PROGRESS",
             "check-test-types:IN_PROGRESS",
-            "check-additional-boundaries-a:IN_PROGRESS",
-            "check-session-accessor-boundary:IN_PROGRESS",
             "check-sqlite-session-flip-proof:IN_PROGRESS",
             "check-additional-extension-package-boundary:IN_PROGRESS",
-            "check-additional-runtime-topology-architecture:IN_PROGRESS"
+            "check-additional-runtime-topology-architecture:IN_PROGRESS",
+            "check-docs:IN_PROGRESS"
           ],
           "terminalBlockers": [],
           "externalBlockers": []
@@ -327,7 +360,7 @@
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-21T22:08:07.540Z"
+      "processed_at": "2026-07-22T00:49:20.003Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -338,19 +371,19 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 10125,
+    "total_ms": 4552,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 529
+        "ms": 359
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2276
+        "ms": 1957
       },
       {
         "name": "classify_comment_commands",
-        "ms": 205
+        "ms": 13
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -366,7 +399,7 @@
       },
       {
         "name": "execute_commands",
-        "ms": 6610
+        "ms": 2108
       },
       {
         "name": "append_ledger",
