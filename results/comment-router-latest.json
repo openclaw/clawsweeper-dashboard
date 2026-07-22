@@ -1,19 +1,19 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-22T05:53:02.233Z",
+  "generated_at": "2026-07-22T05:59:14.933Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-22T02:52:59.437Z",
+  "since": "2026-07-22T02:59:12.309Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    107279
+    112528
   ],
   "comment_ids": [
-    5042180738
+    5042220413
   ],
   "status_comment_id": null,
   "max_autoclose_targets": 8,
@@ -34,22 +34,22 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:107279:5042180738:2026-07-22T05:25:29Z:re_review",
-      "comment_id": "5042180738",
-      "comment_version_key": "5042180738:2026-07-22T05:25:29Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/107279#issuecomment-5042180738",
+      "idempotency_key": "comment-router:openclaw/openclaw:112528:5042220413:2026-07-22T05:31:42Z:re_review",
+      "comment_id": "5042220413",
+      "comment_version_key": "5042220413:2026-07-22T05:31:42Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/112528#issuecomment-5042220413",
       "repo": "openclaw/openclaw",
       "target_branch": null,
-      "issue_number": 107279,
-      "author": "MoerAI",
-      "author_id": 26067127,
-      "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-22T05:25:29Z",
-      "comment_updated_at": "2026-07-22T05:25:29Z",
-      "comment_body_sha256": "9e9207695030c98168088762a0361f7a2d9f98c36767cd82583514470c856ef3",
+      "issue_number": 112528,
+      "author": "RomneyDa",
+      "author_id": 6581799,
+      "author_association": "MEMBER",
+      "comment_created_at": "2026-07-22T05:31:42Z",
+      "comment_updated_at": "2026-07-22T05:31:42Z",
+      "comment_body_sha256": "ab397ebbcac98aa87fffca5ddedfe504a2a068b1705ef684376b6492503c041e",
       "status_comment_id": null,
-      "trigger": "mention",
-      "command": "re-review",
+      "trigger": "slash",
+      "command": "review",
       "intent": "re_review",
       "autoclose_message": null,
       "implementation_prompt": null,
@@ -74,69 +74,175 @@
       "finding_id": null,
       "status": "skipped",
       "actions": [],
-      "author_repository_permission": "read",
+      "author_repository_permission": "admin",
       "target": {
         "kind": "pull_request",
-        "title": "fix(ai): normalize non-conforming tool-call ids reaching Anthropic/Google targets (#95623)",
-        "body": "Fixes #95623\n\n## What Problem This Solves\n\nAfter a cross-provider failover, an OpenAI-responses composite tool-call id (`call_XXX|fc_YYY`) can reach an **Anthropic** target still containing the `|`. Anthropic requires tool ids matching `^[a-zA-Z0-9_-]+$`, so it hard-400s the whole replay and the session is bricked for its own primary provider — no new turns without a reset.\n\nThis happens on two paths that the existing `#61254` sanitizer misses:\n- **Orphaned tool result** — the paired tool call was dropped (compaction/windowing), so there is no in-pass map entry and the raw id passes through untouched.\n- **Same-model-tagged call** — a failover-introduced id whose provenance looks same-model as the Anthropic target skips normalization (`!isSameModel` guard), so both the call and its result keep the `|`.\n\n## Why This Change Was Made\n\n`packages/ai/src/providers/transform-messages.ts` owns cross-provider tool-call-id normalization but only normalized `toolCall` ids when `!isSameModel`, and `toolResult` ids only via an in-pass `toolCallIdMap`. Non-conforming ids leaked through both gaps.\n\nA blanket \"always normalize\" is unsafe: the OpenAI-completions/OpenAI-responses/Mistral normalizers are **not idempotent** on their own native ids (openai-completions strips the `|fc_…` half; openai-responses reads the `source` message; mistral is a stateful id map), so applying them to same-model native ids would corrupt valid replays.\n\nSo `transformMessages` gains an opt-in `targetSafeToolCallIds` flag, passed `true` only by the **Anthropic and Google** call sites whose normalizers are charset scrubs that are idempotent on their native ids. In target-safe mode every tool id reaching the target is normalized — the same-model call and the map-miss result included — and because the scrub is deterministic, a call and its result stay paired. Every other provider keeps the default (`false`), so their behavior is byte-for-byte unchanged.\n\nThe shared transform owns this invariant, so the fix stays there (not at the Anthropic transport-serialization boundary, which cannot see the shared call/result pairing). Non-goals: no change to any provider's normalizer semantics, no change to cross-provider behavior, and no id-collision hashing.\n\n## User Impact\n\nSessions that fail over to an OpenAI-responses model and later replay to an Anthropic primary no longer brick on an Anthropic 400 — the foreign composite id is scrubbed to a conforming id (`call_XXX_fc_YYY`) on both the call and its result. Google targets get the same protection. OpenAI/Mistral users are unaffected.\n\n## Evidence\n\nReal behavior via the actual `transformMessages` (Anthropic target, composite id `call_AbCd0123|fc_beef01`), head `e7e315d6c5a3`:\n\n~~~text\nAFTER S1-safe orphan (targetSafe=true):          [\"result:call_AbCd0123_fc_beef01\"]                                | PIPE-SURVIVES=false\nAFTER S3-safe same-model-mistag (targetSafe=true): [\"call:call_AbCd0123_fc_beef01\",\"result:call_AbCd0123_fc_beef01\"] | PIPE-SURVIVES=false\nREGRESSION default (targetSafe=false) same-model:  [\"call:call_AbCd0123|fc_beef01\",\"result:call_AbCd0123|fc_beef01\"] | PIPE-SURVIVES=true\n~~~\n\nThe two target-safe paths scrub the `|`; the default path leaves a same-model id byte-for-byte untouched (proving no OpenAI/Mistral corruption). On current `main` (target-safe absent) both S1 and S3 leak — `PIPE-SURVIVES=true`.\n\n- `vitest run packages/ai/src/providers/transform-messages.test.ts` — 5 passed (2 red-first #95623 guards for S1/S3 + 3 regressions: default-mode composite untouched, cross-provider pair still mapped, source-requiring normalizer never invoked on a map-miss result).\n- Negative control: with the source fix stashed, the S1 & S3 guard tests fail (`expected 'call_AbCd0123|fc_beef01' to be 'call_AbCd0123_fc_beef01'`) — confirms the tests guard the bug.\n- Broader regression: all `packages/ai/src/providers` tests — 356 passed; the 1 failure (`openai-chatgpt-responses` zstd-SSE encoding) reproduces identically with my change stashed, i.e. pre-existing/unrelated (a zstd env issue on this host).\n- `tsgo -p tsconfig.core.json` / `-p test/tsconfig/tsconfig.core.test.json` — no errors; `oxfmt --check` — clean; `check:loc` — passes (all growth in the sub-500-line transform; the three oversized provider files stay net-zero).\n\n## Notes\n\n- Distinct from #95671 (guarded only the same-model path at the transport-serialization boundary, missing orphan results) and #95629 — this fixes both leak paths at the owning transform boundary with zero cross-provider regression.\n- AI-assisted (Claude Code); I have reviewed and understand every line.\n",
-        "branch": "fix/anthropic-toolresult-id-sanitize",
-        "head_sha": "658ab0d9bf0909271c9dec6f4782fc1bf35291c0",
-        "author": "moerai",
+        "title": "feat(talk): open scoped plugin voice sessions",
+        "body": "## Summary\n\nAdds `runtime.talk.openSession(...)`, the active companion to the anonymous `watchActivity` feed in #110902.\n\n- Opens one Gateway-owned Realtime Talk conversation from an authenticated, entitled plugin route.\n- Returns a session handle for microphone PCM, barge-in, close, and exact output PCM/state events.\n- Keeps provider credentials, agent/workspace access, and tool coordination inside the Gateway.\n- Confines raw audio to the returned owner handle; there is no global PCM subscription.\n- Leaves existing client-owned relay and native/iOS coordination unchanged.\n- Creates output-media events only when an owner callback is present.\n\n## Stack\n\nThis PR is stacked on #110902. The independently cherry-pickable change is commit `1a5bc544ecb`; the first commit is the pending `watchActivity` base.\n\nCompanion plugin: https://github.com/RomneyDa/openclaw-avatar-plugin\n\n## Validation\n\n- Core TypeScript check passed.\n- 96 focused Talk, Gateway, Plugin SDK, and plugin runtime tests passed.\n- Full repository check passed after the final type fix.\n- Companion plugin passed typecheck, build, 51 tests, browser smoke, and clean-package install.",
+        "branch": "feat/talk-open-session",
+        "head_sha": "1a5bc544ecb5ea42da64369f08d88488bc81f573",
+        "author": "romneyda",
         "labels": [
-          "size: S",
-          "proof: sufficient",
-          "P1",
-          "rating: 🐚 platinum hermit",
-          "merge-risk: 🚨 compatibility",
-          "status: 👀 ready for maintainer look"
+          "docs",
+          "gateway",
+          "maintainer",
+          "size: XL",
+          "plugin: file-transfer"
         ],
         "files": [
           {
-            "path": "packages/ai/src/providers/anthropic.ts",
-            "additions": 1,
+            "path": "docs/plugins/sdk-runtime.md",
+            "additions": 40,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/talk-managed-agent-consult.runtime.ts",
+            "additions": 11,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/talk-plugin-session.test.ts",
+            "additions": 110,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/talk-plugin-session.ts",
+            "additions": 147,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/gateway/talk-realtime-relay.test.ts",
+            "additions": 177,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/gateway/talk-realtime-relay.ts",
+            "additions": 221,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/test-helpers/plugin-runtime-mock.test.ts",
+            "additions": 14,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugin-sdk/test-helpers/plugin-runtime-mock.ts",
+            "additions": 4,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime/index.test.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime/index.ts",
+            "additions": 2,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/plugins/runtime/runtime-talk.ts",
+            "additions": 12,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/plugins/runtime/types-core.ts",
+            "additions": 6,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/talk/activity.test.ts",
+            "additions": 60,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/talk/activity.ts",
+            "additions": 177,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/talk/agent-consult-runtime.test.ts",
+            "additions": 3,
+            "deletions": 0,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/talk/agent-consult-runtime.ts",
+            "additions": 4,
             "deletions": 1,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/ai/src/providers/google-shared.ts",
-            "additions": 1,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "packages/ai/src/providers/transform-messages.test.ts",
-            "additions": 157,
+            "path": "src/talk/agent-talkback-runtime.test.ts",
+            "additions": 2,
             "deletions": 2,
             "changeType": "MODIFIED"
           },
           {
-            "path": "packages/ai/src/providers/transform-messages.ts",
-            "additions": 21,
-            "deletions": 3,
+            "path": "src/talk/agent-talkback-runtime.ts",
+            "additions": 27,
+            "deletions": 16,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "src/talk/output-media.test.ts",
+            "additions": 61,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/talk/output-media.ts",
+            "additions": 221,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/talk/plugin-session.ts",
+            "additions": 46,
+            "deletions": 0,
+            "changeType": "ADDED"
+          },
+          {
+            "path": "src/talk/talk-session-controller.ts",
+            "additions": 2,
+            "deletions": 0,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 4,
-        "additions": 180,
-        "deletions": 7,
+        "changedFiles": 22,
+        "additions": 1359,
+        "deletions": 23,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-107279",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-107279.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-112528",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-112528.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 105,
-          "gatingTotal": 100,
+          "total": 58,
+          "gatingTotal": 53,
           "counts": {
-            "SUCCESS": 78,
-            "SKIPPED": 26,
-            "NEUTRAL": 1
+            "SUCCESS": 8,
+            "SKIPPED": 50
           },
           "blockers": [],
           "pending": [],
@@ -144,8 +250,8 @@
           "externalBlockers": []
         }
       },
-      "maintainer_authorized": false,
-      "author_readonly_authorized": true,
+      "maintainer_authorized": true,
+      "author_readonly_authorized": false,
       "reason": "matching ClawSweeper response comment already exists"
     }
   ],
@@ -157,19 +263,19 @@
   "ledger_claimed": false,
   "ledger_changed": false,
   "timings": {
-    "total_ms": 3138,
+    "total_ms": 2939,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 496
+        "ms": 467
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 2211
+        "ms": 2073
       },
       {
         "name": "classify_comment_commands",
-        "ms": 17
+        "ms": 14
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
@@ -181,11 +287,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "execute_commands",
-        "ms": 343
+        "ms": 315
       },
       {
         "name": "append_ledger",
