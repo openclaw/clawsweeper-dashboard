@@ -1,21 +1,21 @@
 {
   "status": "executed",
-  "generated_at": "2026-07-22T02:33:26.965Z",
+  "generated_at": "2026-07-22T02:33:50.306Z",
   "repo": "openclaw/openclaw",
   "repair_repo": "openclaw/clawsweeper",
   "review_repo": "openclaw/clawsweeper",
-  "since": "2026-07-21T23:33:24.754Z",
+  "since": "2026-07-21T23:33:47.548Z",
   "execute": true,
   "force_reprocess": false,
   "forced_replay_attempt_id": null,
   "max_comments": 1,
   "item_numbers": [
-    111122
+    112305
   ],
   "comment_ids": [
-    5041151003
+    5041152903
   ],
-  "status_comment_id": 5041151204,
+  "status_comment_id": 5041153138,
   "max_autoclose_targets": 8,
   "scanned_comments": 1,
   "commands_seen": 1,
@@ -34,20 +34,20 @@
   "lookup_concurrency": 8,
   "commands": [
     {
-      "idempotency_key": "comment-router:openclaw/openclaw:111122:5041151003:2026-07-22T02:31:09Z:re_review",
-      "comment_id": "5041151003",
-      "comment_version_key": "5041151003:2026-07-22T02:31:09Z",
-      "comment_url": "https://github.com/openclaw/openclaw/pull/111122#issuecomment-5041151003",
+      "idempotency_key": "comment-router:openclaw/openclaw:112305:5041152903:2026-07-22T02:31:30Z:re_review",
+      "comment_id": "5041152903",
+      "comment_version_key": "5041152903:2026-07-22T02:31:30Z",
+      "comment_url": "https://github.com/openclaw/openclaw/pull/112305#issuecomment-5041152903",
       "repo": "openclaw/openclaw",
       "target_branch": "main",
-      "issue_number": 111122,
+      "issue_number": 112305,
       "author": "yetval",
       "author_id": 102706514,
       "author_association": "CONTRIBUTOR",
-      "comment_created_at": "2026-07-22T02:31:09Z",
-      "comment_updated_at": "2026-07-22T02:31:09Z",
-      "comment_body_sha256": "ce1d337ba18cef0a3da7d8f0e19df90facc9383935e0260bbb4ac4a7ef1b7646",
-      "status_comment_id": 5041151204,
+      "comment_created_at": "2026-07-22T02:31:30Z",
+      "comment_updated_at": "2026-07-22T02:31:30Z",
+      "comment_body_sha256": "472b81f62313b5dce0f30591a84690d5459e25379da408a7bb93a86a4692d0c9",
+      "status_comment_id": 5041153138,
       "trigger": "mention",
       "command": "re-run",
       "intent": "re_review",
@@ -80,112 +80,87 @@
           "status": "executed",
           "event": "repository_dispatch",
           "repo": "openclaw/clawsweeper",
-          "item_number": 111122,
-          "dispatch_key": "router-588cf9a0a7144186",
-          "dispatched_at": "2026-07-22T02:33:27.656Z"
+          "item_number": 112305,
+          "dispatch_key": "router-1f626a05ea616512",
+          "dispatched_at": "2026-07-22T02:33:51.920Z"
         },
         {
           "action": "comment",
           "status": "executed",
-          "commented_at": "2026-07-22T02:33:28.682Z",
-          "response_comment_id": "5041151204",
+          "commented_at": "2026-07-22T02:33:52.974Z",
+          "response_comment_id": "5041153138",
           "response_comment_mode": "updated"
         }
       ],
       "author_repository_permission": "read",
       "target": {
         "kind": "pull_request",
-        "title": "fix(sessions): manual compaction deletes transcript history while claiming it was archived",
-        "body": "Related: #98236\n\n## What Problem This Solves\n\nFixes an issue where users running `openclaw sessions compact <key> --max-lines N` would permanently lose the trimmed part of their conversation history while the CLI told them it had been archived. Since the SQLite storage flip (#98236, commit 0a8e3604ba2), the manual compaction path deletes the trimmed transcript rows without writing any backup, then returns an `archived` value that is a fabricated marker string (`sqlite:<agent>:<session>:<store>.bak.<timestamp>`) pointing at nothing. The CLI prints `Archived transcript: <marker>`, so users believe the full history is recoverable when it is gone. Before the flip, manual compaction renamed the live JSONL transcript to a real `.bak.<timestamp>` file before writing the trimmed replacement, so the full pre-compaction history was always recoverable.\n\n## Why This Change Was Made\n\nThe fix restores the pre-flip safety contract at the SQLite transcript writer boundary: before any rows are deleted, the complete pre-compaction transcript is exported to a real, durable archive file, and `archived` now returns that file's actual path. The archive reuses the existing session archive writer that the reset/delete lifecycle flows already use (exclusive create, 0o600, fsync file and directory, atomic rename, optional zstd), with the artifact named `<sessionId>.jsonl.bak.<timestamp>[.zst]` in the same per-agent sessions archive directory. The `.bak` shape is already recognized by the archive artifact classifiers, so cleanup and disk-budget treat it exactly like reset/delete archives. The backup is written outside any SQLite transaction; the destructive replacement then revalidates the row snapshot inside the write transaction and aborts while retaining the durable backup if the transcript changed after the snapshot, so concurrently appended rows can never be deleted. If backup creation fails, compaction aborts with an error and every original row stays in place. Active-run and lifecycle fencing in the `sessions.compact` RPC is unchanged.\n\n## User Impact\n\n`openclaw sessions compact <key> --max-lines N` is safe again: the printed `Archived transcript:` path is a real file containing every pre-compaction transcript event in order, recoverable with the same tooling that reads reset/delete archives. If the backup cannot be written, compaction fails without deleting anything instead of silently destroying history.\n\n## Evidence\n\nLive before/after against a real gateway and the real CLI, identical inputs. For each phase: fresh isolated `OPENCLAW_STATE_DIR`, a session seeded with 7 transcript events (session header plus messages `important message 1..6`) through the production accessor, gateway started from the built dist (`node openclaw.mjs gateway --port <port>`), then `node openclaw.mjs sessions compact main --max-lines 3 --url ws://127.0.0.1:<port> --token ...`. Nothing was mocked.\n\nBefore, on pristine main 62c5a8b888:\n\n```\n$ openclaw sessions compact main --max-lines 3\nCompacted session agent:main:main (kept 3 lines).\nArchived transcript: sqlite:main:aaaaaaaa-...:<state>/agents/main/sessions/sessions.json.bak.2026-07-19T01-52-43.722Z\n\nauthoritative transcript rows now: 3\nsessions dir unreadable: ENOENT\nbackup artifacts in agents/main/sessions: []\nclaimed archive path exists: false\n```\n\nFour transcript events were deleted, the printed \"archive\" is a marker string, the archive directory was never created, and no backup exists anywhere. The trimmed history is unrecoverable.\n\nAfter, this patch:\n\n```\n$ openclaw sessions compact main --max-lines 3\nCompacted session agent:main:main (kept 3 lines).\nArchived transcript: <state>/agents/main/sessions/aaaaaaaa-...jsonl.bak.2026-07-19T02-00-59.389Z.zst\n\nauthoritative transcript rows now: 3\nbackup artifacts in agents/main/sessions: [\"aaaaaaaa-...jsonl.bak.2026-07-19T02-00-59.389Z.zst\"]\nbackup aaaaaaaa-...jsonl.bak.2026-07-19T02-00-59.389Z.zst: 7 events, first=session, contents include: 6 messages\nclaimed archive path exists: true\n```\n\nThe printed path is a real file (mode 0600), and decompressing it yields all 7 pre-compaction events in order, including the 4 trimmed ones, parsed back through the shared archive reader.\n\nValidation on the changed surface (all green locally):\n\n- `node scripts/run-vitest.mjs src/config/sessions/session-accessor.test.ts src/commands/sessions-compact.test.ts` (72 + 10 passed)\n- `node scripts/run-vitest.mjs src/gateway/server.sessions.compaction.test.ts` (21 passed)\n- `node scripts/run-vitest.mjs src/config/sessions/session-accessor.conformance.test.ts src/config/sessions/transcript.test.ts src/config/sessions/artifacts.test.ts` (123 passed)\n- `node scripts/run-tsgo.mjs -p tsconfig.core.json` and `-p test/tsconfig/tsconfig.core.test.json` clean\n- `node scripts/run-oxlint.mjs` and `oxfmt --check` clean on all changed files; `git diff --check` clean\n\nControl red: with only the four production files reverted to main, the updated trim test plus the two new tests fail in `session-accessor.test.ts` (3 failed) and the updated gateway archive test fails in `server.sessions.compaction.test.ts` (1 failed); with the patch they all pass.\n\nNew regression coverage:\n\n- accessor: trim writes a `.bak` artifact holding every original event, parseable via the archive reader; backup-write failure (archive directory path occupied by a file) leaves all rows untouched and errors; a row appended after the backup snapshot aborts the replacement with a conflict error, deletes nothing, and preserves the durable backup.\n- gateway RPC: `sessions.compact` with `maxLines` returns an `archived` path that exists on disk and contains all 500 seeded pre-compaction events.\n- CLI: the printed `Archived transcript:` line is exactly the RPC's `archived` path.\n\nNot tested live: Bun runtime (plain JSONL archive fallback path, exercised by the shared writer used unchanged by reset/delete flows) and Windows.\n\nSiblings: session reset and delete flows already archive through the same writer and are unchanged. `sessions.compact` without `--max-lines` (LLM summarization) rewrites via compaction checkpoints, not row deletion, and is unaffected.\n",
-        "branch": "fix/sessions-compact-transcript-backup",
-        "head_sha": "537c39ead1f07a0f1ddd568526726c1d3d227360",
+        "title": "fix(openshell): mirror sandboxes can modify workspace skill files despite read-only policy",
+        "body": "Related: #17931\n\n## What Problem This Solves\n\nFixes an issue where an OpenShell sandbox in its default mirror mode with `workspaceAccess: \"rw\"` could modify workspace skill instructions that every other sandbox backend treats as read-only.\n\nSkill roots are supposed to stay owner-controlled inside writable sandboxes. Docker workspace mounts (`src/agents/sandbox/workspace-mounts.ts`) mount `skills/`, `.agents/skills/`, and `.openclaw/sandbox-skills/skills/` read-only, and the remote sandbox fs bridge (`src/agents/sandbox/remote-fs-bridge.ts`) rejects mutations under the same three roots. The OpenShell mirror backend enforced this policy only for the materialized `.openclaw/sandbox-skills/skills/` root. The other two skill roots fell through to the generic writable workspace mapping, on two surfaces:\n\n1. Filesystem tools: `createOpenShellFsBridge` resolved `skills/...` and `.agents/skills/...` as writable, so write, mkdirp, remove, and rename mutated the host copies of `SKILL.md` files directly.\n2. Shell execution plus mirror sync: a sandbox command could edit `/sandbox/skills/...` remotely, and `finalizeExec` mirror download copied the edited files back over the local workspace. Only `.openclaw/sandbox-skills` had preservation handling.\n\nSince skill files are instructions consumed by later agent sessions, a writable mirror sandbox could persistently change future agent behavior on the host workspace.\n\n## Why This Change Was Made\n\nThe OpenShell mirror backend kept a backend-specific protected-root list containing only the materialized skills root, instead of the full skill-root policy that #90798 established for Docker and the remote bridge. This change closes the gap at the same two seams the backend already uses for the materialized root:\n\nIn `extensions/openshell/src/fs-bridge.ts`, `resolveTarget` previously classified any workspace or agent mapping as writable:\n\n```ts\nwritable: this.sandbox.workspaceAccess === \"rw\",\n```\n\nNow every workspace and agent mapping also checks the normalized relative path against the workspace skill roots, matching the exists-gated semantics of the sibling backends (a root is protected when it exists as a real directory on the host, exactly like Docker only mounts existing skill directories read-only and the remote bridge only rejects when the remote root exists):\n\n```ts\nwritable:\n  this.sandbox.workspaceAccess === \"rw\" &&\n  !isProtectedWorkspaceSkillPath({ mountRoot: workspaceRoot, relative }),\n```\n\nThe check runs on the already-normalized relative path from `path.relative`/`path.posix.relative`, so `.` and `..` segments are resolved before matching and sibling names such as `skills-backup/` never match. All mutation operations (`writeFile`, `mkdirp`, `remove`, both rename endpoints via the shared writable-rename resolver) route through this resolution, and reads are unaffected.\n\nIn `extensions/openshell/src/backend.ts`, `syncWorkspaceFromRemote` previously moved only `.openclaw/sandbox-skills` aside before replacing the workspace with the downloaded mirror. The existing move-aside and restore helpers are now parameterized over the protected root parts and applied to `.openclaw/sandbox-skills`, `skills`, and `.agents/skills`, so local skill roots survive the downloaded workspace replacement and sandbox-side edits of them are discarded. Preservation applies only when the local root is a real directory (per the Codex review finding on the first revision): a workspace with a regular file named `skills` or `.agents/skills` is not a skill root under any backend policy, so such files keep syncing like ordinary workspace files.\n\nBoth changes reuse the existing single-root mechanisms rather than adding a second policy path; the materialized-root handling stops being a special case.\n\n## User Impact\n\n- Operators running OpenShell mirror sandboxes with a writable workspace get the same guarantee as Docker and remote sandboxes: sandboxed agents and commands cannot change `skills/` or `.agents/skills/` on the host.\n- Ordinary workspace files keep the configured `workspaceAccess` behavior, mirror sync for them is unchanged, and skill files remain readable inside the sandbox.\n- Workspaces without a `skills/` or `.agents/skills/` directory behave exactly as before, matching the other backends.\n\n## Evidence\n\nA driver invoked the real `createOpenShellSandboxBackendFactory` in mirror mode with a real `openshell` CLI stub subprocess at the external CLI boundary (its `sandbox download` writes edited skill files into the download directory, simulating sandbox-side shell edits; everything else, including the backend, bridge wiring, mirror sync, and on-disk workspace, is production code). The same driver ran on pristine main `cd38cdef0575740b2a8dc37b2a995e8a4f0687bf` and on this branch at head `91b1925a51` with identical inputs. Host workspace state observed:\n\nBefore (pristine main):\n\n```text\nfs tool write /sandbox/skills/demo/SKILL.md: host file modified -> \"updated-via-fs-tool\"\nfs tool write /sandbox/.agents/skills/demo/SKILL.md: host file modified -> \"updated-via-fs-tool\"\nhost skills/demo/SKILL.md after mirror sync: tampered-by-sandbox-shell\nhost .agents/skills/demo/SKILL.md after mirror sync: tampered-by-sandbox-shell\nhost from-remote.txt after mirror sync: remote\nhost regular file named \"skills\" after mirror sync: sandbox edit\n```\n\nAfter (this branch at 91b1925a51, identical inputs):\n\n```text\nfs tool write /sandbox/skills/demo/SKILL.md: host file kept \"original\", write rejected: Sandbox path is read-only; cannot write files: /sandbox/skills/demo/SKILL.md\nfs tool write /sandbox/.agents/skills/demo/SKILL.md: host file kept \"original\", write rejected: Sandbox path is read-only; cannot write files: /sandbox/.agents/skills/demo/SKILL.md\nhost skills/demo/SKILL.md after mirror sync: original\nhost .agents/skills/demo/SKILL.md after mirror sync: original\nhost from-remote.txt after mirror sync: remote\nhost regular file named \"skills\" after mirror sync: sandbox edit\n```\n\nThe ordinary `from-remote.txt` sync result and the regular-file-named-`skills` sync result are identical in both runs; only the protected skill root directories change behavior. The last line also shows the resolution of the Codex review finding on the first revision: a non-directory `skills` entry is not preserved, so its sandbox edit still syncs back.\n\nValidation on the changed files:\n\n- `node scripts/run-vitest.mjs extensions/openshell/src`: 4 files, 60 tests passed (includes 4 new regression tests: fs bridge mutations rejected across relative, absolute container, absolute host, and `..`-normalized paths for both roots plus rename in and out; mirror download preservation of both roots; missing skill roots stay writable; a regular file named `skills` keeps syncing).\n- The two failure-mode tests fail on pristine main (2 failed) and pass with the patch. The non-directory-`skills` test fails on the first revision `c59854fb` (which over-preserved it) and passes at this head; it also passes on main, pinning unchanged behavior.\n- `node scripts/run-oxlint.mjs` clean, `oxfmt --check` clean, `tsgo -p tsconfig.extensions.json` and `tsgo -p test/tsconfig/tsconfig.extensions.test.json` clean at this head.\n\nNot tested live: a real OpenShell service endpoint (the CLI subprocess boundary was stubbed) and the OpenShell remote mode path, which already uses the core remote fs bridge protections and is unchanged here.\n",
+        "branch": "fix/openshell-workspace-skill-roots",
+        "head_sha": "91b1925a51206df0c6003d79721fe03291581725",
         "author": "yetval",
         "labels": [
-          "gateway",
-          "commands",
           "size: M",
-          "proof: sufficient",
-          "P1",
-          "rating: 🦐 gold shrimp",
-          "merge-risk: 🚨 compatibility",
-          "merge-risk: 🚨 session-state",
-          "status: 👀 ready for maintainer look"
+          "extensions: openshell"
         ],
         "files": [
           {
-            "path": "src/commands/sessions-compact.test.ts",
-            "additions": 17,
+            "path": "extensions/openshell/src/backend.ts",
+            "additions": 53,
+            "deletions": 17,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openshell/src/fs-bridge.ts",
+            "additions": 32,
+            "deletions": 4,
+            "changeType": "MODIFIED"
+          },
+          {
+            "path": "extensions/openshell/src/openshell-core.test.ts",
+            "additions": 173,
             "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.sqlite-archive.ts",
-            "additions": 6,
-            "deletions": 5,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
-            "additions": 33,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.sqlite.ts",
-            "additions": 1,
-            "deletions": 0,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.test.ts",
-            "additions": 137,
-            "deletions": 1,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/config/sessions/session-accessor.transcript.ts",
-            "additions": 25,
-            "deletions": 32,
-            "changeType": "MODIFIED"
-          },
-          {
-            "path": "src/gateway/server.sessions.compaction.test.ts",
-            "additions": 17,
-            "deletions": 2,
             "changeType": "MODIFIED"
           }
         ],
-        "changedFiles": 7,
-        "additions": 236,
-        "deletions": 40,
+        "changedFiles": 3,
+        "additions": 258,
+        "deletions": 21,
         "is_clawsweeper_pr": false,
         "cluster_id": null,
         "job_path": null,
         "source_job_path": null,
         "has_automerge_job": false,
-        "automerge_cluster_id": "automerge-openclaw-openclaw-111122",
-        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-111122.md",
+        "automerge_cluster_id": "automerge-openclaw-openclaw-112305",
+        "automerge_job_path": "jobs/openclaw/inbox/automerge-openclaw-openclaw-112305.md",
         "mode": "autonomous",
         "mergeable": "MERGEABLE",
         "merge_state_status": "BEHIND",
         "review_decision": "",
         "checks": {
-          "total": 116,
-          "gatingTotal": 111,
+          "total": 104,
+          "gatingTotal": 99,
           "counts": {
-            "SUCCESS": 83,
-            "SKIPPED": 32,
-            "NEUTRAL": 1
+            "SKIPPED": 36,
+            "SUCCESS": 66,
+            "FAILURE": 2
           },
-          "blockers": [],
+          "blockers": [
+            "checks-node-compact-large-1:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
           "pending": [],
-          "terminalBlockers": [],
+          "terminalBlockers": [
+            "checks-node-compact-large-1:FAILURE",
+            "openclaw/ci-gate:FAILURE"
+          ],
           "externalBlockers": []
         }
       },
       "maintainer_authorized": false,
       "author_readonly_authorized": true,
-      "processed_at": "2026-07-22T02:33:27.155Z"
+      "processed_at": "2026-07-22T02:33:50.524Z"
     }
   ],
   "exact_comment_version_fast_path": {
@@ -196,23 +171,23 @@
   "ledger_claimed": true,
   "ledger_changed": true,
   "timings": {
-    "total_ms": 4435,
+    "total_ms": 6485,
     "phases": [
       {
         "name": "list_candidate_comments",
-        "ms": 378
+        "ms": 421
       },
       {
         "name": "prehydrate_comment_commands",
-        "ms": 1722
+        "ms": 1681
       },
       {
         "name": "classify_comment_commands",
-        "ms": 13
+        "ms": 75
       },
       {
         "name": "prehydrate_repair_loop_sweeps",
-        "ms": 1
+        "ms": 0
       },
       {
         "name": "classify_repair_loop_sweeps",
@@ -220,11 +195,11 @@
       },
       {
         "name": "claim_dispatch_commands",
-        "ms": 0
+        "ms": 1
       },
       {
         "name": "execute_commands",
-        "ms": 2214
+        "ms": 3712
       },
       {
         "name": "append_ledger",
