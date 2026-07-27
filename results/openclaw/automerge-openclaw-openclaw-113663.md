@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-113663"
 mode: "autonomous"
-run_id: "30298150199"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/30298150199"
-head_sha: "c32e826494fd610498ea8264cf38e6d2bf2ee7e3"
-workflow_conclusion: "failure"
+run_id: "30311694103"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/30311694103"
+head_sha: "83956dd9b166c45769a4e72b1ed83e526a452036"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-27T22:19:13.355Z"
+published_at: "2026-07-27T22:47:45.266Z"
 canonical: "#113663"
-canonical_issue: null
+canonical_issue: "#113662"
 canonical_pr: "#113663"
-actions_total: 1
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/30298150199](https://github.com/openclaw/clawsweeper/actions/runs/30298150199)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/30311694103](https://github.com/openclaw/clawsweeper/actions/runs/30311694103)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #113663
 
 ## Summary
 
-Make PR #113663 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+PR #113663 is the viable credited repair path for the open xAI OAuth HTTP 426 issue. Its hydrated review identifies one concrete P1 compatibility gap: operator-configured `models.providers.xai.headers` can replace the required Grok proxy version header. Keep issue #113662 open as the related canonical problem thread while repairing the contributor PR; do not merge or close anything in this run.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,7 +66,8 @@ Make PR #113663 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #113663 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #113662 | keep_related | planned | related | The issue is the durable problem and reproduction thread; it remains related to the contributor PR rather than being closed before the candidate passes repair and merge gates. |
+| #113663 | fix_needed | planned | canonical | Repair the existing contributor branch rather than replacing it. Compose operator headers with the canonical proxy header, retain custom-base-url suppression of the vendor header, and add direct plus plugin-catalog runtime coverage. |
 
 ## Needs Human
 
