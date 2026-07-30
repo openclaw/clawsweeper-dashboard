@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-113663"
 mode: "autonomous"
-run_id: "30486233894"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/30486233894"
-head_sha: "76d0993c2d0752bc144476f10ba1a4f8e0e6a933"
-workflow_conclusion: "success"
+run_id: "30548424123"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/30548424123"
+head_sha: "9e464d65cecd17d28432d1f98010475a55d0ebce"
+workflow_conclusion: "failure"
 result_status: "planned"
-published_at: "2026-07-29T20:00:56.908Z"
+published_at: "2026-07-30T14:09:26.346Z"
 canonical: "#113663"
-canonical_issue: "#113662"
-canonical_pr: "https://github.com/openclaw/openclaw/pull/113663"
-actions_total: 3
+canonical_issue: null
+canonical_pr: "#113663"
+actions_total: 1
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/30486233894](https://github.com/openclaw/clawsweeper/actions/runs/30486233894)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/30548424123](https://github.com/openclaw/clawsweeper/actions/runs/30548424123)
 
-Workflow conclusion: success
+Workflow conclusion: failure
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #113663
 
 ## Summary
 
-Keep #113662 open while repairing canonical contributor PR #113663. The hydrated PR is focused and writable with passing recorded checks, but the current ClawSweeper review identifies an actionable compatibility defect: configured xAI provider headers can replace the required native Grok OAuth header. Keep #114510 independent because it requires a separate maintainer product decision about OAuth-resolution fallback behavior.
+Make PR #113663 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 3 |
+| Worker actions | 1 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,9 +66,7 @@ Keep #113662 open while repairing canonical contributor PR #113663. The hydrated
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #113662 | keep_related | planned | related | The linked canonical PR still needs a narrow correctness repair and fresh exact-head validation. |
-| #113663 | fix_needed | planned | canonical | Repairing the existing writable contributor branch preserves attribution and is safer than replacement. Merge remains blocked until the repaired exact head has fresh review and validation evidence. |
-| #114510 | keep_independent | planned | independent | This is a separate product and credential-routing decision, not the missing-header defect repaired by #113663. |
+| #113663 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
 
 ## Needs Human
 
