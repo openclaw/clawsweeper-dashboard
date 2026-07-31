@@ -2,16 +2,16 @@
 repo: "openclaw/openclaw"
 cluster_id: "automerge-openclaw-openclaw-113663"
 mode: "autonomous"
-run_id: "30603303971"
-run_url: "https://github.com/openclaw/clawsweeper/actions/runs/30603303971"
+run_id: "30609587993"
+run_url: "https://github.com/openclaw/clawsweeper/actions/runs/30609587993"
 head_sha: "c8f44886fde43c44187a2f239dc0623fdaa279de"
-workflow_conclusion: "failure"
+workflow_conclusion: "success"
 result_status: "planned"
-published_at: "2026-07-31T04:27:16.661Z"
+published_at: "2026-07-31T06:35:59.081Z"
 canonical: "#113663"
-canonical_issue: null
+canonical_issue: "#113662"
 canonical_pr: "#113663"
-actions_total: 1
+actions_total: 2
 fix_executed: 0
 fix_failed: 0
 fix_blocked: 0
@@ -25,9 +25,9 @@ needs_human_count: 0
 
 Repo: openclaw/openclaw
 
-Run: [https://github.com/openclaw/clawsweeper/actions/runs/30603303971](https://github.com/openclaw/clawsweeper/actions/runs/30603303971)
+Run: [https://github.com/openclaw/clawsweeper/actions/runs/30609587993](https://github.com/openclaw/clawsweeper/actions/runs/30609587993)
 
-Workflow conclusion: failure
+Workflow conclusion: success
 
 Worker result: planned
 
@@ -35,13 +35,13 @@ Canonical: #113663
 
 ## Summary
 
-Make PR #113663 merge-ready for ClawSweeper automerge. Rebase onto latest main, address PR comments and review findings, fix CI/check failures, preserve release-note context, and validate before returning.
+Keep #113663 as the canonical writable contributor PR and repair its P1 configured-header composition defect before any merge consideration. Keep #113662 open as the linked user report. The job blocks close and merge, and the hydrated PR lacks a passing exact-head Codex review preflight.
 
 ## Impact
 
 | Metric | Count |
 | --- | ---: |
-| Worker actions | 1 |
+| Worker actions | 2 |
 | Fix executed | 0 |
 | Fix failed | 0 |
 | Fix blocked | 0 |
@@ -66,7 +66,8 @@ Make PR #113663 merge-ready for ClawSweeper automerge. Rebase onto latest main, 
 
 | Target | Action | Status | Classification | Reason |
 | --- | --- | --- | --- | --- |
-| #113663 | build_fix_artifact | planned | canonical | Maintainer opted this PR into ClawSweeper automerge/autofix repair; run the direct Codex edit loop after live hydration instead of a separate read-only planning pass. |
+| #113662 | keep_related | planned | related | The issue is the user-facing report for the canonical PR's root cause, not a duplicate to close in this job. |
+| #113663 | fix_needed | planned | canonical | Repair the contributor branch with the smallest header-composition change, preserve current-main OAuth settings discovery and auto-model behavior, and obtain fresh exact-head validation and Codex review. The job explicitly blocks merge. |
 
 ## Needs Human
 
